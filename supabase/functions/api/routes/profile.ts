@@ -3,6 +3,13 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 
 const app = new Hono()
 
+// --- פונקציית עזר: בניית ה-URL לתמונה דרך הפרוקסי ---
+const getAvatarUrl = (userId: string) => {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  // מחזיר לינק: https://.../functions/v1/avatar-proxy?id=...
+  return `${supabaseUrl}/functions/v1/avatar-proxy?id=${userId}`;
+}
+
 // ====================================================================
 // POST /api/profile
 // מקבל רשימת אימיילים (למשל עבור ה-Feed) ומחזיר רשימת משתמשים מסוננת
@@ -17,18 +24,18 @@ app.post('/', async (c) => {
       return c.json({ error: 'Unauthorized' }, 401)
     }
 
-    // 2. קבלת ה-Body (רשימת המיילים)
+    // 2. קבלת ה-Body
     const body = await c.req.json().catch(() => ({}))
     const { emails } = body
 
     if (!emails || !Array.isArray(emails) || emails.length === 0) {
-      return c.json([]) // מחזירים מערך ריק
+      return c.json([]) 
     }
 
-    // 3. שליפת התפקיד (Role) של הצופה - ישר מהטוקן!
+    // 3. שליפת התפקיד
     const viewerBusinessRole = user.app_metadata.role;
 
-    // 4. שליפת המשתמשים המבוקשים (Target Users)
+    // 4. שליפת המשתמשים
     const { data: users, error: fetchError } = await supabase
       .from('users')
       .select('*')
@@ -38,7 +45,7 @@ app.post('/', async (c) => {
       return c.json({ error: fetchError.message }, 500)
     }
 
-    // 5. לוגיקת הסינון
+    // 5. פונקציית עזר לבדיקת גישה
     const hasAccess = (privacyArray: any) => {
       if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
       return privacyArray.includes(viewerBusinessRole)
@@ -47,22 +54,23 @@ app.post('/', async (c) => {
     // 6. יצירת הרשימה הסופית
     const enrichedUsers = users.map((u: any) => {
       const isSelf = u.email === user.email;
+      const isInactive = u.status === 'Inactive'; // בדיקת סטטוס
 
-      // אם זה אני - יש גישה מלאה. אם לא - בודקים הרשאות.
+      // בדיקות פרטיות
       const showLastName = isSelf || hasAccess(u.privacy_lastname)
       const showPicture = isSelf || hasAccess(u.privacy_picture)
 
-      const isInactive = u.status === 'Inactive';
-
+      // לוגיקת "שם חכם"
       const displayName = u.first_name
         ? (showLastName && u.last_name ? `${u.first_name} ${u.last_name}` : u.first_name)
-        : (isInactive ? u.email : '');
+        : (isInactive ? u.email : ''); // אם אין שם והוא לא פעיל -> מציג אימייל
 
       return {
         uuid: u.uuid,
         email: u.email,
-        name: displayName,
-        image: showPicture ? u.image : null,
+        name: displayName, // השם המחושב
+        // כאן התיקון הגדול: החזרת הלינק לפרוקסי
+        image: showPicture ? getAvatarUrl(u.uuid) : null, 
         role: u.role,
         headline: u.headline
       }
@@ -93,10 +101,9 @@ app.get('/', async (c) => {
       return c.json({ error: 'Target User ID is required' }, 400)
     }
 
-    // 3. שליפת התפקיד (Role) של הצופה - ישר מהטוקן!
     const viewerBusinessRole = user.app_metadata.role;
 
-    // 4. שליפת נתוני המשתמש שרוצים לראות
+    // 4. שליפת המשתמש
     const { data: targetUser, error: fetchError } = await supabase
       .from('users')
       .select('*')
@@ -109,16 +116,25 @@ app.get('/', async (c) => {
 
     // 5. לוגיקת סינון
     const isSelf = targetUser.uuid === user.id || targetUser.email === user.email;
+    const isInactive = targetUser.status === 'Inactive';
 
     const hasAccess = (privacyArray: any) => {
-      if (isSelf) return true; // גישה מלאה לעצמי
+      if (isSelf) return true;
       if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
       return privacyArray.includes(viewerBusinessRole)
     }
 
+    // חישובים
+    const showLastName = isSelf || hasAccess(targetUser.privacy_lastname);
+    
+    // אותה לוגיקת שם חכם גם כאן
+    const displayName = targetUser.first_name
+      ? (showLastName && targetUser.last_name ? `${targetUser.first_name} ${targetUser.last_name}` : targetUser.first_name)
+      : (isInactive ? targetUser.email : '');
+
     const publicProfile = {
       uuid: targetUser.uuid,
-      first_name: targetUser.first_name,
+      name: displayName, // השם לתצוגה הראשית
       headline: targetUser.headline,
       company: targetUser.company,
       location: targetUser.location,
@@ -132,8 +148,12 @@ app.get('/', async (c) => {
       skills: targetUser.skills,
       open_to_work: targetUser.open_to_work,
 
-      last_name: hasAccess(targetUser.privacy_lastname) ? targetUser.last_name : null,
-      picture: hasAccess(targetUser.privacy_picture) ? targetUser.picture : null,
+      // שדות מותנים
+      last_name: showLastName ? targetUser.last_name : null,
+      
+      // כאן התיקון הגדול: החזרת הלינק לפרוקסי
+      picture: hasAccess(targetUser.privacy_picture) ? getAvatarUrl(targetUser.uuid) : null,
+      
       contact_details: hasAccess(targetUser.privacy_contact_details) ? {
         email: targetUser.email,
         phone: targetUser.phone
