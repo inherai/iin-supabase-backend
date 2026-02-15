@@ -168,7 +168,8 @@ app.put('/', async (c) => {
         experience: profileData.experience,
         education: profileData.education,
         certifications: profileData.certifications,
-        skills: profileData.skills, 
+        skills: profileData.skills,
+        image: profileData.image || profileData.image_url 
     })
     .eq('uuid', user.id)
     .select()
