@@ -50,3 +50,4 @@ app.route('/connections', connectionsRoute)
 app.get('/', (c) => c.text('Inerai API is running 🚀'))
 
 Deno.serve(app.fetch)
+console.log('🚀 Inerai API is running on /api')
