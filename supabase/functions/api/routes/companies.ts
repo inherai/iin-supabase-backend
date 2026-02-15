@@ -28,8 +28,22 @@ app.get('/', async (c) => {
     return c.json({ error: error.message }, 400)
   }
 
+  // סינון locations: רק ישראל, אם אין - הראשון
+  const processedData = data?.map(company => {
+    if (!company.locations || company.locations.length === 0) {
+      return company
+    }
+    
+    const israelLocations = company.locations.filter((loc: any) => loc.country === 'IL')
+    
+    return {
+      ...company,
+      locations: israelLocations.length > 0 ? israelLocations : [company.locations[0]]
+    }
+  })
+
   return c.json({ 
-    companies: data,
+    companies: processedData,
     pagination: {
       page,
       limit,
