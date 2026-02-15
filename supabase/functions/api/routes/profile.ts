@@ -105,9 +105,9 @@ app.get('/', async (c) => {
       const offset = (page - 1) * limit
       const viewerBusinessRole = user.app_metadata.role
 
-      const { data: users, error: fetchError } = await supabase
+      const { data: users, error: fetchError, count } = await supabase
         .from('users')
-        .select('*')
+        .select('*', { count: 'exact' })
         .range(offset, offset + limit - 1)
 
       if (fetchError) {
@@ -120,7 +120,7 @@ app.get('/', async (c) => {
       }
 
       const enrichedUsers = users.map((u: any) => {
-        const isSelf = u.email === user.email
+        const isSelf = u.uuid === user.id || u.email === user.email
         const isInactive = u.status === 'Inactive'
         const showLastName = isSelf || hasAccess(u.privacy_lastname)
         const showPicture = isSelf || hasAccess(u.privacy_picture)
@@ -129,17 +129,30 @@ app.get('/', async (c) => {
           ? (showLastName && u.last_name ? `${u.first_name} ${u.last_name}` : u.first_name)
           : (isInactive ? u.email : '')
 
+        const avatarUrl = showPicture ? getAvatarUrl(u.uuid) : null
+
         return {
           uuid: u.uuid,
           email: u.email,
           name: displayName,
-          image: showPicture ? getAvatarUrl(u.uuid) : null,
+          avatar: avatarUrl,
+          image: avatarUrl,
           role: u.role,
-          headline: u.headline
+          headline: u.headline,
+          location: u.location,
+          company: u.company
         }
       })
 
-      return c.json({ users: enrichedUsers, page, limit })
+      return c.json({
+        users: enrichedUsers,
+        pagination: {
+          page,
+          limit,
+          total: count || 0,
+          totalPages: Math.ceil((count || 0) / limit)
+        }
+      })
     }
 
     const viewerBusinessRole = user.app_metadata.role
