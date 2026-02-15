@@ -84,8 +84,8 @@ app.post('/', async (c) => {
 })
 
 // ====================================================================
-// GET /api/profile?id=...
-// שליפת פרופיל יחיד
+// GET /api/profile?id=... או GET /api/profile?page=...
+// שליפת פרופיל יחיד או רשימת משתמשים
 // ====================================================================
 app.get('/', async (c) => {
   try {
@@ -97,11 +97,52 @@ app.get('/', async (c) => {
     }
 
     const targetUserId = c.req.query('id')
+    
+    // אם אין id, מחזיר רשימה עם pagination
     if (!targetUserId) {
-      return c.json({ error: 'Target User ID is required' }, 400)
+      const page = parseInt(c.req.query('page') || '1')
+      const limit = 10
+      const offset = (page - 1) * limit
+      const viewerBusinessRole = user.app_metadata.role
+
+      const { data: users, error: fetchError } = await supabase
+        .from('users')
+        .select('*')
+        .range(offset, offset + limit - 1)
+
+      if (fetchError) {
+        return c.json({ error: fetchError.message }, 500)
+      }
+
+      const hasAccess = (privacyArray: any) => {
+        if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
+        return privacyArray.includes(viewerBusinessRole)
+      }
+
+      const enrichedUsers = users.map((u: any) => {
+        const isSelf = u.email === user.email
+        const isInactive = u.status === 'Inactive'
+        const showLastName = isSelf || hasAccess(u.privacy_lastname)
+        const showPicture = isSelf || hasAccess(u.privacy_picture)
+
+        const displayName = u.first_name
+          ? (showLastName && u.last_name ? `${u.first_name} ${u.last_name}` : u.first_name)
+          : (isInactive ? u.email : '')
+
+        return {
+          uuid: u.uuid,
+          email: u.email,
+          name: displayName,
+          image: showPicture ? getAvatarUrl(u.uuid) : null,
+          role: u.role,
+          headline: u.headline
+        }
+      })
+
+      return c.json({ users: enrichedUsers, page, limit })
     }
 
-    const viewerBusinessRole = user.app_metadata.role;
+    const viewerBusinessRole = user.app_metadata.role
 
     // 4. שליפת המשתמש
     const { data: targetUser, error: fetchError } = await supabase
