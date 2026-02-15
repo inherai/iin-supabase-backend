@@ -26,20 +26,19 @@ app.get("/", async (c) => {
 });
 
 // GET /api/connections/:id
-// Returns accepted connections for a specific profile user
+// Returns only the number of accepted connections for a specific profile user
 app.get("/:id", async (c) => {
   const supabase = c.get("supabase");
   const targetId = c.req.param("id");
 
-  const { data, error } = await supabase
+  const { count, error } = await supabase
     .from("connections")
-    .select(CONNECTION_SELECT)
+    .select("id", { count: "exact", head: true })
     .eq("status", "accepted")
-    .or(`requester_id.eq.${targetId},receiver_id.eq.${targetId}`)
-    .order("created_at", { ascending: false });
+    .or(`requester_id.eq.${targetId},receiver_id.eq.${targetId}`);
 
   if (error) return c.json({ error: error.message }, 400);
-  return c.json(data);
+  return c.json({ count: count ?? 0 });
 });
 
 // POST /api/connections
