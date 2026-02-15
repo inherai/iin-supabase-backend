@@ -106,7 +106,7 @@ app.get('/', async (c) => {
       const viewerBusinessRole = user.app_metadata.role
 
       // שאילתה אחת: משתמשים רנדומליים שלא מחוברים
-      const { data: users, error: fetchError, count } = await supabase
+      const { data: users, error: fetchError } = await supabase
         .rpc('get_random_unconnected_users', {
           current_user_id: user.id,
           page_limit: limit,
@@ -160,7 +160,7 @@ app.get('/', async (c) => {
       })
     }
 
-    const viewerBusinessRole = user.app_metadata.role
+    const viewerBusinessRole = user.app_metadata.role;
 
     // 4. שליפת המשתמש
     const { data: targetUser, error: fetchError } = await supabase
