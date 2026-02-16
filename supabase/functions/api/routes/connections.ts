@@ -124,16 +124,31 @@ app.delete("/:id", async (c) => {
 
   const connectionId = c.req.param("id");
 
-  const { data, error } = await supabase
+  // First, fetch the connection to check ownership
+  const { data: connection, error: fetchError } = await supabase
     .from("connections")
-    .delete()
+    .select("*")
     .eq("id", connectionId)
-    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
-    .select("id")
     .maybeSingle();
 
-  if (error) return c.json({ error: error.message }, 400);
-  if (!data) return c.json({ error: "Not found or unauthorized" }, 404);
+  if (fetchError) return c.json({ error: fetchError.message }, 400);
+  if (!connection) return c.json({ error: "Connection not found" }, 404);
+
+  // Check if user is part of this connection
+  const isRequester = connection.requester_id === user.id;
+  const isReceiver = connection.receiver_id === user.id;
+
+  if (!isRequester && !isReceiver) {
+    return c.json({ error: "Unauthorized" }, 403);
+  }
+
+  // Delete the connection
+  const { error: deleteError } = await supabase
+    .from("connections")
+    .delete()
+    .eq("id", connectionId);
+
+  if (deleteError) return c.json({ error: deleteError.message }, 400);
 
   return c.json({ message: "Connection deleted" });
 });
