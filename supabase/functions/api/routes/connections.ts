@@ -1,7 +1,7 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 
 const app = new Hono();
-const ALLOWED_UPDATE_STATUSES = new Set(["accepted", "ignored"]);
+const ALLOWED_UPDATE_STATUSES = new Set(["accepted"]);
 const CONNECTION_SELECT = `
   *,
   requester:requester_id(uuid, name, image, headline),
@@ -86,7 +86,7 @@ app.post("/", async (c) => {
 });
 
 // PUT /api/connections/:id
-// Receiver can set status only to accepted or ignored
+// Receiver can set status only to accepted
 app.put("/:id", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
@@ -97,7 +97,7 @@ app.put("/:id", async (c) => {
   const nextStatus = body?.status;
 
   if (!ALLOWED_UPDATE_STATUSES.has(nextStatus)) {
-    return c.json({ error: "status must be accepted or ignored" }, 400);
+    return c.json({ error: "status must be accepted" }, 400);
   }
 
   const { data, error } = await supabase
@@ -116,7 +116,7 @@ app.put("/:id", async (c) => {
 });
 
 // DELETE /api/connections/:id
-// Requester can cancel only pending request
+// Delete connection (pending or accepted) if user is part of it
 app.delete("/:id", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
@@ -128,15 +128,14 @@ app.delete("/:id", async (c) => {
     .from("connections")
     .delete()
     .eq("id", connectionId)
-    .eq("requester_id", user.id)
-    .eq("status", "pending")
+    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
     .select("id")
     .maybeSingle();
 
   if (error) return c.json({ error: error.message }, 400);
   if (!data) return c.json({ error: "Not found or unauthorized" }, 404);
 
-  return c.json({ message: "Connection request canceled" });
+  return c.json({ message: "Connection deleted" });
 });
 
 export default app;

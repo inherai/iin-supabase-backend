@@ -97,6 +97,7 @@ app.get('/', async (c) => {
     }
 
     const targetUserId = c.req.query('id')
+    const searchQuery = c.req.query('search') || null
     
     // אם אין id, מחזיר רשימה עם pagination
     if (!targetUserId) {
@@ -105,12 +106,12 @@ app.get('/', async (c) => {
       const offset = (page - 1) * limit
       const viewerBusinessRole = user.app_metadata.role
 
-      // שאילתה אחת: משתמשים רנדומליים שלא מחוברים
       const { data: users, error: fetchError } = await supabase
         .rpc('get_random_unconnected_users', {
           current_user_id: user.id,
           page_limit: limit,
-          page_offset: offset
+          page_offset: offset,
+          search_text: searchQuery
         })
 
       if (fetchError) {
