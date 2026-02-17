@@ -71,7 +71,7 @@ app.put('/', async (c) => {
   const { data, error } = await supabase
     .from('users')
     .update({
-        name: profileData.name,
+        name:`${profileData.first_name} ${profileData.last_name}`,
         first_name: profileData.first_name,
         last_name: profileData.last_name,
         phone: profileData.phone,
