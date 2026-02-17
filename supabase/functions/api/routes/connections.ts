@@ -48,12 +48,18 @@ app.get("/", async (c) => {
         }
       );
 
-      if (error) return c.json({ error: error.message }, 400);
+      if (error) {
+        console.error("RPC error:", error);
+        return c.json({ error: error.message, details: error }, 400);
+      }
 
-      const totalCount = data && data.length > 0 ? data[0].count : 0;
+      const totalCount = data && data.length > 0 ? Number(data[0].count) : 0;
       
       // Remove count field from each row
-      const cleanData = data?.map(({ count, ...rest }) => rest) ?? [];
+      const cleanData = data?.map((row: any) => {
+        const { count, ...rest } = row;
+        return rest;
+      }) ?? [];
 
       return c.json({
         data: cleanData,
