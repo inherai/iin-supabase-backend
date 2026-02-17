@@ -3,10 +3,11 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 const app = new Hono();
 
 // GET /api/chat
-// מחזיר את כל השיחות של המשתמש הנוכחי (עבור רשימת ה-Inbox)
+// Return all conversations for the current user (inbox list)
 app.get("/", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
+
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
   const { data, error } = await supabase
@@ -16,41 +17,47 @@ app.get("/", async (c) => {
       user1:user1_id(uuid, name, image, headline),
       user2:user2_id(uuid, name, image, headline)
     `)
-    .or(``user1_id.eq`.${`user.id`},`user2_id.eq`.${`user.id`}`)
+    .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
     .order("updated_at", { ascending: false });
 
   if (error) return c.json({ error: error.message }, 400);
-  return c.json(data);
+  return c.json(data ?? []);
 });
 
 // POST /api/chat
-// מקבל partner_id ובודק/יוצר שיחה
+// Accept partner_id and create/find a conversation
 app.post("/", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
+
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-  const body = await c.req.json();
+  const body = await c.req.json().catch(() => null);
   const partnerId = body?.partner_id;
 
-  if (!partnerId) return c.json({ error: "partner_id is required" }, 400);
+  if (!partnerId || typeof partnerId !== "string") {
+    return c.json({ error: "partner_id is required" }, 400);
+  }
 
-  // 1. בדיקה האם יש קונקשן מאושר (חובה לפי הלוגיקה שלך)
   const { data: connection, error: connError } = await supabase
     .from("connections")
     .select("status")
-    .or(`and(`requester_id.eq`.${`user.id`},`receiver_id.eq`.${partnerId}),and(`requester_id.eq`.${partnerId},`receiver_id.eq`.${`user.id`})`)
+    .or(
+      `and(requester_id.eq.${user.id},receiver_id.eq.${partnerId}),and(requester_id.eq.${partnerId},receiver_id.eq.${user.id})`,
+    )
     .eq("status", "accepted")
     .maybeSingle();
 
   if (connError || !connection) {
-    return c.json({ error: "You can only start a conversation with an accepted connection" }, 403);
+    return c.json(
+      { error: "You can only start a conversation with an accepted connection" },
+      403,
+    );
   }
 
-  // 2. סידור ה-IDs למניעת כפילויות (הקטן תמיד ב-user1)
+  // Keep participant ordering stable to avoid duplicates.
   const [u1, u2] = [user.id, partnerId].sort();
 
-  // 3. בדיקה אם כבר קיימת שיחה
   const { data: existing, error: existingError } = await supabase
     .from("conversations")
     .select("*")
@@ -58,9 +65,9 @@ app.post("/", async (c) => {
     .eq("user2_id", u2)
     .maybeSingle();
 
-  if (existing) return c.json(existing); // מחזיר את השיחה הקיימת
+  if (existingError) return c.json({ error: existingError.message }, 400);
+  if (existing) return c.json(existing);
 
-  // 4. יצירת שיחה חדשה אם לא קיימת
   const { data: newConv, error: createError } = await supabase
     .from("conversations")
     .insert([{ user1_id: u1, user2_id: u2 }])
@@ -71,8 +78,8 @@ app.post("/", async (c) => {
   return c.json(newConv, 201);
 });
 
-// GET /api/chat/:conversation_id/messages
-// שליפת הודעות לשיחה ספציפית וסימון כנקראו
+// GET /api/chat/:id/messages
+// Fetch messages for a conversation and mark them as read
 app.get("/:id/messages", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
@@ -80,17 +87,14 @@ app.get("/:id/messages", async (c) => {
 
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-  // 1. שליפת ההודעות עבור השיחה
-  const { data, error } = await supabase
+  const { data, error: fetchError } = await supabase
     .from("messages")
     .select("*")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
-  if (error) return c.json({ error: error.message }, 400);
+  if (fetchError) return c.json({ error: fetchError.message }, 400);
 
-  // 2. עדכון ההודעות בשיחה ל is_read=true
-  // העדכון חל על הודעות שהמשתמש הנוכחי אינו השולח שלהן
   const { error: updateError } = await supabase
     .from("messages")
     .update({ is_read: true })
@@ -98,12 +102,12 @@ app.get("/:id/messages", async (c) => {
     .neq("sender_id", user.id);
 
   if (updateError) {
-    // מומלץ לתעד את השגיאה, אך אין לחסום את שליחת ההודעות למשתמש
+    // Do not block message fetch if marking as read fails.
     console.error("Error marking messages as read:", updateError.message);
   }
-  
-  // 3. החזרת ההודעות למשתמש
-  return c.json(data);
+
+  return c.json(data ?? []);
 });
 
 export default app;
+
