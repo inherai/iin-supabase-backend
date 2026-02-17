@@ -10,7 +10,7 @@ const CONNECTION_SELECT = `
 
 // GET /api/connections
 // Query params:
-// - status: 'accepted' (with pagination & search) or 'pending' (all at once)
+// - status: 'accepted' (with pagination & search) or 'pending' (incoming requests only)
 // - page: page number (for accepted only, default: 1)
 // - limit: items per page (for accepted only, default: 20)
 // - search: search by name (for accepted only)
@@ -26,19 +26,22 @@ app.get("/", async (c) => {
 
   let query = supabase
     .from("connections")
-    .select(CONNECTION_SELECT, { count: "exact" })
-    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
+    .select(CONNECTION_SELECT, { count: "exact" });
 
-  // Filter by status if provided
-  if (status === "accepted" || status === "pending") {
-    query = query.eq("status", status);
-  }
+  // For pending: only incoming requests (where user is receiver)
+  if (status === "pending") {
+    query = query
+      .eq("receiver_id", user.id)
+      .eq("status", "pending");
+  } 
+  // For accepted: both directions
+  else if (status === "accepted") {
+    query = query
+      .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+      .eq("status", "accepted");
 
-  // For accepted connections: add pagination and search
-  if (status === "accepted") {
     // Apply search filter if provided
     if (search) {
-      // Search in both requester and receiver names
       query = query.or(
         `requester.name.ilike.%${search}%,receiver.name.ilike.%${search}%`
       );
@@ -48,6 +51,10 @@ app.get("/", async (c) => {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
     query = query.range(from, to);
+  }
+  // No status: all connections (both directions)
+  else {
+    query = query.or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
   }
 
   query = query.order("created_at", { ascending: false });
