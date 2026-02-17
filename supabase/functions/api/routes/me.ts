@@ -42,22 +42,31 @@ app.get('/', async (c) => {
     return c.json({ error: error.message }, 400)
   }
 
-  // 2. בדיקה ושליפת חברה
-  const companyId = parseInt(userData.company);
-  if (!isNaN(companyId)) {
-    const { data: companyData } = await supabase
-      .from('companies')
-      .select('id, name, logo')
-      .eq('id', companyId)
-      .single()
-
-    if (companyData) {
-      userData.company = {
-        id: companyData.id,
-        name: companyData.name,
-        logo: transformToProxyUrl(companyData.logo)
+  // שליפת נתוני חברות עבור כל ה-experiences
+  if (userData.experience && Array.isArray(userData.experience)) {
+    const companyIds = userData.experience
+      .map((exp: any) => exp.company)
+      .filter((id: any) => typeof id === 'number')
+    
+    if (companyIds.length > 0) {
+      const { data: companies } = await supabase
+        .from('companies')
+        .select('id, name, logo')
+        .in('id', companyIds)
+      
+      if (companies) {
+        userData.experience = userData.experience.map((exp: any) => ({
+          ...exp,
+          company: companies.find((c: any) => c.id === exp.company) || exp.company
+        }))
       }
     }
+  }
+
+  // שליפת החברה הנוכחית
+  const currentExp = userData.experience?.find((exp: any) => exp.current === true)
+  if (currentExp?.company && typeof currentExp.company === 'object') {
+    userData.company = currentExp.company
   }
 
   const dataWithProxy = transformToProxyUrl(userData);
