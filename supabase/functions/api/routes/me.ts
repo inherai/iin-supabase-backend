@@ -32,16 +32,9 @@ app.get('/', async (c) => {
 
   const supabase = c.get('supabase')
 
-  const { data, error } = await supabase
+  const { data: userData, error } = await supabase
     .from('users')
-    .select(`
-      *,
-      company:companies (
-        id,
-        name,
-        logo
-      )
-    `)
+    .select('*')
     .eq('uuid', user.id)
     .single()
 
@@ -49,9 +42,25 @@ app.get('/', async (c) => {
     return c.json({ error: error.message }, 400)
   }
 
-  // כאן הקסם קורה: המרת הנתיב ללינק פרוקסי לפני השליחה לקליינט
-  const dataWithProxy = transformToProxyUrl(data);
+  // 2. בדיקה ושליפת חברה
+  const companyId = parseInt(userData.company);
+  if (!isNaN(companyId)) {
+    const { data: companyData } = await supabase
+      .from('companies')
+      .select('id, name, logo')
+      .eq('id', companyId)
+      .single()
 
+    if (companyData) {
+      userData.company = {
+        id: companyData.id,
+        name: companyData.name,
+        logo: transformToProxyUrl(companyData.logo)
+      }
+    }
+  }
+
+  const dataWithProxy = transformToProxyUrl(userData);
   return c.json(dataWithProxy)
 })
 
@@ -96,14 +105,7 @@ app.put('/', async (c) => {
         image: profileData.image 
     })
     .eq('uuid', user.id)
-    .select(`
-      *,
-      company:companies (
-        id,
-        name,
-        logo
-      )
-    `)
+    .select()
     .single()
 
   if (error) {
