@@ -34,18 +34,42 @@ app.get("/", async (c) => {
       .eq("receiver_id", user.id)
       .eq("status", "pending");
   } 
-  // For accepted: both directions
+  // For accepted: both directions with search
   else if (status === "accepted") {
+    // Use RPC for efficient search with joins
+    if (search) {
+      const { data, error } = await supabase.rpc(
+        "search_accepted_connections",
+        {
+          p_user_id: user.id,
+          p_search: search,
+          p_limit: limit,
+          p_offset: (page - 1) * limit,
+        }
+      );
+
+      if (error) return c.json({ error: error.message }, 400);
+
+      const totalCount = data && data.length > 0 ? data[0].count : 0;
+      
+      // Remove count field from each row
+      const cleanData = data?.map(({ count, ...rest }) => rest) ?? [];
+
+      return c.json({
+        data: cleanData,
+        pagination: {
+          page,
+          limit,
+          total: totalCount,
+          totalPages: Math.ceil(totalCount / limit),
+        },
+      });
+    }
+
+    // Without search, use regular query
     query = query
       .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
       .eq("status", "accepted");
-
-    // Apply search filter if provided
-    if (search) {
-      query = query.or(
-        `requester.name.ilike.%${search}%,receiver.name.ilike.%${search}%`
-      );
-    }
 
     // Apply pagination
     const from = (page - 1) * limit;
