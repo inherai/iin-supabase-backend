@@ -89,7 +89,14 @@ app.put('/', async (c) => {
         image: profileData.image 
     })
     .eq('uuid', user.id)
-    .select()
+    .select(`
+      *,
+      company:companies (
+        id,
+        name,
+        logo
+      )
+    `)
     .single()
 
   if (error) {
