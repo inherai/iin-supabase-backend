@@ -14,6 +14,7 @@ import likeRoute from './routes/like.ts'
 import connectionsRoute from './routes/connections.ts'
 import companiesRoute from './routes/companies.ts'
 import chatRoute from './routes/chat.ts'
+import interestsRoute from './routes/interests.ts'
 
 //const app = new Hono()
 // מגדירים שהכל יושב תחת /api
@@ -49,7 +50,9 @@ app.route('/like', likeRoute)
 app.route('/connections', connectionsRoute)
 app.route('/companies', companiesRoute)
 app.route('/chat', chatRoute)
+app.route('/interests', interestsRoute)
 // בדיקה שהכל חי
 app.get('/', (c) => c.text('Inerai API is running 🚀'))
 
 Deno.serve(app.fetch)
+
