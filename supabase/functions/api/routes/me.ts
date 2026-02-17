@@ -34,7 +34,14 @@ app.get('/', async (c) => {
 
   const { data, error } = await supabase
     .from('users')
-    .select('*')
+    .select(`
+      *,
+      company:companies (
+        id,
+        name,
+        logo
+      )
+    `)
     .eq('uuid', user.id)
     .single()
 
@@ -89,7 +96,14 @@ app.put('/', async (c) => {
         image: profileData.image 
     })
     .eq('uuid', user.id)
-    .select()
+    .select(`
+      *,
+      company:companies (
+        id,
+        name,
+        logo
+      )
+    `)
     .single()
 
   if (error) {
