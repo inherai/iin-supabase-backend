@@ -16,7 +16,7 @@ app.get("/", async (c) => {
       user1:user1_id(uuid, name, image, headline),
       user2:user2_id(uuid, name, image, headline)
     `)
-    .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
+    .or(``user1_id.eq`.${`user.id`},`user2_id.eq`.${`user.id`}`)
     .order("updated_at", { ascending: false });
 
   if (error) return c.json({ error: error.message }, 400);
@@ -39,7 +39,7 @@ app.post("/", async (c) => {
   const { data: connection, error: connError } = await supabase
     .from("connections")
     .select("status")
-    .or(`and(requester_id.eq.${user.id},receiver_id.eq.${partnerId}),and(requester_id.eq.${partnerId},receiver_id.eq.${user.id})`)
+    .or(`and(`requester_id.eq`.${`user.id`},`receiver_id.eq`.${partnerId}),and(`requester_id.eq`.${partnerId},`receiver_id.eq`.${`user.id`})`)
     .eq("status", "accepted")
     .maybeSingle();
 
@@ -72,7 +72,7 @@ app.post("/", async (c) => {
 });
 
 // GET /api/chat/:conversation_id/messages
-// שליפת הודעות לשיחה ספציפית
+// שליפת הודעות לשיחה ספציפית וסימון כנקראו
 app.get("/:id/messages", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
@@ -80,6 +80,7 @@ app.get("/:id/messages", async (c) => {
 
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
+  // 1. שליפת ההודעות עבור השיחה
   const { data, error } = await supabase
     .from("messages")
     .select("*")
@@ -87,6 +88,21 @@ app.get("/:id/messages", async (c) => {
     .order("created_at", { ascending: true });
 
   if (error) return c.json({ error: error.message }, 400);
+
+  // 2. עדכון ההודעות בשיחה ל is_read=true
+  // העדכון חל על הודעות שהמשתמש הנוכחי אינו השולח שלהן
+  const { error: updateError } = await supabase
+    .from("messages")
+    .update({ is_read: true })
+    .eq("conversation_id", conversationId)
+    .neq("sender_id", user.id);
+
+  if (updateError) {
+    // מומלץ לתעד את השגיאה, אך אין לחסום את שליחת ההודעות למשתמש
+    console.error("Error marking messages as read:", updateError.message);
+  }
+  
+  // 3. החזרת ההודעות למשתמש
   return c.json(data);
 });
 
