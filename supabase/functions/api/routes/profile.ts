@@ -69,7 +69,7 @@ app.post('/', async (c) => {
         uuid: u.uuid,
         email: u.email,
         name: displayName, // השם המחושב
-        // כאן התיקון הגדול: החזרת הלינק לפרוקסי
+        //החזרת הלינק לפרוקסי
         image: showPicture ? getAvatarUrl(u.uuid) : null, 
         role: u.role,
         headline: u.headline
@@ -97,6 +97,7 @@ app.get('/', async (c) => {
     }
 
     const targetUserId = c.req.query('id')
+    const searchQuery = c.req.query('search') || null
     
     // אם אין id, מחזיר רשימה עם pagination
     if (!targetUserId) {
@@ -105,12 +106,13 @@ app.get('/', async (c) => {
       const offset = (page - 1) * limit
       const viewerBusinessRole = user.app_metadata.role
 
-      // שאילתה אחת: משתמשים רנדומליים שלא מחוברים
       const { data: users, error: fetchError } = await supabase
         .rpc('get_random_unconnected_users', {
           current_user_id: user.id,
+          requestor_role: viewerBusinessRole,
           page_limit: limit,
-          page_offset: offset
+          page_offset: offset,
+          search_text: searchQuery
         })
 
       if (fetchError) {
@@ -138,14 +140,24 @@ app.get('/', async (c) => {
 
         return {
           uuid: u.uuid,
-          email: u.email,
           name: displayName,
-          avatar: avatarUrl,
-          image: avatarUrl,
-          role: u.role,
           headline: u.headline,
+          company: u.company,
           location: u.location,
-          company: u.company
+          about: u.about,
+          interests: u.interests,
+          languages: u.languages,
+          work_preferences: u.work_preferences,
+          experience: u.experience,
+          education: u.education,
+          certifications: u.certifications,
+          skills: u.skills,
+          last_name: showLastName ? u.last_name : null,
+          image: avatarUrl,
+          contact_details: hasAccess(u.privacy_contact_details) ? {
+            email: u.email,
+            phone: u.phone
+          } : null
         }
       })
 
@@ -205,13 +217,12 @@ app.get('/', async (c) => {
       education: targetUser.education,
       certifications: targetUser.certifications,
       skills: targetUser.skills,
-      open_to_work: targetUser.open_to_work,
 
       // שדות מותנים
       last_name: showLastName ? targetUser.last_name : null,
       
-      // כאן התיקון הגדול: החזרת הלינק לפרוקסי
-      picture: hasAccess(targetUser.privacy_picture) ? getAvatarUrl(targetUser.uuid) : null,
+      //  החזרת הלינק לפרוקסי
+      image: hasAccess(targetUser.privacy_picture) ? getAvatarUrl(targetUser.uuid) : null,
       
       contact_details: hasAccess(targetUser.privacy_contact_details) ? {
         email: targetUser.email,

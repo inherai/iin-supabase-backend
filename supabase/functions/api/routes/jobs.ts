@@ -4,12 +4,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
 const app = new Hono()
 
-// GET /api/jobs
 app.get('/', async (c) => {
   try {
-    // 1. הגדרת הקליינט
-    // שימרתי את הלוגיקה שלך שמשתמשת ב-Service Role Key
-    // זה אומר שהפונקציה רצה עם הרשאות אדמין (קריאה של כל המשרות)
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
@@ -19,13 +15,14 @@ app.get('/', async (c) => {
 
     const supabaseClient = createClient(supabaseUrl, supabaseKey);
 
-    // 2. קבלת הפרמטרים מה-URL (ב-Hono זה ממש פשוט)
     const searchTerm = c.req.query('search');
     const id = c.req.query('id');
     
-    // המרה למספרים עם ברירת מחדל
+    // --- התיקון כאן ---
     const page = parseInt(c.req.query('page') || '1');
     const limit = parseInt(c.req.query('limit') || '25');
+    // הורדנו את ההערה והגדרנו את from כאן כדי שיהיה מוכר בכל הפונקציה
+    const from = (page - 1) * limit;
 
     let result;
     let totalCount = 0;
@@ -40,29 +37,24 @@ app.get('/', async (c) => {
         
         if (error) throw error;
         result = data;
-        
-        // במשרה בודדת הספירה היא 1 או 0
         totalCount = data ? 1 : 0;
 
     } else {
         // --- תרחיש ב': רשימה עם דפדוף וחיפוש ---
         
-        // חישוב הטווח
-        const from = (page - 1) * limit;
+        // לא צריך להגדיר את from שוב, הוא כבר מוגדר למעלה
         const to = from + limit - 1;
 
         let query = supabaseClient
             .from('open_position')
-            .select('*', { count: 'exact' }) // מבקש גם את הספירה הכוללת
+            .select('*', { count: 'exact' })
             .not('job_description_html', 'is', null)
             .order('created_at', { ascending: false });
 
-        // סינון לפי חיפוש אם קיים
         if (searchTerm) {
             query = query.or(`job_title.ilike.%${searchTerm}%,company_name.ilike.%${searchTerm}%`);
         }
 
-        // ביצוע השליפה בטווח המבוקש
         const { data, count, error } = await query.range(from, to);
 
         if (error) throw error;
@@ -78,7 +70,7 @@ app.get('/', async (c) => {
             page: page,
             limit: limit,
             total: totalCount,
-            // חישוב אם יש עוד דפים (רק אם זה רשימה)
+            // עכשיו from מוכר כאן ולא תהיה שגיאה
             has_more: id ? false : (result.length === limit && (from + result.length) < totalCount)
         },
         success: true
