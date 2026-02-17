@@ -69,7 +69,7 @@ app.post('/', async (c) => {
         uuid: u.uuid,
         email: u.email,
         name: displayName, // השם המחושב
-        // כאן התיקון הגדול: החזרת הלינק לפרוקסי
+        //החזרת הלינק לפרוקסי
         image: showPicture ? getAvatarUrl(u.uuid) : null, 
         role: u.role,
         headline: u.headline
@@ -206,13 +206,12 @@ app.get('/', async (c) => {
       education: targetUser.education,
       certifications: targetUser.certifications,
       skills: targetUser.skills,
-      open_to_work: targetUser.open_to_work,
 
       // שדות מותנים
       last_name: showLastName ? targetUser.last_name : null,
       
-      // כאן התיקון הגדול: החזרת הלינק לפרוקסי
-      picture: hasAccess(targetUser.privacy_picture) ? getAvatarUrl(targetUser.uuid) : null,
+      //  החזרת הלינק לפרוקסי
+      image: hasAccess(targetUser.privacy_picture) ? getAvatarUrl(targetUser.uuid) : null,
       
       contact_details: hasAccess(targetUser.privacy_contact_details) ? {
         email: targetUser.email,
