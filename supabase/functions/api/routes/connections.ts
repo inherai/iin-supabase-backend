@@ -9,20 +9,75 @@ const CONNECTION_SELECT = `
 `;
 
 // GET /api/connections
-// Returns all incoming and outgoing connections for current user
+// Query params:
+// - status: 'accepted' (with pagination & search) or 'pending' (incoming requests only)
+// - page: page number (for accepted only, default: 1)
+// - limit: items per page (for accepted only, default: 20)
+// - search: search by name (for accepted only)
 app.get("/", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-  const { data, error } = await supabase
+  const status = c.req.query("status");
+  const page = parseInt(c.req.query("page") || "1");
+  const limit = parseInt(c.req.query("limit") || "20");
+  const search = c.req.query("search") || "";
+
+  let query = supabase
     .from("connections")
-    .select(CONNECTION_SELECT)
-    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
-    .order("created_at", { ascending: false });
+    .select(CONNECTION_SELECT, { count: "exact" });
+
+  // For pending: only incoming requests (where user is receiver)
+  if (status === "pending") {
+    query = query
+      .eq("receiver_id", user.id)
+      .eq("status", "pending");
+  } 
+  // For accepted: both directions
+  else if (status === "accepted") {
+    query = query
+      .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+      .eq("status", "accepted");
+
+    // Apply search filter if provided
+    if (search) {
+      query = query.or(
+        `requester.name.ilike.%${search}%,receiver.name.ilike.%${search}%`
+      );
+    }
+
+    // Apply pagination
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+    query = query.range(from, to);
+  }
+  // No status: all connections (both directions)
+  else {
+    query = query.or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
+  }
+
+  query = query.order("created_at", { ascending: false });
+
+  const { data, error, count } = await query;
 
   if (error) return c.json({ error: error.message }, 400);
-  return c.json(data);
+
+  // For accepted with pagination, return structured response
+  if (status === "accepted") {
+    return c.json({
+      data: data ?? [],
+      pagination: {
+        page,
+        limit,
+        total: count ?? 0,
+        totalPages: Math.ceil((count ?? 0) / limit),
+      },
+    });
+  }
+
+  // For pending or no status filter, return simple array
+  return c.json(data ?? []);
 });
 
 // GET /api/connections/:id
