@@ -24,6 +24,7 @@ import degreesRoute from './routes/degrees.ts'
 import fieldsOfStudyRoute from './routes/fields-of-study.ts'
 import activityRoute from './routes/activity.ts'
 import savedRoute from './routes/saved.ts'
+import avatarRoute from './routes/avatar.ts'
 
 //const app = new Hono()
 // מגדירים שהכל יושב תחת /api
@@ -69,6 +70,8 @@ app.route('/degrees', degreesRoute)
 app.route('/fields-of-study', fieldsOfStudyRoute)
 app.route('/activity', activityRoute)
 app.route('/saved', savedRoute)
+app.route('/avatar', avatarRoute)
+
 // בדיקה שהכל חי
 app.get('/', (c) => c.text('Inerai API is running 🚀'))
 
