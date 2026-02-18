@@ -69,9 +69,7 @@ app.route('/skills', skillsRoute)
 app.route('/degrees', degreesRoute)
 app.route('/fields-of-study', fieldsOfStudyRoute)
 app.route('/activity', activityRoute)
-app.route('/saved', savedRoute)
 app.route('/avatar', avatarRoute)
-
 app.route('/saved-resources', savedResourcesRoute)
 // בדיקה שהכל חי
 app.get('/', (c) => c.text('Inerai API is running 🚀'))
