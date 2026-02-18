@@ -3,6 +3,30 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 
 const app = new Hono()
 
+app.get('/views/count', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
+
+    if (!user) {
+      return c.json({ error: 'Unauthorized: You must be logged in to view profile views count' }, 401)
+    }
+
+    const { count, error } = await supabase
+      .from('profile_views')
+      .select('id', { count: 'exact', head: true })
+      .eq('viewed_id', user.id)
+
+    if (error) {
+      return c.json({ error: error.message }, 500)
+    }
+
+    return c.json({ count: count ?? 0 })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 // --- פונקציית עזר: בניית ה-URL לתמונה דרך הפרוקסי ---
 const getAvatarUrl = (userId: string) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -228,6 +252,20 @@ app.get('/', async (c) => {
         email: targetUser.email,
         phone: targetUser.phone
       } : null
+    }
+
+    if (!isSelf) {
+      const { error: insertViewError } = await supabase
+        .from('profile_views')
+        .insert({
+          viewer_id: user.id,
+          viewed_id: targetUser.uuid,
+          viewed_at: new Date().toISOString()
+        })
+
+      if (insertViewError) {
+        console.error('Failed to insert profile view:', insertViewError.message)
+      }
     }
 
     return c.json(publicProfile)
