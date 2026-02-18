@@ -20,6 +20,7 @@ import languagesRoute from './routes/languages.ts'
 import locationsRoute from './routes/locations.ts'
 import educationalInstitutionsRoute from './routes/educational-institutions.ts'
 import skillsRoute from './routes/skills.ts'
+import activityRoute from './routes/activity.ts'
 
 //const app = new Hono()
 // מגדירים שהכל יושב תחת /api
@@ -61,6 +62,7 @@ app.route('/languages', languagesRoute)
 app.route('/locations', locationsRoute)
 app.route('/educational-institutions', educationalInstitutionsRoute)
 app.route('/skills', skillsRoute)
+app.route('/activity', activityRoute)
 // בדיקה שהכל חי
 app.get('/', (c) => c.text('Inerai API is running 🚀'))
 
