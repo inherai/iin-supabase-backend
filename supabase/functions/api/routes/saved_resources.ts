@@ -143,8 +143,8 @@ app.post('/', async (c) => {
 })
 
 // ====================================================================
-// DELETE /api/saved/:id
-// מחיקת שמירה לפי ID
+// DELETE /api/saved-resources/:id
+// מחיקת שמירה לפי ID של השמירה
 // ====================================================================
 app.delete('/:id', async (c) => {
   try {
@@ -161,7 +161,7 @@ app.delete('/:id', async (c) => {
       .from('saved_resources')
       .delete()
       .eq('id', savedId)
-      .eq('user_id', user.id) // וידוא שזה שייך למשתמש
+      .eq('user_id', user.id)
 
     if (deleteError) {
       return c.json({ error: deleteError.message }, 500)
@@ -175,9 +175,8 @@ app.delete('/:id', async (c) => {
 })
 
 // ====================================================================
-// DELETE /api/saved/resource
+// DELETE /api/saved/resource?type=post&id=123
 // מחיקת שמירה לפי type ו-id של המשאב
-// Body: { saved_resource_type: 'post', saved_resource_id: '123' }
 // ====================================================================
 app.delete('/resource', async (c) => {
   try {
@@ -188,12 +187,12 @@ app.delete('/resource', async (c) => {
       return c.json({ error: 'Unauthorized' }, 401)
     }
 
-    const body = await c.req.json().catch(() => ({}))
-    const { saved_resource_type, saved_resource_id } = body
+    const saved_resource_type = c.req.query('type')
+    const saved_resource_id = c.req.query('id')
 
     if (!saved_resource_type || !saved_resource_id) {
       return c.json({ 
-        error: 'saved_resource_type and saved_resource_id are required' 
+        error: 'type and id query parameters are required' 
       }, 400)
     }
 
