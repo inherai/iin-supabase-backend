@@ -170,7 +170,7 @@ app.get('/', async (c) => {
     const commentsByPostId = comments?.reduce((acc: any, comment: any) => {
       const profileData = usersMap?.[comment.sender?.toLowerCase()];
       const author = profileData
-        ? { ...profileData, name: profileData.name || '' }
+        ? { ...profileData,id: profileData.uuid, name: profileData.name || '' }
         : { name: comment.sender, image: null };
 
       const commentLikes = allCommentLikes?.filter(
