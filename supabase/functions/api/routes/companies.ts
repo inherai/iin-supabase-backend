@@ -3,10 +3,10 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 
 const app = new Hono()
 
-// שליפת חברות עם pagination וחיפוש (GET /)
+// GET /api/companies - companies list with pagination and search
 app.get('/', async (c) => {
   const supabase = c.get('supabase')
-  
+
   const page = parseInt(c.req.query('page') || '1')
   const limit = 20
   const search = c.req.query('search') || ''
@@ -16,7 +16,6 @@ app.get('/', async (c) => {
     .from('companies')
     .select('*', { count: 'exact' })
 
-  // אם יש חיפוש - מסנן לפי שם החברה
   if (search) {
     query = query.ilike('name', `%${search}%`)
   }
@@ -28,27 +27,51 @@ app.get('/', async (c) => {
     return c.json({ error: error.message }, 400)
   }
 
-  // סינון locations: רק ישראל, אם אין - הראשון
-  const processedData = data?.map(company => {
-    const employeesIds = Array.isArray(company.employees) ? company.employees : []
+  const companies = data || []
+  const allEmployeeIds = [...new Set(
+    companies
+      .flatMap((company: any) => (Array.isArray(company.employees) ? company.employees : []))
+      .filter((id: any) => typeof id === 'string')
+  )]
 
-    if (!company.locations || company.locations.length === 0) {
-      return {
-        ...company,
-        employees_ids: employeesIds
-      }
+  let usersById = new Map<string, any>()
+
+  if (allEmployeeIds.length > 0) {
+    const { data: users, error: usersError } = await supabase
+      .from('users')
+      .select('uuid, name, headline, image')
+      .in('uuid', allEmployeeIds)
+
+    if (usersError) {
+      return c.json({ error: usersError.message }, 400)
     }
-    
-    const israelLocations = company.locations.filter((loc: any) => loc.country === 'IL')
-    
-    return {
+
+    usersById = new Map((users || []).map((u: any) => [u.uuid, u]))
+  }
+
+  const processedData = companies.map((company: any) => {
+    const employeesDetails = (Array.isArray(company.employees) ? company.employees : [])
+      .map((employeeId: string) => usersById.get(employeeId))
+      .filter(Boolean)
+
+    const nextCompany = {
       ...company,
-      employees_ids: employeesIds,
+      employees: employeesDetails
+    }
+
+    if (!Array.isArray(company.locations) || company.locations.length === 0) {
+      return nextCompany
+    }
+
+    const israelLocations = company.locations.filter((loc: any) => loc.country === 'IL')
+
+    return {
+      ...nextCompany,
       locations: israelLocations.length > 0 ? israelLocations : [company.locations[0]]
     }
   })
 
-  return c.json({ 
+  return c.json({
     companies: processedData,
     pagination: {
       page,
