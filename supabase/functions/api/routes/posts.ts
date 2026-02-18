@@ -170,7 +170,7 @@ app.get('/', async (c) => {
     const commentsByPostId = comments?.reduce((acc: any, comment: any) => {
       const profileData = usersMap?.[comment.sender?.toLowerCase()];
       const author = profileData
-        ? { ...profileData, name: profileData.name || '' }
+        ? { ...profileData,id: profileData.uuid, name: profileData.name || '' }
         : { name: comment.sender, image: null };
 
       const commentLikes = allCommentLikes?.filter(
@@ -309,23 +309,47 @@ app.post('/comments', async (c) => {
     if (!postId) return c.json({ error: "Post ID query param is required" }, 400)
     if (!message) return c.json({ error: "Message is required" }, 400)
 
-    const { data, error } = await supabase.from('comments').insert({
-      post_id: postId,
-      sender: user.email,
-      message: message,
-      attachments: attachments || [],
-      created_at: new Date().toISOString()
-    }).select().single()
+    // 1. הכנסת התגובה לטבלת comments
+    const { data: commentData, error: commentError } = await supabase
+      .from('comments')
+      .insert({
+        post_id: postId,
+        sender: user.email,
+        message: message,
+        attachments: attachments || [],
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single()
 
-    if (error) throw error
+    if (commentError) throw commentError
+
+    // 2. שליפת ה-uuid של המשתמש מטבלת users לפי המייל
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('uuid')
+      .eq('email', user.email)
+      .single()
+
+    if (userError) throw userError
 
     if (isQualityPost(message)) {
       updatePostVector(postId)
     }
-    return c.json({ success: true, data })
+
+    // 3. בניית האובייקט הסופי עם המבנה שביקשת
+    return c.json({ 
+      success: true, 
+      data: {
+        ...commentData,
+        author: {
+          id: userData.uuid
+        }
+      } 
+    })
+
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
 })
-
 export default app
