@@ -237,4 +237,46 @@ app.get('/', async (c) => {
   }
 })
 
+// ====================================================================
+// PUT /api/profile/privacy
+// עדכון הגדרות פרטיות
+// ====================================================================
+app.put('/privacy', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
+
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
+    const body = await c.req.json().catch(() => ({}))
+    const { privacy_lastname, privacy_picture, privacy_contact_details, is_anonymous } = body
+
+    const updates: any = {}
+    if (privacy_lastname) updates.privacy_lastname = privacy_lastname
+    if (privacy_picture) updates.privacy_picture = privacy_picture
+    if (privacy_contact_details) updates.privacy_contact_details = privacy_contact_details
+    if (typeof is_anonymous === 'boolean') updates.is_anonymous = is_anonymous
+
+    if (Object.keys(updates).length === 0) {
+      return c.json({ error: 'No privacy settings provided' }, 400)
+    }
+
+    const { error: updateError } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('uuid', user.id)
+
+    if (updateError) {
+      return c.json({ error: updateError.message }, 500)
+    }
+
+    return c.json({ success: true, updated: updates })
+
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 export default app
