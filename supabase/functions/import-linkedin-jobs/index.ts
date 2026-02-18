@@ -33,11 +33,25 @@ Deno.serve(async (req) => {
 
     if (!items || !items.length) return new Response(JSON.stringify({ message: "No jobs" }), { status: 200 })
 
+    const companyNames = [...new Set(items.map(item => item.company_name))]; // רשימת שמות ייחודיים
+    
+    const { data: companiesData } = await supabase
+      .from('companies')
+      .select('id, name')
+      .in('name', companyNames); // שליפה מהירה של כל החברות הרלוונטיות במכה אחת
+
+    // יצירת מפה (Map) לגישה מהירה: שם חברה -> ID
+    const companyMap = {};
+    companiesData?.forEach(c => {
+      companyMap[c.name.toLowerCase()] = c.id;
+    });
+
     // מיפוי נתונים - שימי לב ש-job_description_html נשלח כ-null
     const jobsToInsert = items.map((item) => ({
       job_id: String(item.job_id),
       job_title: item.job_title,
       company_name: item.company_name,
+      company_id: companyMap[item.company_name?.toLowerCase()] || null,
       icon: item.company_logo_url,
       location: item.location,
       apply_link: item.apply_url,
