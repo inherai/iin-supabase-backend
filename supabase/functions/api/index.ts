@@ -12,7 +12,7 @@ import jobsRoute from './routes/jobs.ts'
 import profileRoute from './routes/profile.ts'
 import likeRoute from './routes/like.ts'
 import connectionsRoute from './routes/connections.ts'
-import companiesRoute from './routes/companies.ts'
+//import companiesRoute from './routes/companies.ts'
 import chatRoute from './routes/chat.ts'
 import interestsRoute from './routes/interests.ts'
 import workPreferencesRoute from './routes/work-preferences.ts'
@@ -58,7 +58,7 @@ app.route('/jobs', jobsRoute)
 app.route('/profile', profileRoute)
 app.route('/like', likeRoute)
 app.route('/connections', connectionsRoute)
-app.route('/companies', companiesRoute)
+//app.route('/companies', companiesRoute)
 app.route('/chat', chatRoute)
 app.route('/interests', interestsRoute)
 app.route('/work-preferences', workPreferencesRoute)
