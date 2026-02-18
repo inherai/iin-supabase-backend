@@ -20,6 +20,8 @@ import languagesRoute from './routes/languages.ts'
 import locationsRoute from './routes/locations.ts'
 import educationalInstitutionsRoute from './routes/educational-institutions.ts'
 import skillsRoute from './routes/skills.ts'
+import degreesRoute from './routes/degrees.ts'
+import fieldsOfStudyRoute from './routes/fields-of-study.ts'
 import activityRoute from './routes/activity.ts'
 import savedRoute from './routes/saved.ts'
 
@@ -63,6 +65,8 @@ app.route('/languages', languagesRoute)
 app.route('/locations', locationsRoute)
 app.route('/educational-institutions', educationalInstitutionsRoute)
 app.route('/skills', skillsRoute)
+app.route('/degrees', degreesRoute)
+app.route('/fields-of-study', fieldsOfStudyRoute)
 app.route('/activity', activityRoute)
 app.route('/saved', savedRoute)
 // בדיקה שהכל חי
