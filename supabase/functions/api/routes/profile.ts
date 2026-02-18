@@ -227,6 +227,14 @@ app.get('/', async (c) => {
       ? (showLastName && targetUser.last_name ? `${targetUser.first_name} ${targetUser.last_name}` : targetUser.first_name)
       : (isInactive ? targetUser.email : '');
 
+    // 6. שליפת פעילות חודשית דרך RPC
+    const { data: monthlyActivity, error: activityError } = await supabase
+      .rpc('get_user_monthly_activity', { target_user_id: targetUserId })
+
+    if (activityError) {
+      console.error('Failed to fetch monthly activity:', activityError.message)
+    }
+
     const publicProfile = {
       uuid: targetUser.uuid,
       name: displayName, // השם לתצוגה הראשית
@@ -251,7 +259,10 @@ app.get('/', async (c) => {
       contact_details: hasAccess(targetUser.privacy_contact_details) ? {
         email: targetUser.email,
         phone: targetUser.phone
-      } : null
+      } : null,
+
+      // מערך הפעילויות מהחודש האחרון
+      monthly_activity: monthlyActivity || []
     }
 
     if (!isSelf) {
