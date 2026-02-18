@@ -4,8 +4,8 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 const app = new Hono()
 
 // ====================================================================
-// GET /api/activity?userId=...&page=1&limit=10
-// שליפת פעילויות של משתמש עם pagination
+// GET /api/activity?page=1&limit=10
+// שליפת פעילויות של המשתמש המחובר עם pagination
 // ====================================================================
 app.get('/', async (c) => {
   try {
@@ -16,20 +16,14 @@ app.get('/', async (c) => {
       return c.json({ error: 'Unauthorized: You must be logged in to view activities' }, 401)
     }
 
-    const targetUserId = c.req.query('userId')
-    
-    if (!targetUserId) {
-      return c.json({ error: 'userId parameter is required' }, 400)
-    }
-
     const page = parseInt(c.req.query('page') || '1')
     const limit = parseInt(c.req.query('limit') || '10')
     const offset = (page - 1) * limit
 
-    // קריאה ל-RPC עם pagination
+    // קריאה ל-RPC עם pagination - משתמש מחובר
     const { data: activities, error: fetchError } = await supabase
       .rpc('get_user_monthly_activity', {
-        target_user_id: targetUserId,
+        target_user_id: user.id,
         limit_val: limit,
         offset_val: offset
       })
