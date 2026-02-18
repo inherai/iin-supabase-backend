@@ -4,7 +4,6 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 const app = new Hono()
 
 // שליפת חברות עם pagination וחיפוש (GET /)
-// supabase/functions/api/routes/companies.ts
 app.get('/', async (c) => {
   const supabase = c.get('supabase')
   
@@ -17,6 +16,7 @@ app.get('/', async (c) => {
     .from('companies')
     .select('*', { count: 'exact' })
 
+  // אם יש חיפוש - מסנן לפי שם החברה
   if (search) {
     query = query.ilike('name', `%${search}%`)
   }
@@ -28,32 +28,25 @@ app.get('/', async (c) => {
     return c.json({ error: error.message }, 400)
   }
 
-  // שליפת פרטי העובדים לכל חברה
-  const processedData = await Promise.all(data?.map(async (company) => {
-    // סינון locations
-    let filteredLocations = company.locations || []
-    if (filteredLocations.length > 0) {
-      const israelLocations = filteredLocations.filter((loc: any) => loc.country === 'IL')
-      filteredLocations = israelLocations.length > 0 ? israelLocations : [filteredLocations[0]]
-    }
+  // סינון locations: רק ישראל, אם אין - הראשון
+  const processedData = data?.map(company => {
+    const employeesIds = Array.isArray(company.employees) ? company.employees : []
 
-    // שליפת פרטי העובדים
-    let employeesData = []
-    if (company.employees && company.employees.length > 0) {
-      const { data: users } = await supabase
-        .from('profiles')
-        .select('uuid, name, image, headline, role')
-        .in('uuid', company.employees)
-      
-      employeesData = users || []
+    if (!company.locations || company.locations.length === 0) {
+      return {
+        ...company,
+        employees_ids: employeesIds
+      }
     }
-
+    
+    const israelLocations = company.locations.filter((loc: any) => loc.country === 'IL')
+    
     return {
       ...company,
-      locations: filteredLocations,
-      employeesData
+      employees_ids: employeesIds,
+      locations: israelLocations.length > 0 ? israelLocations : [company.locations[0]]
     }
-  }) || [])
+  })
 
   return c.json({ 
     companies: processedData,
@@ -65,3 +58,5 @@ app.get('/', async (c) => {
     }
   })
 })
+
+export default app
