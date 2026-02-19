@@ -255,16 +255,26 @@ app.get('/', async (c) => {
     }
 
     if (!isSelf) {
-      const { error: insertViewError } = await supabase
+      const { count: existingViewsCount, error: checkViewError } = await supabase
         .from('profile_views')
-        .insert({
-          viewer_id: user.id,
-          viewed_id: targetUser.uuid,
-          viewed_at: new Date().toISOString()
-        })
+        .select('id', { count: 'exact', head: true })
+        .eq('viewer_id', user.id)
+        .eq('viewed_id', targetUser.uuid)
 
-      if (insertViewError) {
-        console.error('Failed to insert profile view:', insertViewError.message)
+      if (checkViewError) {
+        console.error('Failed to check profile view:', checkViewError.message)
+      } else if (!existingViewsCount) {
+        const { error: insertViewError } = await supabase
+          .from('profile_views')
+          .insert({
+            viewer_id: user.id,
+            viewed_id: targetUser.uuid,
+            viewed_at: new Date().toISOString()
+          })
+
+        if (insertViewError) {
+          console.error('Failed to insert profile view:', insertViewError.message)
+        }
       }
     }
 
