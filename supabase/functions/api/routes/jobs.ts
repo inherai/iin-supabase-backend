@@ -8,6 +8,10 @@ app.get('/', async (c) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    
+    // קבלת המשתמש המחובר (בהנחה שיש auth middleware)
+    const currentUser = c.get('user');
+    const userId = currentUser?.id;
 
     if (!supabaseUrl || !supabaseKey) {
         throw new Error("Missing Secrets");
@@ -17,11 +21,8 @@ app.get('/', async (c) => {
 
     const searchTerm = c.req.query('search');
     const id = c.req.query('id');
-    
-    // --- התיקון כאן ---
     const page = parseInt(c.req.query('page') || '1');
     const limit = parseInt(c.req.query('limit') || '25');
-    // הורדנו את ההערה והגדרנו את from כאן כדי שיהיה מוכר בכל הפונקציה
     const from = (page - 1) * limit;
 
     let result;
@@ -36,13 +37,25 @@ app.get('/', async (c) => {
             .single();
         
         if (error) throw error;
-        result = data;
+        
+        // בדיקה אם המשרה הבודדת שמורה
+        let isSaved = false;
+        if (userId && data) {
+            const { data: saveEntry } = await supabaseClient
+                .from('saved_resources')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('saved_resource_id', data.job_id)
+                .eq('saved_resource_type', 'position')
+                .maybeSingle();
+            isSaved = !!saveEntry;
+        }
+
+        result = data ? { ...data, is_saved: isSaved } : null;
         totalCount = data ? 1 : 0;
 
     } else {
-        // --- תרחיש ב': רשימה עם דפדוף וחיפוש ---
-        
-        // לא צריך להגדיר את from שוב, הוא כבר מוגדר למעלה
+        // --- תרחיש ב': רשימה עם דפדוף ---
         const to = from + limit - 1;
 
         let query = supabaseClient
@@ -56,31 +69,44 @@ app.get('/', async (c) => {
         }
 
         const { data, count, error } = await query.range(from, to);
-
         if (error) throw error;
-        
-        result = data;
+
+        // --- העשרה: בדיקה אילו משרות שמורות (Batch Check) ---
+        if (userId && data && data.length > 0) {
+            const jobIds = data.map((j: any) => j.job_id);
+            const { data: userSaves } = await supabaseClient
+                .from('saved_resources')
+                .select('saved_resource_id')
+                .eq('user_id', userId)
+                .eq('saved_resource_type', 'position')
+                .in('saved_resource_id', jobIds);
+
+            const savedSet = new Set(userSaves?.map((s: any) => s.saved_resource_id));
+            
+            result = data.map((job: any) => ({
+                ...job,
+                is_saved: savedSet.has(job.job_id)
+            }));
+        } else {
+            result = data?.map((job: any) => ({ ...job, is_saved: false }));
+        }
+
         totalCount = count || 0;
     }
 
-    // 3. החזרת התשובה
     return c.json({
         data: result,
         meta: {
             page: page,
             limit: limit,
             total: totalCount,
-            // עכשיו from מוכר כאן ולא תהיה שגיאה
             has_more: id ? false : (result.length === limit && (from + result.length) < totalCount)
         },
         success: true
     });
 
   } catch (error: any) {
-    return c.json({ 
-        error: error.message, 
-        success: false 
-    }, 500);
+    return c.json({ error: error.message, success: false }, 500);
   }
 })
 
