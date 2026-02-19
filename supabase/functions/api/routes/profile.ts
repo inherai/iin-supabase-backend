@@ -29,6 +29,33 @@ app.get('/views/count', async (c) => {
 
 
 
+// --- פונקציית עזר: העשרת מערך experience עם נתוני חברות ---
+const enrichExperience = async (experience: any[], supabase: any) => {
+  if (!experience || !Array.isArray(experience)) return experience;
+  
+  const companyIds = experience.map(exp => exp.company).filter(id => typeof id === 'number');
+  
+  if (companyIds.length === 0) return experience;
+  
+  console.log('Fetching companies for IDs:', companyIds);
+  
+  const { data: companies, error } = await supabase
+    .from('companies')
+    .select('id, logo, name')
+    .in('id', companyIds);
+  
+  console.log('Companies fetched:', companies, 'Error:', error);
+  
+  const companyMap = new Map(companies?.map((c: any) => [c.id, c]) || []);
+  
+  return experience.map(exp => {
+    if (typeof exp.company === 'number' && companyMap.has(exp.company)) {
+      return { ...exp, company: companyMap.get(exp.company) };
+    }
+    return exp;
+  });
+}
+
 // ====================================================================
 // POST /api/profile
 // מקבל רשימת אימיילים (למשל עבור ה-Feed) ומחזיר רשימת משתמשים מסוננת
@@ -158,7 +185,6 @@ app.get('/', async (c) => {
           uuid: u.uuid,
           name: displayName,
           headline: u.headline,
-          company: u.company,
           location: u.location,
           about: u.about,
           interests: u.interests,
@@ -219,17 +245,19 @@ app.get('/', async (c) => {
       ? (showLastName && targetUser.last_name ? `${targetUser.first_name} ${targetUser.last_name}` : targetUser.first_name)
       : (isInactive ? targetUser.email : '');
 
+    // העשרת experience עם נתוני חברות
+    const enrichedExperience = await enrichExperience(targetUser.experience, supabase);
+
     const publicProfile = {
       uuid: targetUser.uuid,
       name: displayName, // השם לתצוגה הראשית
       headline: targetUser.headline,
-      company: targetUser.company,
       location: targetUser.location,
       about: targetUser.about,
       interests: targetUser.interests,
       languages: targetUser.languages,
       work_preferences: targetUser.work_preferences,
-      experience: targetUser.experience,
+      experience: enrichedExperience,
       education: targetUser.education,
       certifications: targetUser.certifications,
       skills: targetUser.skills,
