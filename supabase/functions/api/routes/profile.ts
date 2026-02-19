@@ -27,11 +27,33 @@ app.get('/views/count', async (c) => {
   }
 })
 
-// --- פונקציית עזר: בניית ה-URL לתמונה דרך הפרוקסי ---
-const getAvatarUrl = (userId: string) => {
-  const supabaseUrl = Deno.env.get('SUPABASE_URL');
-  // מחזיר לינק: https://.../functions/v1/avatar-proxy?id=...
-  return `${supabaseUrl}/functions/v1/avatar-proxy?id=${userId}`;
+
+
+// --- פונקציית עזר: העשרת מערך experience עם נתוני חברות ---
+const enrichExperience = async (experience: any[], supabase: any) => {
+  if (!experience || !Array.isArray(experience)) return experience;
+  
+  const companyIds = experience.map(exp => exp.company).filter(id => typeof id === 'number');
+  
+  if (companyIds.length === 0) return experience;
+  
+  console.log('Fetching companies for IDs:', companyIds);
+  
+  const { data: companies, error } = await supabase
+    .from('companies')
+    .select('id, logo, name')
+    .in('id', companyIds);
+  
+  console.log('Companies fetched:', companies, 'Error:', error);
+  
+  const companyMap = new Map(companies?.map((c: any) => [c.id, c]) || []);
+  
+  return experience.map(exp => {
+    if (typeof exp.company === 'number' && companyMap.has(exp.company)) {
+      return { ...exp, company: companyMap.get(exp.company) };
+    }
+    return exp;
+  });
 }
 
 // ====================================================================
@@ -93,8 +115,7 @@ app.post('/', async (c) => {
         uuid: u.uuid,
         email: u.email,
         name: displayName, // השם המחושב
-        //החזרת הלינק לפרוקסי
-        image: showPicture ? getAvatarUrl(u.uuid) : null, 
+        image: (showPicture && !!u.image) ? true : null,
         role: u.role,
         headline: u.headline
       }
@@ -160,13 +181,10 @@ app.get('/', async (c) => {
           ? (showLastName && u.last_name ? `${u.first_name} ${u.last_name}` : u.first_name)
           : (isInactive ? u.email : '')
 
-        const avatarUrl = showPicture ? getAvatarUrl(u.uuid) : null
-
         return {
           uuid: u.uuid,
           name: displayName,
           headline: u.headline,
-          company: u.company,
           location: u.location,
           about: u.about,
           interests: u.interests,
@@ -177,7 +195,7 @@ app.get('/', async (c) => {
           certifications: u.certifications,
           skills: u.skills,
           last_name: showLastName ? u.last_name : null,
-          image: avatarUrl,
+          image: (showPicture && !!u.image) ? true : null,
           contact_details: hasAccess(u.privacy_contact_details) ? {
             email: u.email,
             phone: u.phone
@@ -227,17 +245,19 @@ app.get('/', async (c) => {
       ? (showLastName && targetUser.last_name ? `${targetUser.first_name} ${targetUser.last_name}` : targetUser.first_name)
       : (isInactive ? targetUser.email : '');
 
+    // העשרת experience עם נתוני חברות
+    const enrichedExperience = await enrichExperience(targetUser.experience, supabase);
+
     const publicProfile = {
       uuid: targetUser.uuid,
       name: displayName, // השם לתצוגה הראשית
       headline: targetUser.headline,
-      company: targetUser.company,
       location: targetUser.location,
       about: targetUser.about,
       interests: targetUser.interests,
       languages: targetUser.languages,
       work_preferences: targetUser.work_preferences,
-      experience: targetUser.experience,
+      experience: enrichedExperience,
       education: targetUser.education,
       certifications: targetUser.certifications,
       skills: targetUser.skills,
@@ -245,8 +265,7 @@ app.get('/', async (c) => {
       // שדות מותנים
       last_name: showLastName ? targetUser.last_name : null,
       
-      //  החזרת הלינק לפרוקסי
-      image: hasAccess(targetUser.privacy_picture) ? getAvatarUrl(targetUser.uuid) : null,
+      image: (hasAccess(targetUser.privacy_picture) && !!targetUser.image) ? true : null,
       
       contact_details: hasAccess(targetUser.privacy_contact_details) ? {
         email: targetUser.email,

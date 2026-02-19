@@ -82,4 +82,52 @@ app.get('/', async (c) => {
   })
 })
 
+// GET /api/companies/:id - חברה בודדת לפי ID
+app.get('/:id', async (c) => {
+  const supabase = c.get('supabase')
+  const companyId = c.req.param('id')
+
+  const { data: company, error } = await supabase
+    .from('companies')
+    .select('*')
+    .eq('id', companyId)
+    .single()
+
+  if (error) {
+    return c.json({ error: error.message }, 404)
+  }
+
+  if (!company) {
+    return c.json({ error: 'Company not found' }, 404)
+  }
+
+  // שליפת פרטי העובדים
+  const employeeIds = Array.isArray(company.employees) ? company.employees : []
+  let employeesDetails = []
+
+  if (employeeIds.length > 0) {
+    const { data: users, error: usersError } = await supabase
+      .from('users')
+      .select('uuid, name, headline, image')
+      .in('uuid', employeeIds)
+
+    if (!usersError && users) {
+      employeesDetails = users
+    }
+  }
+
+  // סינון locations לישראל
+  let locations = company.locations || []
+  if (Array.isArray(locations) && locations.length > 0) {
+    const israelLocations = locations.filter((loc: any) => loc.country === 'IL')
+    locations = israelLocations.length > 0 ? israelLocations : [locations[0]]
+  }
+
+  return c.json({
+    ...company,
+    employees: employeesDetails,
+    locations
+  })
+})
+
 export default app
