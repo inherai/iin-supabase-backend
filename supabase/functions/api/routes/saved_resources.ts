@@ -48,6 +48,47 @@ app.get('/', async (c) => {
 })
 
 // ====================================================================
+// GET /api/saved-resources/count?type=post
+// החזרת כמות השמירות של המשתמש
+// ====================================================================
+app.get('/count', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
+
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
+    const type = c.req.query('type') // 'post' או 'position' (אופציונלי)
+
+    let query = supabase
+      .from('saved_resources')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+
+    // אם יש פילטר לפי type
+    if (type) {
+      query = query.eq('saved_resource_type', type)
+    }
+
+    const { count, error: countError } = await query
+
+    if (countError) {
+      return c.json({ error: countError.message }, 500)
+    }
+
+    return c.json({
+      count: count || 0,
+      type: type || 'all'
+    })
+
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+// ====================================================================
 // POST /api/saved
 // שמירת פוסט או משרה
 // Body: { saved_resource_type: 'post', saved_resource_id: '123' }
