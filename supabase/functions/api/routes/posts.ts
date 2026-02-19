@@ -324,10 +324,10 @@ app.post('/comments', async (c) => {
 
     if (commentError) throw commentError
 
-    // 2. שליפת ה-uuid של המשתמש מטבלת users לפי המייל
+    // 2. שליפת ה-uuid וה-name מטבלת users לפי המייל
     const { data: userData, error: userError } = await supabase
       .from('users')
-      .select('uuid')
+      .select('uuid, name') // הוספנו כאן את name
       .eq('email', user.email)
       .single()
 
@@ -337,13 +337,14 @@ app.post('/comments', async (c) => {
       updatePostVector(postId)
     }
 
-    // 3. בניית האובייקט הסופי עם המבנה שביקשת
+    // 3. החזרת האובייקט המבוקש עם id ושם
     return c.json({ 
       success: true, 
       data: {
         ...commentData,
         author: {
-          id: userData.uuid
+          id: userData.uuid,
+          name: userData.name // הוספנו את השם כאן
         }
       } 
     })

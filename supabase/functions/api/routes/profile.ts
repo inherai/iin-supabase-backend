@@ -255,18 +255,22 @@ app.get('/', async (c) => {
     }
 
     if (!isSelf) {
-      const { error: insertViewError } = await supabase
-        .from('profile_views')
-        .insert({
-          viewer_id: user.id,
-          viewed_id: targetUser.uuid,
-          viewed_at: new Date().toISOString()
-        })
+  // ביצוע Upsert - אם קיים שילוב של viewer_id ו-viewed_id, הוא רק יעדכן את הזמן
+  const { error: upsertError } = await supabase
+    .from('profile_views')
+    .upsert(
+      { 
+        viewer_id: user.id, 
+        viewed_id: targetUser.uuid,
+        viewed_at: new Date().toISOString() 
+      }, 
+      { onConflict: 'viewer_id,viewed_id' } // דורש אינדקס ייחודי ב-DB
+    );
 
-      if (insertViewError) {
-        console.error('Failed to insert profile view:', insertViewError.message)
-      }
-    }
+  if (upsertError) {
+    console.error('Failed to upsert profile view:', upsertError.message);
+  }
+}
 
     return c.json(publicProfile)
 

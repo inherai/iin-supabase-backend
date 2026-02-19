@@ -4,8 +4,8 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 const app = new Hono()
 
 // ====================================================================
-// GET /api/saved?type=post&page=1&limit=10
-// שליפת כל השמירות של המשתמש עם התוכן המלא
+// GET /api/saved-resources?type=post&page=1&limit=10
+// שליפת כל השמירות של המשתמש עם התוכן המלא (באמצעות RPC)
 // ====================================================================
 app.get('/', async (c) => {
   try {
@@ -21,65 +21,66 @@ app.get('/', async (c) => {
     const limit = parseInt(c.req.query('limit') || '10')
     const offset = (page - 1) * limit
 
+    // קריאה ל-RPC function שמחזירה הכל בשאילתה אחת
+    const { data: savedItems, error: fetchError } = await supabase
+      .rpc('get_saved_resources_with_content', {
+        p_user_id: user.id,
+        p_type: type || null,
+        p_limit: limit,
+        p_offset: offset
+      })
+
+    if (fetchError) {
+      return c.json({ error: fetchError.message }, 500)
+    }
+
+    return c.json({
+      saved: savedItems || [],
+      pagination: {
+        page,
+        limit
+      }
+    })
+
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+// ====================================================================
+// GET /api/saved-resources/count?type=post
+// החזרת כמות השמירות של המשתמש
+// ====================================================================
+app.get('/count', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
+
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
+    const type = c.req.query('type') // 'post' או 'position' (אופציונלי)
+
     let query = supabase
       .from('saved_resources')
-      .select('*')
+      .select('*', { count: 'exact', head: true })
       .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1)
 
     // אם יש פילטר לפי type
     if (type) {
       query = query.eq('saved_resource_type', type)
     }
 
-    const { data: savedItems, error: fetchError } = await query
+    const { count, error: countError } = await query
 
-    if (fetchError) {
-      return c.json({ error: fetchError.message }, 500)
+    if (countError) {
+      return c.json({ error: countError.message }, 500)
     }
 
-    // עכשיו נשלוף את התוכן המלא
-    const enrichedItems = await Promise.all(
-      (savedItems || []).map(async (item) => {
-        let resourceData = null
-
-        if (item.saved_resource_type === 'post') {
-          // שליפת הפוסט
-          const { data: post } = await supabase
-            .from('posts')
-            .select('*')
-            .eq('id', item.saved_resource_id)
-            .single()
-          
-          resourceData = post
-        } else if (item.saved_resource_type === 'position') {
-          // שליפת המשרה
-          const { data: position } = await supabase
-            .from('positions')
-            .select('*')
-            .eq('id', item.saved_resource_id)
-            .single()
-          
-          resourceData = position
-        }
-
-        return {
-          id: item.id,
-          saved_resource_type: item.saved_resource_type,
-          saved_resource_id: item.saved_resource_id,
-          created_at: item.created_at,
-          resource: resourceData // התוכן המלא
-        }
-      })
-    )
-
     return c.json({
-      saved: enrichedItems,
-      pagination: {
-        page,
-        limit
-      }
+      count: count || 0,
+      type: type || 'all'
     })
 
   } catch (err: any) {
@@ -168,88 +169,6 @@ app.delete('/:id', async (c) => {
     }
 
     return c.json({ success: true })
-
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
-  }
-})
-
-// ====================================================================
-// DELETE /api/saved/resource?type=post&id=123
-// מחיקת שמירה לפי type ו-id של המשאב
-// ====================================================================
-app.delete('/resource', async (c) => {
-  try {
-    const user = c.get('user')
-    const supabase = c.get('supabase')
-
-    if (!user) {
-      return c.json({ error: 'Unauthorized' }, 401)
-    }
-
-    const saved_resource_type = c.req.query('type')
-    const saved_resource_id = c.req.query('id')
-
-    if (!saved_resource_type || !saved_resource_id) {
-      return c.json({ 
-        error: 'type and id query parameters are required' 
-      }, 400)
-    }
-
-    const { error: deleteError } = await supabase
-      .from('saved_resources')
-      .delete()
-      .eq('user_id', user.id)
-      .eq('saved_resource_type', saved_resource_type)
-      .eq('saved_resource_id', saved_resource_id)
-
-    if (deleteError) {
-      return c.json({ error: deleteError.message }, 500)
-    }
-
-    return c.json({ success: true })
-
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
-  }
-})
-
-// ====================================================================
-// GET /api/saved/check?type=post&id=123
-// בדיקה אם משאב מסוים נשמר
-// ====================================================================
-app.get('/check', async (c) => {
-  try {
-    const user = c.get('user')
-    const supabase = c.get('supabase')
-
-    if (!user) {
-      return c.json({ error: 'Unauthorized' }, 401)
-    }
-
-    const type = c.req.query('type')
-    const resourceId = c.req.query('id')
-
-    if (!type || !resourceId) {
-      return c.json({ error: 'type and id are required' }, 400)
-    }
-
-    const { data, error: fetchError } = await supabase
-      .from('saved_resources')
-      .select('id')
-      .eq('user_id', user.id)
-      .eq('saved_resource_type', type)
-      .eq('saved_resource_id', resourceId)
-      .maybeSingle()
-
-    if (fetchError) {
-      return c.json({ error: fetchError.message }, 500)
-    }
-
-    return c.json({ 
-      isSaved: !!data,
-      savedId: data?.id || null
-    })
 
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
