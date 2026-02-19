@@ -193,7 +193,6 @@ app.get('/', async (c) => {
           uuid: u.uuid,
           name: displayName,
           headline: u.headline,
-          company: u.company,
           location: u.location,
           about: u.about,
           interests: u.interests,
@@ -261,7 +260,6 @@ app.get('/', async (c) => {
       uuid: targetUser.uuid,
       name: displayName, // השם לתצוגה הראשית
       headline: targetUser.headline,
-      company: targetUser.company,
       location: targetUser.location,
       about: targetUser.about,
       interests: targetUser.interests,

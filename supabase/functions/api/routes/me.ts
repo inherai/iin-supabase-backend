@@ -63,12 +63,6 @@ app.get('/', async (c) => {
     }
   }
 
-  // שליפת החברה הנוכחית
-  const currentExp = userData.experience?.find((exp: any) => exp.current === true)
-  if (currentExp?.company && typeof currentExp.company === 'object') {
-    userData.company = currentExp.company
-  }
-
   const dataWithProxy = transformToProxyUrl(userData);
   return c.json(dataWithProxy)
 })
@@ -101,7 +95,6 @@ app.put('/', async (c) => {
         last_name: profileData.last_name,
         phone: profileData.phone,
         headline: profileData.headline,
-        company: profileData.company,
         location: profileData.location,
         about: profileData.about,
         interests: profileData.interests,
