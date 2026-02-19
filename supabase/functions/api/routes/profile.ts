@@ -38,21 +38,27 @@ const getAvatarUrl = (userId: string) => {
 const enrichExperience = async (experience: any[], supabase: any) => {
   if (!experience || !Array.isArray(experience)) return experience;
   
-  const companyIds = experience.map(exp => exp.company);
+  const companyIds = experience.map(exp => exp.company).filter(id => typeof id === 'number');
   
   if (companyIds.length === 0) return experience;
   
-  const { data: companies } = await supabase
+  console.log('Fetching companies for IDs:', companyIds);
+  
+  const { data: companies, error } = await supabase
     .from('companies')
     .select('id, logo, name')
     .in('id', companyIds);
   
+  console.log('Companies fetched:', companies, 'Error:', error);
+  
   const companyMap = new Map(companies?.map((c: any) => [c.id, c]) || []);
   
-  return experience.map(exp => ({
-    ...exp,
-    company: companyMap.get(exp.company) || exp.company
-  }));
+  return experience.map(exp => {
+    if (typeof exp.company === 'number' && companyMap.has(exp.company)) {
+      return { ...exp, company: companyMap.get(exp.company) };
+    }
+    return exp;
+  });
 }
 
 // ====================================================================
