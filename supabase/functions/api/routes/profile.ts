@@ -34,6 +34,27 @@ const getAvatarUrl = (userId: string) => {
   return `${supabaseUrl}/functions/v1/avatar-proxy?id=${userId}`;
 }
 
+// --- פונקציית עזר: העשרת מערך experience עם נתוני חברות ---
+const enrichExperience = async (experience: any[], supabase: any) => {
+  if (!experience || !Array.isArray(experience)) return experience;
+  
+  const companyIds = experience.map(exp => exp.company);
+  
+  if (companyIds.length === 0) return experience;
+  
+  const { data: companies } = await supabase
+    .from('companies')
+    .select('id, logo, name')
+    .in('id', companyIds);
+  
+  const companyMap = new Map(companies?.map((c: any) => [c.id, c]) || []);
+  
+  return experience.map(exp => ({
+    ...exp,
+    company: companyMap.get(exp.company) || exp.company
+  }));
+}
+
 // ====================================================================
 // POST /api/profile
 // מקבל רשימת אימיילים (למשל עבור ה-Feed) ומחזיר רשימת משתמשים מסוננת
@@ -227,6 +248,9 @@ app.get('/', async (c) => {
       ? (showLastName && targetUser.last_name ? `${targetUser.first_name} ${targetUser.last_name}` : targetUser.first_name)
       : (isInactive ? targetUser.email : '');
 
+    // העשרת experience עם נתוני חברות
+    const enrichedExperience = await enrichExperience(targetUser.experience, supabase);
+
     const publicProfile = {
       uuid: targetUser.uuid,
       name: displayName, // השם לתצוגה הראשית
@@ -237,7 +261,7 @@ app.get('/', async (c) => {
       interests: targetUser.interests,
       languages: targetUser.languages,
       work_preferences: targetUser.work_preferences,
-      experience: targetUser.experience,
+      experience: enrichedExperience,
       education: targetUser.education,
       certifications: targetUser.certifications,
       skills: targetUser.skills,
