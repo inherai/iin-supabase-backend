@@ -27,12 +27,7 @@ app.get('/views/count', async (c) => {
   }
 })
 
-// --- פונקציית עזר: בניית ה-URL לתמונה דרך הפרוקסי ---
-const getAvatarUrl = (userId: string) => {
-  const supabaseUrl = Deno.env.get('SUPABASE_URL');
-  // מחזיר לינק: https://.../functions/v1/avatar-proxy?id=...
-  return `${supabaseUrl}/functions/v1/avatar-proxy?id=${userId}`;
-}
+
 
 // ====================================================================
 // POST /api/profile
@@ -93,8 +88,7 @@ app.post('/', async (c) => {
         uuid: u.uuid,
         email: u.email,
         name: displayName, // השם המחושב
-        //החזרת הלינק לפרוקסי
-        image: showPicture ? getAvatarUrl(u.uuid) : null, 
+        image: (showPicture && !!u.image) ? true : null,
         role: u.role,
         headline: u.headline
       }
@@ -160,8 +154,6 @@ app.get('/', async (c) => {
           ? (showLastName && u.last_name ? `${u.first_name} ${u.last_name}` : u.first_name)
           : (isInactive ? u.email : '')
 
-        const avatarUrl = showPicture ? getAvatarUrl(u.uuid) : null
-
         return {
           uuid: u.uuid,
           name: displayName,
@@ -177,7 +169,7 @@ app.get('/', async (c) => {
           certifications: u.certifications,
           skills: u.skills,
           last_name: showLastName ? u.last_name : null,
-          image: avatarUrl,
+          image: (showPicture && !!u.image) ? true : null,
           contact_details: hasAccess(u.privacy_contact_details) ? {
             email: u.email,
             phone: u.phone
@@ -245,8 +237,7 @@ app.get('/', async (c) => {
       // שדות מותנים
       last_name: showLastName ? targetUser.last_name : null,
       
-      //  החזרת הלינק לפרוקסי
-      image: hasAccess(targetUser.privacy_picture) ? getAvatarUrl(targetUser.uuid) : null,
+      image: (hasAccess(targetUser.privacy_picture) && !!targetUser.image) ? true : null,
       
       contact_details: hasAccess(targetUser.privacy_contact_details) ? {
         email: targetUser.email,

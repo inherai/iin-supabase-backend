@@ -3,21 +3,6 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 
 const app = new Hono()
 
-// פונקציית עזר לנירמול ה-URL של התמונה
-// היא הופכת נתיב גולמי ללינק לפרוקסי שלנו
-const transformToProxyUrl = (userRecord: any) => {
-  if (!userRecord || !userRecord.image) return userRecord;
-
-  // שליפת כתובת הפרויקט מתוך משתני הסביבה
-  const projectUrl = Deno.env.get('SUPABASE_URL'); 
-  
-  // בניית הלינק לפרוקסי
-  // הפרונטנד יצטרך רק להוסיף את הטוקן בסוף: &token=...
-  userRecord.image = `${projectUrl}/functions/v1/avatar-proxy?id=${userRecord.uuid}`;
-  
-  return userRecord;
-}
-
 // --------------------------------------------------------------------
 // GET /api/me
 // שליפת פרופיל המשתמש המחובר
@@ -25,7 +10,6 @@ const transformToProxyUrl = (userRecord: any) => {
 app.get('/', async (c) => {
   const user = c.get('user')
 
-  // **הגנה קריטית:** אם אין משתמש, עוצרים מיד
   if (!user) {
     return c.json({ error: 'Unauthorized: You must be logged in to view profile' }, 401)
   }
@@ -42,7 +26,7 @@ app.get('/', async (c) => {
     return c.json({ error: error.message }, 400)
   }
 
-  // שליפת נתוני חברות עבור כל ה-experiences
+  // שליפת נתוני חברות עבור ה-experiences
   if (userData.experience && Array.isArray(userData.experience)) {
     const companyIds = userData.experience
       .map((exp: any) => exp.company)
@@ -57,20 +41,23 @@ app.get('/', async (c) => {
       if (companies) {
         userData.experience = userData.experience.map((exp: any) => ({
           ...exp,
-          company: companies.find((c: any) => c.id === exp.company) || exp.company
+          company: companies.find((comp: any) => comp.id === exp.company) || exp.company
         }))
       }
     }
   }
 
-  // שליפת החברה הנוכחית
+  // שליפת החברה הנוכחית לתצוגה מהירה
   const currentExp = userData.experience?.find((exp: any) => exp.current === true)
   if (currentExp?.company && typeof currentExp.company === 'object') {
     userData.company = currentExp.company
   }
 
-  const dataWithProxy = transformToProxyUrl(userData);
-  return c.json(dataWithProxy)
+  // --- לוגיקת IMAGE החדשה (כמו ב-PROFILE) ---
+  // מחזיר true אם יש ערך ב-image, אחרת null
+  userData.image = !!userData.image ? true : null;
+
+  return c.json(userData)
 })
 
 // --------------------------------------------------------------------
@@ -80,28 +67,22 @@ app.get('/', async (c) => {
 app.put('/', async (c) => {
   const user = c.get('user')
 
-  // **הגנה קריטית:** מוודאים שיש משתמש לפני שמנסים לעדכן
   if (!user) {
-    return c.json({ error: 'Unauthorized: You must be logged in to update profile' }, 401)
+    return c.json({ error: 'Unauthorized' }, 401)
   }
 
   const supabase = c.get('supabase')
-  
-  // קריאת המידע מהבקשה
   const payload = await c.req.json()
-  
-  // תמיכה גם ב-body ישיר וגם בעטיפת profile
   const profileData = payload.profile || payload 
 
   const { data, error } = await supabase
     .from('users')
     .update({
-        name:`${profileData.first_name} ${profileData.last_name}`,
+        name: `${profileData.first_name} ${profileData.last_name}`,
         first_name: profileData.first_name,
         last_name: profileData.last_name,
         phone: profileData.phone,
         headline: profileData.headline,
-        company: profileData.company,
         location: profileData.location,
         about: profileData.about,
         interests: profileData.interests,
@@ -111,7 +92,7 @@ app.put('/', async (c) => {
         education: profileData.education,
         certifications: profileData.certifications,
         skills: profileData.skills,
-        image: profileData.image 
+        image: profileData.image // כאן אנחנו עדיין שומרים את הערך האמיתי (הנתיב)
     })
     .eq('uuid', user.id)
     .select()
@@ -121,10 +102,13 @@ app.put('/', async (c) => {
     return c.json({ error: error.message }, 400)
   }
 
-  // גם בעדכון, מחזירים לקליינט את הלינק המעודכן לפרוקסי
-  const dataWithProxy = transformToProxyUrl(data);
+  // גם כאן - מחזירים לקליינט תשובה עם ה-Mapping החדש
+  const responseData = {
+    ...data,
+    image: !!data.image ? true : null
+  };
 
-  return c.json(dataWithProxy)
+  return c.json(responseData)
 })
 
 export default app
