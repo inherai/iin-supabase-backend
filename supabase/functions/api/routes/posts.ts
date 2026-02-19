@@ -98,6 +98,13 @@ function toAuthor(profileData: any, fallbackEmail: string) {
   };
 }
 
+const RECRUITER_ROLE = 'recruiters';
+
+function isRecruiterViewer(user: any): boolean {
+  const role = String(user?.app_metadata?.role ?? '').toLowerCase().trim();
+  return role === RECRUITER_ROLE;
+}
+
 // ====================================================================
 // 2. נתיבי API
 // ====================================================================
@@ -107,6 +114,7 @@ app.get('/', async (c) => {
     const supabase = c.get('supabase')
     const currentUser = c.get('user')
     const current_user_uuid = currentUser?.id
+    const viewerIsRecruiter = isRecruiterViewer(currentUser)
 
     const last_effective_date = c.req.query('last_effective_date')
     const last_id = c.req.query('last_id')
@@ -122,14 +130,23 @@ app.get('/', async (c) => {
     if (postsError) throw postsError
     if (!posts || posts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
 
-    const postIds = posts.map((p: any) => p.id)
+    const visiblePosts = viewerIsRecruiter
+      ? posts.filter((p: any) => p.community_members_only !== true)
+      : posts
+
+    if (visiblePosts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
+
+    const postIds = visiblePosts.map((p: any) => p.id)
 
     const { data: allPostLikes } = await supabase
       .from('likes')
       .select('target_id, user_id')
       .in('target_id', postIds)
 
-    const emailsToFetch = new Set(posts.map((p: any) => p.sender))
+    const emailsToFetch = new Set<string>()
+    visiblePosts.forEach((p: any) => {
+      if (p.sender) emailsToFetch.add(p.sender)
+    })
 
     const { data: comments } = await supabase
       .from('comments')
@@ -138,13 +155,17 @@ app.get('/', async (c) => {
       .lte('created_at', session_start)
       .order('created_at', { ascending: true })
 
-    const commentIds = comments?.map((c: any) => c.id.toString()) || []
+    const visibleComments = viewerIsRecruiter
+      ? (comments || []).filter((c: any) => c.community_members_only !== true)
+      : (comments || [])
+
+    const commentIds = visibleComments.map((c: any) => c.id.toString())
     const { data: allCommentLikes } = await supabase
       .from('likes')
       .select('target_id, user_id')
       .in('target_id', commentIds)
 
-    comments?.forEach((c: any) => emailsToFetch.add(c.sender))
+    visibleComments.forEach((c: any) => emailsToFetch.add(c.sender))
 
     const uniqueEmails = Array.from(emailsToFetch)
     const PROJECT_URL = Deno.env.get('SUPABASE_URL')
@@ -167,7 +188,7 @@ app.get('/', async (c) => {
     const enrichedUsers = await profileRes.json()
     const usersMap = enrichedUsers.reduce((acc: any, u: any) => ({ ...acc, [u.email.toLowerCase()]: u }), {})
 
-    const commentsByPostId = comments?.reduce((acc: any, comment: any) => {
+    const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
       const profileData = usersMap?.[comment.sender?.toLowerCase()];
       const author = profileData
         ? { ...profileData,id: profileData.uuid, name: profileData.name || '' }
@@ -187,7 +208,7 @@ app.get('/', async (c) => {
       return acc
     }, {})
 
-    const enrichedPosts = posts.map((post: any) => {
+    const enrichedPosts = visiblePosts.map((post: any) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
       const profileData = usersMap?.[post.sender?.toLowerCase()];
       const postAuthor = profileData
@@ -203,7 +224,7 @@ app.get('/', async (c) => {
       }
     })
 
-    const lastPost = posts[posts.length - 1]
+    const lastPost = visiblePosts[visiblePosts.length - 1]
     const nextCursor = lastPost ? {
       last_effective_date: lastPost.effective_sort_date,
       last_id: lastPost.id,
@@ -250,6 +271,7 @@ app.post('/', async (c) => {
               sender: senderEmail,
               message: msg.message || "",
               attachments: msg.attachments,
+              community_members_only: typeof msg.community_members_only === 'boolean' ? msg.community_members_only : false,
               created_at: msg.sentAt ? new Date(msg.sentAt).toISOString() : new Date().toISOString()
             });
             await updatePostVector(postId);
@@ -261,7 +283,8 @@ app.post('/', async (c) => {
               message: msg.message || "",
               attachments: msg.attachments,
               sent_at: msg.sentAt ? new Date(msg.sentAt).toISOString() : new Date().toISOString(),
-              post_type: msg.post_type
+              post_type: msg.post_type,
+              community_members_only: typeof msg.community_members_only === 'boolean' ? msg.community_members_only : false
             });
             await updatePostVector(postId);
           }
@@ -276,6 +299,14 @@ app.post('/', async (c) => {
       if (!user) return c.json({ error: "Unauthorized" }, 401);
 
       const { subject, message, attachments } = body;
+      const communityMembersOnlyInput = body.community_members_only ?? body.communityMembersOnly;
+
+      if (communityMembersOnlyInput !== undefined && typeof communityMembersOnlyInput !== 'boolean') {
+        return c.json({ error: "community_members_only must be boolean" }, 400);
+      }
+
+      const community_members_only = communityMembersOnlyInput === true;
+
       if (!message) return c.json({ error: "Message is required" }, 400);
       const postId = crypto.randomUUID();
 
@@ -285,7 +316,8 @@ app.post('/', async (c) => {
         subject: subject || "",
         message: message,
         attachments: attachments || [],
-        sent_at: new Date().toISOString()
+        sent_at: new Date().toISOString(),
+        community_members_only
       }).select().single();
 
       if (error) throw error;
@@ -303,11 +335,18 @@ app.post('/comments', async (c) => {
     const supabase = c.get('supabase')
     const user = c.get('user')
     const postId = c.req.query('id')
-    const { message, attachments } = await c.req.json()
+    const { message, attachments, community_members_only, communityMembersOnly } = await c.req.json()
+    const communityMembersOnlyInput =
+      community_members_only !== undefined ? community_members_only : communityMembersOnly
 
     if (!user) return c.json({ error: "Unauthorized" }, 401)
     if (!postId) return c.json({ error: "Post ID query param is required" }, 400)
     if (!message) return c.json({ error: "Message is required" }, 400)
+    if (communityMembersOnlyInput !== undefined && typeof communityMembersOnlyInput !== 'boolean') {
+      return c.json({ error: "community_members_only must be boolean" }, 400)
+    }
+
+    const resolvedCommunityMembersOnly = communityMembersOnlyInput === true
 
     // 1. הכנסת התגובה לטבלת comments
     const { data: commentData, error: commentError } = await supabase
@@ -317,6 +356,7 @@ app.post('/comments', async (c) => {
         sender: user.email,
         message: message,
         attachments: attachments || [],
+        community_members_only: resolvedCommunityMembersOnly,
         created_at: new Date().toISOString()
       })
       .select()

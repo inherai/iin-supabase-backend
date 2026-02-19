@@ -12,6 +12,12 @@ const FETCH_K_SQL = 60;
 const DECAY_DAYS = 180;        
 const MAX_BONUS = 0.15; 
 const STRICT_THRESHOLD = 0.3;        
+const RECRUITER_ROLE = 'recruiters';
+
+function isRecruiterViewer(user: any): boolean {
+  const role = String(user?.app_metadata?.role ?? '').toLowerCase().trim();
+  return role === RECRUITER_ROLE;
+}
 
 const SEARCH_INTENT_PROMPT = `
 Your task is to generate a concise and explicit search query for semantic retrieval.
@@ -61,6 +67,8 @@ app.post('/', async (c) => {
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
+    const currentUser = c.get('user');
+    const viewerIsRecruiter = isRecruiterViewer(currentUser);
 
     // קריאת ה-Body דרך Hono
     const { query: rawUserQuery } = await c.req.json();
@@ -132,7 +140,9 @@ app.post('/', async (c) => {
 
       // מיון ראשוני לפי ציון משוקלל (תאריך + דמיון)
       scoredItems.sort((a: any, b: any) => b.final_score - a.final_score);
-      finalItems = scoredItems; 
+      finalItems = viewerIsRecruiter
+        ? scoredItems.filter((p: any) => p.community_members_only !== true)
+        : scoredItems;
     }
 
     // =================================================================
@@ -145,7 +155,7 @@ app.post('/', async (c) => {
         const postIds = finalItems.map((p) => p.id);
         const emailsToFetch = new Set<string>();
         
-        finalItems.forEach(p => {
+        finalItems.forEach((p: any) => {
              if (p.sender) emailsToFetch.add(p.sender);
         });
 
@@ -158,8 +168,12 @@ app.post('/', async (c) => {
 
         if (commentsError) throw commentsError;
 
+        const visibleComments = viewerIsRecruiter
+          ? (comments || []).filter((c: any) => c.community_members_only !== true)
+          : (comments || []);
+
         // מוסיפים את המיילים של המגיבים לרשימת המיילים לשליפה
-        comments?.forEach((c: any) => {
+        visibleComments.forEach((c: any) => {
             if (c.sender) emailsToFetch.add(c.sender);
         });
 
@@ -182,7 +196,7 @@ app.post('/', async (c) => {
         };
 
         // 5. מחברים משתמשים לתגובות ומסדרים לפי פוסט
-        const commentsByPostId = comments?.reduce((acc: any, comment: any) => {
+        const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
             const commentWithAuthor = { 
                 ...comment, 
                 author: getAuthor(comment.sender) 
@@ -193,9 +207,9 @@ app.post('/', async (c) => {
         }, {} as Record<string, any[]>);
 
         // 6. יוצרים את האובייקטים הסופיים (פוסט + מחבר + תגובות)
-        enrichedItems = finalItems.map((post) => {
+        enrichedItems = finalItems.map((post: any) => {
             const { comments_text, similarity, final_score, days_old, ...restOfPost } = post;
-            
+
             return {
                 ...restOfPost,
                 author: getAuthor(post.sender), 
