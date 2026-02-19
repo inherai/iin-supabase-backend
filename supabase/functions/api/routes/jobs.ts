@@ -1,8 +1,8 @@
-// supabase/functions/api/routes/jobs.ts
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
 const app = new Hono()
+const allowedCategories = new Set(['Development', 'QA', 'Data', 'Management', 'Product'])
 
 app.get('/', async (c) => {
   try {
@@ -14,19 +14,21 @@ app.get('/', async (c) => {
     const userId = currentUser?.id;
 
     if (!supabaseUrl || !supabaseKey) {
-        throw new Error("Missing Secrets");
+      throw new Error('Missing Secrets')
     }
 
-    const supabaseClient = createClient(supabaseUrl, supabaseKey);
+    const supabaseClient = createClient(supabaseUrl, supabaseKey)
 
-    const searchTerm = c.req.query('search');
-    const id = c.req.query('id');
-    const page = parseInt(c.req.query('page') || '1');
-    const limit = parseInt(c.req.query('limit') || '25');
-    const from = (page - 1) * limit;
+    const rawTextSearch = (c.req.query('query') ?? c.req.query('search') ?? '').trim()
+    const rawCategory = (c.req.query('category') ?? c.req.query('categories') ?? '').trim()
+    const id = c.req.query('id')
 
-    let result;
-    let totalCount = 0;
+    const page = parseInt(c.req.query('page') || '1')
+    const limit = parseInt(c.req.query('limit') || '25')
+    const from = (page - 1) * limit
+
+    let result
+    let totalCount = 0
 
     if (id) {
         // --- תרחיש א': שליפת משרה בודדת ---
@@ -54,22 +56,42 @@ app.get('/', async (c) => {
         result = data ? { ...data, is_saved: isSaved } : null;
         totalCount = data ? 1 : 0;
 
+      result = data
+      totalCount = data ? 1 : 0
     } else {
-        // --- תרחיש ב': רשימה עם דפדוף ---
-        const to = from + limit - 1;
+      const to = from + limit - 1
+      const textSearch = rawTextSearch.replace(/[%_(),]/g, ' ').trim()
+      const category = rawCategory.trim()
 
-        let query = supabaseClient
-            .from('open_position')
-            .select('*', { count: 'exact' })
-            .not('job_description_html', 'is', null)
-            .order('created_at', { ascending: false });
+      let query = supabaseClient
+        .from('open_position')
+        .select('*', { count: 'exact' })
+        .not('job_description_html', 'is', null)
+        .order('created_at', { ascending: false })
 
-        if (searchTerm) {
-            query = query.or(`job_title.ilike.%${searchTerm}%,company_name.ilike.%${searchTerm}%`);
+      if (textSearch) {
+        query = query.or(`job_title.ilike.%${textSearch}%,company_name.ilike.%${textSearch}%`)
+      }
+
+      if (category) {
+        if (!allowedCategories.has(category)) {
+          return c.json(
+            {
+              error: `Invalid category. Allowed values: ${Array.from(allowedCategories).join(', ')}`,
+              success: false,
+            },
+            400,
+          )
         }
 
+        query = query.contains('categories', [category])
+    }
+
         const { data, count, error } = await query.range(from, to);
+
         if (error) throw error;
+        
+        result = data;
 
         // --- העשרה: בדיקה אילו משרות שמורות (Batch Check) ---
         if (userId && data && data.length > 0) {
