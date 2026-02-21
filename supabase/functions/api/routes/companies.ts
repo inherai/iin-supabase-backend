@@ -46,7 +46,13 @@ app.get('/', async (c) => {
       return c.json({ error: usersError.message }, 400)
     }
 
-    usersById = new Map((users || []).map((u: any) => [u.uuid, u]))
+    // כאן אנחנו מבצעים את ה-Mapping עבור כל משתמש ברשימה
+    const enrichedUsers = (users || []).map((u: any) => ({
+      ...u,
+      image: !!u.image ? true : null // לוגיקת ה-Boolean החדשה
+    }))
+
+    usersById = new Map(enrichedUsers.map((u: any) => [u.uuid, u]))
   }
 
   const processedData = companies.map((company: any) => {
@@ -112,7 +118,11 @@ app.get('/:id', async (c) => {
       .in('uuid', employeeIds)
 
     if (!usersError && users) {
-      employeesDetails = users
+      // החלת הלוגיקה על רשימת העובדים בחברה הבודדת
+      employeesDetails = users.map((u: any) => ({
+        ...u,
+        image: !!u.image ? true : null
+      }))
     }
   }
 
