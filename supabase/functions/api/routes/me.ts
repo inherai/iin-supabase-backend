@@ -1,7 +1,74 @@
 // supabase/functions/api/routes/me.ts
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import OpenAI from "https://esm.sh/openai@4";
 
 const app = new Hono()
+
+async function updateUserVector(userId: string) {
+  try {
+    const openai = new OpenAI({ apiKey: Deno.env.get("TEST_OPENAI_API_KEY") });
+    const supabaseAdmin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    const { data: user, error } = await supabaseAdmin
+      .from("users")
+      .select("headline, about, skills, interests, languages, work_preferences, experience, education, certifications, location, role")
+      .eq("uuid", userId)
+      .single();
+
+    if (error || !user) return;
+
+    const experienceText = (user.experience ?? [])
+      .map((e: any) => [e.title, typeof e.company === 'object' ? e.company?.name : e.company].filter(Boolean).join(" at "))
+      .join(", ");
+
+    const educationText = (user.education ?? [])
+      .map((e: any) => [e.degree, e.institution].filter(Boolean).join(" from "))
+      .join(", ");
+
+    const certificationsText = (user.certifications ?? [])
+      .map((c: any) => c.name || c.title || c).filter(Boolean)
+      .join(", ");
+
+    const languagesText = (user.languages ?? [])
+      .map((l: any) => typeof l === 'object' ? (l.language || l.name) : l).filter(Boolean)
+      .join(", ");
+
+    const parts = [
+      user.role && `Role: ${user.role}`,
+      user.location && `Location: ${user.location}`,
+      user.headline && `Headline: ${user.headline}`,
+      user.about && `About: ${user.about}`,
+      user.skills?.length && `Skills: ${user.skills.join(", ")}`,
+      user.interests?.length && `Interests: ${user.interests.join(", ")}`,
+      languagesText && `Languages: ${languagesText}`,
+      user.work_preferences?.length && `Work Preferences: ${user.work_preferences.join(", ")}`,
+      experienceText && `Experience: ${experienceText}`,
+      educationText && `Education: ${educationText}`,
+      certificationsText && `Certifications: ${certificationsText}`,
+    ].filter(Boolean).join("\n");
+
+    if (!parts.trim()) return;
+
+    const embRes = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: parts.slice(0, 8000),
+    });
+
+    await supabaseAdmin.from("users_vectors").upsert({
+      user_id: userId,
+      vector: embRes.data[0].embedding,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id" });
+
+    console.log(`Vector updated for user: ${userId}`);
+  } catch (err) {
+    console.error("Error updating user vector:", err);
+  }
+}
 
 // --------------------------------------------------------------------
 // GET /api/me
@@ -73,7 +140,16 @@ app.put('/', async (c) => {
 
   const supabase = c.get('supabase')
   const payload = await c.req.json()
-  const profileData = payload.profile || payload 
+  const profileData = payload.profile || payload
+
+  const EMBEDDING_FIELDS = ['headline', 'about', 'skills', 'interests', 'languages', 'work_preferences', 'experience', 'education', 'certifications', 'location', 'role'];
+
+  // שלוף מצב נוכחי לפני העדכון - להשוואה
+  const { data: currentUser } = await supabase
+    .from('users')
+    .select(EMBEDDING_FIELDS.join(', '))
+    .eq('uuid', user.id)
+    .single()
 
   const { data, error } = await supabase
     .from('users')
@@ -92,7 +168,8 @@ app.put('/', async (c) => {
         education: profileData.education,
         certifications: profileData.certifications,
         skills: profileData.skills,
-        image: profileData.image // כאן אנחנו עדיין שומרים את הערך האמיתי (הנתיב)
+        image: profileData.image,
+        cover_image_url: profileData.cover_image_url ?? null // כאן אנחנו עדיין שומרים את הערך האמיתי (הנתיב)
     })
     .eq('uuid', user.id)
     .select()
@@ -100,6 +177,14 @@ app.put('/', async (c) => {
 
   if (error) {
     return c.json({ error: error.message }, 400)
+  }
+
+  // עדכון ה-vector רק אם שדה משמעותי באמת השתנה
+  const hasEmbeddingChange = currentUser && EMBEDDING_FIELDS.some(
+    field => JSON.stringify(profileData[field]) !== JSON.stringify(currentUser[field])
+  );
+  if (hasEmbeddingChange) {
+    updateUserVector(user.id);
   }
 
   // גם כאן - מחזירים לקליינט תשובה עם ה-Mapping החדש
