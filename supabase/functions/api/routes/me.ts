@@ -140,7 +140,16 @@ app.put('/', async (c) => {
 
   const supabase = c.get('supabase')
   const payload = await c.req.json()
-  const profileData = payload.profile || payload 
+  const profileData = payload.profile || payload
+
+  const EMBEDDING_FIELDS = ['headline', 'about', 'skills', 'interests', 'languages', 'work_preferences', 'experience', 'education', 'certifications', 'location', 'role'];
+
+  // שלוף מצב נוכחי לפני העדכון - להשוואה
+  const { data: currentUser } = await supabase
+    .from('users')
+    .select(EMBEDDING_FIELDS.join(', '))
+    .eq('uuid', user.id)
+    .single()
 
   const { data, error } = await supabase
     .from('users')
@@ -169,9 +178,10 @@ app.put('/', async (c) => {
     return c.json({ error: error.message }, 400)
   }
 
-  // עדכון ה-vector רק אם שונה שדה שמשפיע על האמבדינג
-  const EMBEDDING_FIELDS = ['headline', 'about', 'skills', 'interests', 'languages', 'work_preferences', 'experience', 'education', 'certifications', 'location', 'role'];
-  const hasEmbeddingChange = EMBEDDING_FIELDS.some(field => profileData[field] !== undefined);
+  // עדכון ה-vector רק אם שדה משמעותי באמת השתנה
+  const hasEmbeddingChange = currentUser && EMBEDDING_FIELDS.some(
+    field => JSON.stringify(profileData[field]) !== JSON.stringify(currentUser[field])
+  );
   if (hasEmbeddingChange) {
     updateUserVector(user.id);
   }
