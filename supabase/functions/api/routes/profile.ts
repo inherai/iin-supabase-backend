@@ -26,8 +26,78 @@ app.get('/views/count', async (c) => {
     return c.json({ error: err.message }, 500)
   }
 })
+app.get('/posts/count', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
 
+    if (!user) {
+      return c.json({ error: 'Unauthorized: You must be logged in to view posts count' }, 401)
+    }
 
+    const { count, error } = await supabase
+      .from('posts')
+      .select('id', { count: 'exact', head: true })
+      .eq('sender', user.email)
+
+    if (error) {
+      return c.json({ error: error.message }, 500)
+    }
+
+    return c.json({ count: count ?? 0 })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.get('/comments/count', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
+
+    if (!user) {
+      return c.json({ error: 'Unauthorized: You must be logged in to view comments count' }, 401)
+    }
+
+    const { count, error } = await supabase
+      .from('comments')
+      .select('id', { count: 'exact', head: true })
+      .eq('sender', user.email)
+
+    if (error) {
+      return c.json({ error: error.message }, 500)
+    }
+
+    return c.json({ count: count ?? 0 })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.get('/connections/count', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
+
+    if (!user) {
+      return c.json({ error: 'Unauthorized: You must be logged in to view connections count' }, 401)
+    }
+
+    const { count, error } = await supabase
+      .from('connections')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'accepted')
+      .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+
+    if (error) {
+      return c.json({ error: error.message }, 500)
+    }
+
+    return c.json({ count: count ?? 0 })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
 
 // --- פונקציית עזר: העשרת מערך experience עם נתוני חברות ---
 const enrichExperience = async (experience: any[], supabase: any) => {
@@ -55,6 +125,7 @@ const enrichExperience = async (experience: any[], supabase: any) => {
     return exp;
   });
 }
+
 
 // ====================================================================
 // POST /api/profile
@@ -341,3 +412,5 @@ app.put('/privacy', async (c) => {
 })
 
 export default app
+
+

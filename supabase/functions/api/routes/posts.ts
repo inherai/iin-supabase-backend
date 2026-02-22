@@ -298,7 +298,7 @@ app.post('/', async (c) => {
       const user = c.get('user');
       if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-      const { subject, message, attachments } = body;
+      const { subject, message, attachments, post_type } = body;
       const communityMembersOnlyInput = body.community_members_only ?? body.communityMembersOnly;
 
       if (communityMembersOnlyInput !== undefined && typeof communityMembersOnlyInput !== 'boolean') {
@@ -317,6 +317,7 @@ app.post('/', async (c) => {
         message: message,
         attachments: attachments || [],
         sent_at: new Date().toISOString(),
+        post_type: post_type || null,
         community_members_only
       }).select().single();
 
