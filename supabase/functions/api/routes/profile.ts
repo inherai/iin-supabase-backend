@@ -222,27 +222,61 @@ app.get('/', async (c) => {
       const offset = (page - 1) * limit
       const viewerBusinessRole = user.app_metadata.role
 
-      const { data: users, error: fetchError } = await supabase
-        .rpc('get_random_unconnected_users', {
-          current_user_id: user.id,
-          requestor_role: viewerBusinessRole,
-          page_limit: limit,
-          page_offset: offset,
-          search_text: searchQuery
+      let usersData: any[] = []
+      let total = 0
+      let isAiMode = false
+
+      // ניסיון ראשון: המלצות AI דרך match_users
+      if (!searchQuery) {
+        const { data: aiMatches } = await supabase.rpc('match_users', {
+          p_user_id: user.id,
+          p_threshold: 0.3,
+          p_match_count: limit
         })
 
-      if (fetchError) {
-        return c.json({ error: fetchError.message }, 500)
+        if (aiMatches && aiMatches.length > 0) {
+          const userIds = aiMatches.map((m: any) => m.user_id)
+          const { data: fetchedUsers } = await supabase
+            .from('users')
+            .select('*')
+            .in('uuid', userIds)
+
+          if (fetchedUsers && fetchedUsers.length > 0) {
+            // מיון לפי סדר ה-similarity מה-RPC
+            usersData = userIds
+              .map((id: string) => fetchedUsers.find((u: any) => u.uuid === id))
+              .filter(Boolean)
+            total = usersData.length
+            isAiMode = true
+          }
+        }
       }
 
-      const total = users?.[0]?.total_count || 0
+      // fallback: רנדומלי (פרופיל ריק / חיפוש טקסטואלי)
+      if (!isAiMode) {
+        const { data: randomUsers, error: fetchError } = await supabase
+          .rpc('get_random_unconnected_users', {
+            current_user_id: user.id,
+            requestor_role: viewerBusinessRole,
+            page_limit: limit,
+            page_offset: offset,
+            search_text: searchQuery
+          })
+
+        if (fetchError) {
+          return c.json({ error: fetchError.message }, 500)
+        }
+
+        usersData = randomUsers || []
+        total = usersData[0]?.total_count || 0
+      }
 
       const hasAccess = (privacyArray: any) => {
         if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
         return privacyArray.includes(viewerBusinessRole)
       }
 
-      const enrichedUsers = (users || []).map((u: any) => {
+      const enrichedUsers = usersData.map((u: any) => {
         const isSelf = u.uuid === user.id || u.email === user.email
         const isInactive = u.status === 'Inactive'
         const showLastName = isSelf || hasAccess(u.privacy_lastname)
