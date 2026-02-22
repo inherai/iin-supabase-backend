@@ -168,7 +168,8 @@ app.put('/', async (c) => {
         education: profileData.education,
         certifications: profileData.certifications,
         skills: profileData.skills,
-        image: profileData.image // כאן אנחנו עדיין שומרים את הערך האמיתי (הנתיב)
+        image: profileData.image,
+        cover_image_url: profileData.cover_image_url ?? null // כאן אנחנו עדיין שומרים את הערך האמיתי (הנתיב)
     })
     .eq('uuid', user.id)
     .select()
