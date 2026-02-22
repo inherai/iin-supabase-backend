@@ -227,12 +227,13 @@ app.get('/', async (c) => {
       let total = 0
       let isAiMode = false
 
-      // ניסיון ראשון: המלצות AI דרך match_users
+      // ניסיון ראשון: המלצות AI דרך match_users (עם offset לפגינציה)
       if (!searchQuery) {
         const { data: aiMatches } = await supabase.rpc('match_users', {
           p_user_id: user.id,
           p_threshold: 0.3,
-          p_match_count: limit
+          p_match_count: limit,
+          p_offset: offset
         })
 
         if (aiMatches && aiMatches.length > 0) {
@@ -243,17 +244,18 @@ app.get('/', async (c) => {
             .in('uuid', userIds)
 
           if (fetchedUsers && fetchedUsers.length > 0) {
-            // מיון לפי סדר ה-similarity מה-RPC
             usersData = userIds
               .map((id: string) => fetchedUsers.find((u: any) => u.uuid === id))
               .filter(Boolean)
-            total = usersData.length
+            // total_count מה-RPC + באפר של 50 כדי שתמיד יהיה אפשר לגלול לרנדומליים
+            const aiTotal = parseInt(aiMatches[0].total_count) || 0
+            total = aiTotal + 50
             isAiMode = true
           }
         }
       }
 
-      // fallback: רנדומלי (פרופיל ריק / חיפוש טקסטואלי)
+      // fallback: רנדומלי (פרופיל ריק / חיפוש טקסטואלי / נגמרו ה-AI)
       if (!isAiMode) {
         const { data: randomUsers, error: fetchError } = await supabase
           .rpc('get_random_unconnected_users', {
