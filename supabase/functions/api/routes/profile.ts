@@ -188,7 +188,8 @@ app.post('/', async (c) => {
         name: displayName, // השם המחושב
         image: (showPicture && !!u.image) ? true : null,
         role: u.role,
-        headline: u.headline
+        headline: u.headline,
+        cover_image_url: u.cover_image_url ?? null
       }
     })
 
@@ -256,6 +257,7 @@ app.get('/', async (c) => {
           uuid: u.uuid,
           name: displayName,
           headline: u.headline,
+          cover_image_url: u.cover_image_url ?? null,
           location: u.location,
           about: u.about,
           interests: u.interests,
@@ -337,6 +339,7 @@ app.get('/', async (c) => {
       last_name: showLastName ? targetUser.last_name : null,
       
       image: (hasAccess(targetUser.privacy_picture) && !!targetUser.image) ? true : null,
+      cover_image_url: targetUser.cover_image_url ?? null,
       
       contact_details: hasAccess(targetUser.privacy_contact_details) ? {
         email: targetUser.email,
@@ -412,5 +415,4 @@ app.put('/privacy', async (c) => {
 })
 
 export default app
-
 
