@@ -104,6 +104,169 @@ function isRecruiterViewer(user: any): boolean {
   const role = String(user?.app_metadata?.role ?? '').toLowerCase().trim();
   return role === RECRUITER_ROLE;
 }
+//support all types of attachment.
+
+const PPTX_MIME_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-powerpoint',
+  'application/powerpoint',
+  'application/x-mspowerpoint',
+]);
+
+const IMAGE_EXTENSIONS = new Set([
+  'jpg', 'jpeg', 'jpe', 'jfif', 'pjpeg', 'pjp', 'png', 'gif', 'bmp', 'dib',
+  'webp', 'avif', 'heic', 'heif', 'svg', 'svgz', 'ico', 'tif', 'tiff',
+  'apng',
+]);
+
+const VIDEO_EXTENSIONS = new Set([
+  'mp4', 'm4v', 'mov', 'qt', 'avi', 'wmv', 'flv', 'f4v', 'mkv', 'webm',
+  'mpeg', 'mpg', 'mpe', 'mpv', '3gp', '3gpp', '3g2', 'mts', 'm2ts', 'ts',
+  'ogv', 'vob',
+]);
+
+const AUDIO_EXTENSIONS = new Set([
+  'mp3', 'wav', 'wave', 'aac', 'm4a', 'flac', 'ogg', 'oga', 'opus', 'wma',
+  'aiff', 'aif', 'aifc', 'amr', 'mid', 'midi',
+]);
+
+function firstString(...values: any[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+function extractExtension(value: string | null): string | null {
+  if (!value) return null;
+  const cleanValue = value.split('?')[0].split('#')[0];
+  const fileName = cleanValue.split('/').pop() ?? cleanValue;
+  const dotIdx = fileName.lastIndexOf('.');
+  if (dotIdx === -1 || dotIdx === fileName.length - 1) return null;
+  return fileName.slice(dotIdx + 1).toLowerCase();
+}
+
+function deriveFileName(url: string | null): string | null {
+  if (!url) return null;
+  const cleanValue = url.split('?')[0].split('#')[0];
+  const fileName = cleanValue.split('/').pop() ?? cleanValue;
+  return fileName || null;
+}
+
+function inferAttachmentType(mimeType: string | null, extension: string | null): 'image' | 'video' | 'audio' | 'slides' | 'file' {
+  const normalizedMime = mimeType?.toLowerCase().trim() ?? '';
+  const normalizedExt = extension?.toLowerCase().trim() ?? '';
+
+  if (normalizedMime.startsWith('image/')) return 'image';
+  if (normalizedMime.startsWith('video/')) return 'video';
+  if (normalizedMime.startsWith('audio/')) return 'audio';
+
+  if (PPTX_MIME_TYPES.has(normalizedMime) || normalizedExt === 'pptx') return 'slides';
+  if (normalizedExt && IMAGE_EXTENSIONS.has(normalizedExt)) return 'image';
+  if (normalizedExt && VIDEO_EXTENSIONS.has(normalizedExt)) return 'video';
+  if (normalizedExt && AUDIO_EXTENSIONS.has(normalizedExt)) return 'audio';
+  return 'file';
+}
+
+function toOfficeSlidesViewerUrl(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') return null;
+    return `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAttachment(rawAttachment: any) {
+  if (rawAttachment === null || rawAttachment === undefined) return null;
+
+  const base =
+    typeof rawAttachment === 'object' && !Array.isArray(rawAttachment)
+      ? rawAttachment
+      : { url: String(rawAttachment) };
+
+  const url = firstString(
+    base.url,
+    base.uri,
+    base.path,
+    base.src,
+    base.file_url,
+    base.publicUrl,
+    base.public_url,
+  );
+
+  const name = firstString(
+    base.name,
+    base.fileName,
+    base.filename,
+    base.originalName,
+    base.original_name,
+  ) ?? deriveFileName(url);
+
+  const incomingMimeType = firstString(
+    base.mime_type,
+    base.mimeType,
+    base.type,
+    base.contentType,
+    base.content_type,
+  );
+
+  const extension = extractExtension(name) ?? extractExtension(url);
+  const attachmentType = inferAttachmentType(incomingMimeType, extension);
+
+  const display =
+    attachmentType === 'slides'
+      ? {
+        as: 'slides',
+        viewer: 'office',
+        embed_url: toOfficeSlidesViewerUrl(url),
+        has_thumbnail: false,
+      }
+      : attachmentType === 'image'
+      ? {
+        as: 'image',
+        viewer: 'native',
+        has_thumbnail: true,
+      }
+      : attachmentType === 'video'
+      ? {
+        as: 'video',
+        viewer: 'native',
+        has_thumbnail: true,
+      }
+      : attachmentType === 'audio'
+      ? {
+        as: 'audio',
+        viewer: 'native',
+        has_thumbnail: false,
+      }
+      : {
+        as: 'file',
+        viewer: 'download',
+        has_thumbnail: false,
+      };
+
+  return {
+    ...base,
+    url: url ?? null,
+    name: name ?? null,
+    mime_type: incomingMimeType?.toLowerCase() ?? null,
+    file_extension: extension ?? null,
+    attachment_type: attachmentType,
+    display,
+  };
+}
+
+function normalizeAttachments(rawAttachments: any): any[] {
+  if (rawAttachments === null || rawAttachments === undefined) return [];
+  const attachmentsList = Array.isArray(rawAttachments) ? rawAttachments : [rawAttachments];
+  return attachmentsList
+    .map((attachment) => normalizeAttachment(attachment))
+    .filter((attachment) => attachment !== null);
+}
+//support all types of attachment.
 
 // ====================================================================
 // 2. נתיבי API
@@ -201,6 +364,7 @@ app.get('/', async (c) => {
       if (!acc[comment.post_id]) acc[comment.post_id] = []
       acc[comment.post_id].push({
         ...comment, // כולל sender
+        attachments: normalizeAttachments(comment.attachments),
         author,
         likes_count: commentLikes.length,
         is_liked: commentLikes.some((l: any) => l.user_id === current_user_uuid)
@@ -217,6 +381,7 @@ app.get('/', async (c) => {
 
       return {
         ...post, // כולל sender
+        attachments: normalizeAttachments(post.attachments),
         author: postAuthor,
         comments: commentsByPostId?.[post.id] || [],
         likes_count: postLikes.length,
@@ -255,6 +420,7 @@ app.post('/', async (c) => {
         try {
           const senderEmail = msg.sender?.toLowerCase().trim();
           if (!senderEmail) continue;
+          const normalizedAttachments = normalizeAttachments(msg.attachments);
 
           await ensureUserExists(supabaseAdmin, senderEmail);
           const postId = await deterministicInt8(msg.googleThreadId);
@@ -270,7 +436,7 @@ app.post('/', async (c) => {
               post_id: postId,
               sender: senderEmail,
               message: msg.message || "",
-              attachments: msg.attachments,
+              attachments: normalizedAttachments,
               community_members_only: typeof msg.community_members_only === 'boolean' ? msg.community_members_only : false,
               created_at: msg.sentAt ? new Date(msg.sentAt).toISOString() : new Date().toISOString()
             });
@@ -281,7 +447,7 @@ app.post('/', async (c) => {
               sender: senderEmail,
               subject: msg.subject || "",
               message: msg.message || "",
-              attachments: msg.attachments,
+              attachments: normalizedAttachments,
               sent_at: msg.sentAt ? new Date(msg.sentAt).toISOString() : new Date().toISOString(),
               post_type: msg.post_type,
               community_members_only: typeof msg.community_members_only === 'boolean' ? msg.community_members_only : false
@@ -309,13 +475,14 @@ app.post('/', async (c) => {
 
       if (!message) return c.json({ error: "Message is required" }, 400);
       const postId = crypto.randomUUID();
+      const normalizedAttachments = normalizeAttachments(attachments);
 
       const { data, error } = await supabase.from('posts').insert({
         id: postId,
         sender: user.email,
         subject: subject || "",
         message: message,
-        attachments: attachments || [],
+        attachments: normalizedAttachments,
         sent_at: new Date().toISOString(),
         community_members_only
       }).select().single();
@@ -347,6 +514,7 @@ app.post('/comments', async (c) => {
     }
 
     const resolvedCommunityMembersOnly = communityMembersOnlyInput === true
+    const normalizedAttachments = normalizeAttachments(attachments)
 
     // 1. הכנסת התגובה לטבלת comments
     const { data: commentData, error: commentError } = await supabase
@@ -355,7 +523,7 @@ app.post('/comments', async (c) => {
         post_id: postId,
         sender: user.email,
         message: message,
-        attachments: attachments || [],
+        attachments: normalizedAttachments,
         community_members_only: resolvedCommunityMembersOnly,
         created_at: new Date().toISOString()
       })
