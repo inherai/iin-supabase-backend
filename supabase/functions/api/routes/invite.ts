@@ -18,6 +18,20 @@ app.post("/", async (c) => {
     if (!recipientEmail) {
       return c.json({ error: "recipient_email is required" }, 400);
     }
+    const normalizedRecipientEmail = recipientEmail.toLowerCase();
+
+    const { data: existingUser, error: existingUserError } = await supabase
+      .from("users")
+      .select("uuid")
+      .eq("email", normalizedRecipientEmail)
+      .maybeSingle();
+
+    if (existingUserError) {
+      return c.json({ error: existingUserError.message }, 500);
+    }
+    if (existingUser) {
+      return c.json({ error: "recipient already exists" }, 409);
+    }
 
     const createdAt = new Date();
     const expiresAt = new Date(createdAt);
@@ -32,7 +46,7 @@ app.post("/", async (c) => {
       id: crypto.randomUUID(),
       inviter_id: user.id,
       token,
-      recipient_email: recipientEmail,
+      recipient_email: normalizedRecipientEmail,
       personal_note: personalNote || null,
       status: "pending",
       views_count: 0,
