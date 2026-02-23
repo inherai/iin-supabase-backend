@@ -108,4 +108,81 @@ app.post('/', async (c) => {
   }
 })
 
+// GET /api/like?target_id=...&target_type=post[&reaction_type=like][&limit=100]
+app.get('/', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
+    const supabase = c.get('supabase')
+
+    const target_id = c.req.query('target_id')
+    const target_type = c.req.query('target_type') // post | comment
+    const reaction_type = c.req.query('reaction_type') as ReactionType | null
+    const limitRaw = Number(c.req.query('limit') || '100')
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 100
+
+    if (!target_id || !target_type) {
+      return c.json({ error: 'Missing target_id or target_type' }, 400)
+    }
+
+    if (!['post', 'comment'].includes(target_type)) {
+      return c.json({ error: 'Invalid target_type. Must be post or comment' }, 400)
+    }
+
+    if (reaction_type && !VALID_REACTIONS.includes(reaction_type)) {
+      return c.json({ error: `Invalid reaction_type. Must be one of: ${VALID_REACTIONS.join(', ')}` }, 400)
+    }
+
+    let query = supabase
+      .from('likes')
+      .select('user_id,reaction_type,created_at')
+      .eq('target_id', target_id)
+      .eq('target_type', target_type)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (reaction_type) {
+      query = query.eq('reaction_type', reaction_type)
+    }
+
+    const { data, error } = await query
+    if (error) throw error
+
+    const rows = data || []
+
+    // Dedup by user_id just in case
+    const seen = new Set<string>()
+    const reaction_users = rows
+      .filter((r: any) => {
+        if (!r?.user_id) return false
+        if (seen.has(r.user_id)) return false
+        seen.add(r.user_id)
+        return true
+      })
+      .map((r: any) => ({
+        user_id: r.user_id,
+        reaction_type: r.reaction_type as ReactionType,
+      }))
+
+    const reaction_counts = reaction_users.reduce((acc: Record<string, number>, r: any) => {
+      acc[r.reaction_type] = (acc[r.reaction_type] || 0) + 1
+      return acc
+    }, {})
+
+    return c.json({
+      target_id,
+      target_type,
+      total_count: reaction_users.length,
+      reaction_counts,
+      reaction_users,
+    })
+  } catch (err: any) {
+    console.error('Get reactions error:', err)
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 export default app
