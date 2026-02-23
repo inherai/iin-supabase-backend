@@ -133,68 +133,72 @@ const enrichExperience = async (experience: any[], supabase: any) => {
 // ====================================================================
 app.post('/', async (c) => {
   try {
-    const user = c.get('user') // הצופה (Viewer)
-    const supabase = c.get('supabase') // הקליינט
+    const user = c.get('user')
+    const supabase = c.get('supabase')
 
-    // 1. הגנה
-    if (!user) {
-      return c.json({ error: 'Unauthorized' }, 401)
-    }
+    if (!user) return c.json({ error: 'Unauthorized' }, 401)
 
-    // 2. קבלת ה-Body
     const body = await c.req.json().catch(() => ({}))
-    const { emails } = body
+    const emails = Array.isArray(body?.emails)
+      ? body.emails.filter((e: unknown) => typeof e === 'string' && e.trim())
+      : []
+    const ids = Array.isArray(body?.ids)
+      ? body.ids.filter((id: unknown) => typeof id === 'string' && id.trim())
+      : []
 
-    if (!emails || !Array.isArray(emails) || emails.length === 0) {
-      return c.json([]) 
+    if (emails.length === 0 && ids.length === 0) return c.json([])
+
+    const viewerBusinessRole = user.app_metadata.role
+
+    const emptyResult = { data: [] as any[], error: null as any }
+
+    const [byEmails, byIds] = await Promise.all([
+      emails.length
+        ? supabase.from('users').select('*').in('email', emails)
+        : Promise.resolve(emptyResult),
+      ids.length
+        ? supabase.from('users').select('*').in('uuid', ids)
+        : Promise.resolve(emptyResult),
+    ])
+
+    if (byEmails.error || byIds.error) {
+      return c.json({ error: byEmails.error?.message || byIds.error?.message }, 500)
     }
 
-    // 3. שליפת התפקיד
-    const viewerBusinessRole = user.app_metadata.role;
+    const usersMap = new Map<string, any>()
+    ;[...(byEmails.data || []), ...(byIds.data || [])].forEach((u) => {
+      usersMap.set(u.uuid || u.email, u)
+    })
+    const users = [...usersMap.values()]
 
-    // 4. שליפת המשתמשים
-    const { data: users, error: fetchError } = await supabase
-      .from('users')
-      .select('*')
-      .in('email', emails)
-
-    if (fetchError) {
-      return c.json({ error: fetchError.message }, 500)
-    }
-
-    // 5. פונקציית עזר לבדיקת גישה
     const hasAccess = (privacyArray: any) => {
       if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
       return privacyArray.includes(viewerBusinessRole)
     }
 
-    // 6. יצירת הרשימה הסופית
     const enrichedUsers = users.map((u: any) => {
-      const isSelf = u.email === user.email;
-      const isInactive = u.status === 'Inactive'; // בדיקת סטטוס
-
-      // בדיקות פרטיות
+      const isSelf = u.email === user.email
+      const isInactive = u.status === 'Inactive'
       const showLastName = isSelf || hasAccess(u.privacy_lastname)
       const showPicture = isSelf || hasAccess(u.privacy_picture)
 
-      // לוגיקת "שם חכם"
       const displayName = u.first_name
         ? (showLastName && u.last_name ? `${u.first_name} ${u.last_name}` : u.first_name)
-        : (isInactive ? u.email : ''); // אם אין שם והוא לא פעיל -> מציג אימייל
+        : (isInactive ? u.email : '')
 
       return {
         uuid: u.uuid,
         email: u.email,
-        name: displayName, // השם המחושב
-        image: (showPicture && !!u.image) ? true : null,
+        name: displayName,
         role: u.role,
         headline: u.headline,
-        cover_image_url: u.cover_image_url ?? null
+        cover_image_url: u.cover_image_url ?? null,
+        image: (showPicture && !!u.image) ? true : null,      // backward compatibility
+        image_url: (showPicture && !!u.image) ? u.image : null // ל-ProfileHeader בפועל
       }
     })
 
     return c.json(enrichedUsers)
-
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
