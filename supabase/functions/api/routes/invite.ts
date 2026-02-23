@@ -13,6 +13,7 @@ app.post("/", async (c) => {
 
     const body = await c.req.json().catch(() => ({}));
     const recipientEmail = body?.recipient_email?.trim();
+    const personalNote = body?.personal_note?.trim();
 
     if (!recipientEmail) {
       return c.json({ error: "recipient_email is required" }, 400);
@@ -32,6 +33,7 @@ app.post("/", async (c) => {
       inviter_id: user.id,
       token,
       recipient_email: recipientEmail,
+      personal_note: personalNote || null,
       status: "pending",
       views_count: 0,
       last_viewed_at: null,
