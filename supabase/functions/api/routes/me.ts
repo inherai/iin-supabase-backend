@@ -215,8 +215,7 @@ app.put('/image', async (c) => {
   const newImageUrl = payload.image
 
   // בדיקת תקינות הקישור
-  const SUPABASE_URL_PREFIX = 'https://csfyofqntrfxsystdzca.supabase.co/storage/v1/object/profile-images/profile-images-folder/';
-  
+  const SUPABASE_URL_PREFIX = 'https://csfyofqntrfxsystdzca.supabase.co/storage/v1/object/public/profile-images/profile-images-folder/';  
   if (typeof newImageUrl !== 'string' || !newImageUrl.startsWith(SUPABASE_URL_PREFIX)) {
     return c.json({ error: 'Invalid image URL format or missing image' }, 400)
   }
