@@ -20,6 +20,8 @@ app.post('/', async (c) => {
 
     // 3. קבלת הנתונים מהבקשה - כולל reaction_type
     const { target_id, target_type, reaction_type = 'like' } = await c.req.json()
+    
+    console.log('Received reaction request:', { user_id: user.id, target_id, target_type, reaction_type })
 
     if (!target_id || !target_type) {
       return c.json({ error: 'Missing target_id or target_type' }, 400)
@@ -30,28 +32,51 @@ app.post('/', async (c) => {
       return c.json({ error: `Invalid reaction_type. Must be one of: ${VALID_REACTIONS.join(', ')}` }, 400)
     }
 
-    // בדיקה אם כבר קיימת ריאקציה מהסוג הזה
-    const { data: existingReaction } = await supabase
+    // בדיקה אם כבר קיימת ריאקציה על אותו יעד
+    const { data: existingReaction, error: existingReactionError } = await supabase
       .from('likes')
-      .select('id')
+      .select('id, reaction_type')
       .eq('user_id', user.id)
       .eq('target_id', target_id)
       .eq('target_type', target_type)
-      .eq('reaction_type', reaction_type)
       .maybeSingle()
 
-    if (existingReaction) {
-      // אם קיימת - מחק אותה (toggle off)
-      await supabase
-        .from('likes')
-        .delete()
-        .eq('id', existingReaction.id)
+    if (existingReactionError) throw existingReactionError
 
-      return c.json({ 
-        action: 'removed', 
-        target_id, 
+    if (existingReaction) {
+      // אם נבחר אותו סוג שוב - מחק (toggle off)
+      if (existingReaction.reaction_type === reaction_type) {
+        const { error: deleteError } = await supabase
+          .from('likes')
+          .delete()
+          .eq('id', existingReaction.id)
+
+        if (deleteError) throw deleteError
+
+        return c.json({
+          action: 'removed',
+          target_id,
+          target_type,
+          reaction_type
+        })
+      }
+
+      // אם נבחר סוג אחר - עדכן את הריאקציה הקיימת
+      const { data: updatedData, error: updateError } = await supabase
+        .from('likes')
+        .update({ reaction_type })
+        .eq('id', existingReaction.id)
+        .select()
+        .single()
+
+      if (updateError) throw updateError
+
+      return c.json({
+        action: 'updated',
+        target_id,
         target_type,
-        reaction_type 
+        reaction_type,
+        data: updatedData
       })
     }
 
