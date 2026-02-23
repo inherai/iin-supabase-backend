@@ -194,7 +194,6 @@ app.post('/', async (c) => {
         headline: u.headline,
         cover_image_url: u.cover_image_url ?? null,
         image: (showPicture && !!u.image) ? true : null,      // backward compatibility
-        image_url: (showPicture && !!u.image) ? u.image : null // ל-ProfileHeader בפועל
       }
     })
 
