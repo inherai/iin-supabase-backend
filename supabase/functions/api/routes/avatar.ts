@@ -7,7 +7,6 @@ const app = new Hono()
 app.get('/', async (c) => {
   try {
     // 1. קבלת המשתמש מה-Middleware
-    // המידלוור כבר בדק את הטוקן ושם את היוזר בקונטקסט
     const user = c.get('user');
 
     if (!user) {
@@ -19,8 +18,7 @@ app.get('/', async (c) => {
       return c.json({ error: 'Missing id parameter' }, 400);
     }
 
-    // 2. יצירת קליינט אדמין לביצוע הפעולות הרגישות
-    // אנחנו משתמשים בזה כדי לא להסתבך עם RLS בטבלאות שאינן של המשתמש
+    // 2. יצירת קליינט אדמין
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -58,6 +56,30 @@ app.get('/', async (c) => {
         return c.json({ error: 'No image set for user' }, 404);
     }
 
+    // =================================================================
+    // 🌟 התיקון הראשון: טיפול ב-ETag ובקשת ה-Cache מהדפדפן (חסכון אדיר בביצועים!)
+    // =================================================================
+    // מכיוון שכל פעם שמעלים תמונה חדשה ה-URL/נתיב שלה בדאטהבייס משתנה (או מכיל מזהה חדש),
+    // אנחנו יכולים פשוט להשתמש בנתיב עצמו כמזהה (ETag) ייחודי לתמונה.
+    // נקודד אותו ל-base64 כדי שיהיה תקני, ונוסיף מרכאות כנדרש בתקן HTTP.
+    const eTag = `"${btoa(userRecord.image)}"`; 
+
+    // בודקים אם הדפדפן שלח את ה-ETag הישן שלו
+    const clientETag = c.req.header('If-None-Match');
+
+    if (clientETag === eTag) {
+        // בינגו! התמונה לא השתנתה. 
+        // מחזירים 304 מיד! חסכנו גם הורדה מה-Storage וגם שליחת קובץ כבד ברשת!
+        return new Response(null, {
+            status: 304,
+            headers: {
+                'ETag': eTag,
+                'Cache-Control': 'private, no-cache, must-revalidate'
+            }
+        });
+    }
+    // =================================================================
+
     // 5. חילוץ הנתיב
     const bucketName = 'profile-images';
     const splitPath = userRecord.image.split(`/${bucketName}/`);
@@ -68,7 +90,7 @@ app.get('/', async (c) => {
 
     const relativePath = decodeURIComponent(splitPath[1]);
 
-    // 6. הורדה מה-Storage
+    // 6. הורדה מה-Storage (יקרה רק אם לא החזרנו 304)
     const { data: fileData, error: downloadError } = await supabaseAdmin
       .storage
       .from(bucketName) 
@@ -78,15 +100,19 @@ app.get('/', async (c) => {
       return c.json({ error: 'Image not found in storage' }, 404);
     }
 
-    // 7. המרה ל-ArrayBuffer (התיקון הקריטי)
+    // 7. המרה ל-ArrayBuffer
     const arrayBuffer = await fileData.arrayBuffer();
 
-    // 8. החזרת התשובה דרך Hono
-    // c.body מאפשר להחזיר מידע בינארי
+    // =================================================================
+    // 🌟 התיקון השני: עדכון הכותרות (Headers) שיוחזרו לדפדפן
+    // =================================================================
     return c.body(arrayBuffer, 200, {
         'Content-Type': fileData.type || 'image/jpeg',
         'Content-Length': arrayBuffer.byteLength.toString(),
-        'Cache-Control': 'public, max-age=3600',
+        // שינינו את זה מהגדרת ה-public המקורית לדרישות המדויקות שלך:
+        'Cache-Control': 'private, no-cache, must-revalidate',
+        // חובה לשלוח את ה-ETag בתשובה כדי שהדפדפן יידע לשמור אותו לפעם הבאה:
+        'ETag': eTag 
     });
 
   } catch (error) {
