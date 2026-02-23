@@ -30,8 +30,8 @@ app.post('/', async (c) => {
       return c.json({ error: `Invalid reaction_type. Must be one of: ${VALID_REACTIONS.join(', ')}` }, 400)
     }
 
-    // 4. בדיקה אם כבר קיימת ריאקציה מהסוג הזה מהמשתמש
-    const { data: existingReaction, error: fetchError } = await supabase
+    // בדיקה אם כבר קיימת ריאקציה מהסוג הזה
+    const { data: existingReaction } = await supabase
       .from('likes')
       .select('id')
       .eq('user_id', user.id)
@@ -40,19 +40,12 @@ app.post('/', async (c) => {
       .eq('reaction_type', reaction_type)
       .maybeSingle()
 
-    if (fetchError) {
-      throw fetchError
-    }
-
-    // 5. לוגיקת Reaction (הוספה/הסרה)
     if (existingReaction) {
-      // אם הריאקציה כבר קיימת - הסר אותה (toggle off)
-      const { error: deleteError } = await supabase
+      // אם קיימת - מחק אותה (toggle off)
+      await supabase
         .from('likes')
         .delete()
         .eq('id', existingReaction.id)
-
-      if (deleteError) throw deleteError
 
       return c.json({ 
         action: 'removed', 
@@ -60,29 +53,29 @@ app.post('/', async (c) => {
         target_type,
         reaction_type 
       })
-    } else {
-      // הוספת ריאקציה חדשה
-      const { data: insertData, error: insertError } = await supabase
-        .from('likes')
-        .insert([{ 
-          user_id: user.id,
-          target_id, 
-          target_type,
-          reaction_type 
-        }])
-        .select()
-        .single()
-
-      if (insertError) throw insertError
-
-      return c.json({ 
-        action: 'added', 
-        target_id,
-        target_type,
-        reaction_type,
-        data: insertData 
-      }, 201)
     }
+
+    // אם לא קיימת - הוסף ריאקציה חדשה
+    const { data: insertData, error: insertError } = await supabase
+      .from('likes')
+      .insert([{ 
+        user_id: user.id,
+        target_id, 
+        target_type,
+        reaction_type 
+      }])
+      .select()
+      .single()
+
+    if (insertError) throw insertError
+
+    return c.json({ 
+      action: 'added', 
+      target_id,
+      target_type,
+      reaction_type,
+      data: insertData 
+    }, 201)
 
   } catch (err) {
     console.error('Reaction error:', err)
