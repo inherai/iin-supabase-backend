@@ -303,7 +303,7 @@ app.get('/', async (c) => {
 
     const { data: allPostLikes } = await supabase
       .from('likes')
-      .select('target_id, user_id')
+      .select('target_id, user_id, reaction_type')
       .in('target_id', postIds)
 
     const emailsToFetch = new Set<string>()
@@ -325,7 +325,7 @@ app.get('/', async (c) => {
     const commentIds = visibleComments.map((c: any) => c.id.toString())
     const { data: allCommentLikes } = await supabase
       .from('likes')
-      .select('target_id, user_id')
+      .select('target_id, user_id, reaction_type')
       .in('target_id', commentIds)
 
     visibleComments.forEach((c: any) => emailsToFetch.add(c.sender))
@@ -361,13 +361,28 @@ app.get('/', async (c) => {
         (l: any) => l.target_id === comment.id.toString()
       ) || []
 
+      // ספירת ריאקציות לפי סוג
+      const reactionCounts = commentLikes.reduce((acc: any, like: any) => {
+        const type = like.reaction_type || 'like'
+        acc[type] = (acc[type] || 0) + 1
+        return acc
+      }, {})
+
+      // הריאקציות של המשתמש הנוכחי (מערך)
+      const userReactions = commentLikes
+        .filter((l: any) => l.user_id === current_user_uuid || l.user_uuid === current_user_uuid)
+        .map((l: any) => l.reaction_type)
+
       if (!acc[comment.post_id]) acc[comment.post_id] = []
       acc[comment.post_id].push({
         ...comment, // כולל sender
         attachments: normalizeAttachments(comment.attachments),
         author,
         likes_count: commentLikes.length,
-        is_liked: commentLikes.some((l: any) => l.user_id === current_user_uuid)
+        reaction_counts: reactionCounts,
+        user_reactions: userReactions,
+        user_reaction: userReactions[0] || null, // backward compatibility
+        is_liked: userReactions.length > 0 // backward compatibility
       })
       return acc
     }, {})
@@ -379,13 +394,28 @@ app.get('/', async (c) => {
         ? { ...profileData, name: profileData.name || '' }
         : { name: post.sender, image: null };
 
+      // ספירת ריאקציות לפי סוג
+      const reactionCounts = postLikes.reduce((acc: any, like: any) => {
+        const type = like.reaction_type || 'like'
+        acc[type] = (acc[type] || 0) + 1
+        return acc
+      }, {})
+
+      // הריאקציות של המשתמש הנוכחי (מערך)
+      const userReactions = postLikes
+        .filter((l: any) => l.user_id === current_user_uuid || l.user_uuid === current_user_uuid)
+        .map((l: any) => l.reaction_type)
+
       return {
         ...post, // כולל sender
         attachments: normalizeAttachments(post.attachments),
         author: postAuthor,
         comments: commentsByPostId?.[post.id] || [],
         likes_count: postLikes.length,
-        is_liked: postLikes.some((l: any) => l.user_id === current_user_uuid)
+        reaction_counts: reactionCounts,
+        user_reactions: userReactions,
+        user_reaction: userReactions[0] || null, // backward compatibility
+        is_liked: userReactions.length > 0 // backward compatibility
       }
     })
 

@@ -3,6 +3,10 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 
 const app = new Hono()
 
+// Valid reaction types (like LinkedIn)
+const VALID_REACTIONS = ['like', 'celebrate', 'support', 'love'] as const
+type ReactionType = typeof VALID_REACTIONS[number]
+
 app.post('/', async (c) => {
   try {
     // 1. שליפת המשתמש המחובר מה-Middleware
@@ -14,55 +18,74 @@ app.post('/', async (c) => {
     // 2. שליפת הלקוח מה-Middleware (כבר מוגדר עם הטוקן של המשתמש)
     const supabase = c.get('supabase')
 
-    // 3. קבלת הנתונים מהבקשה (אנחנו לא צריכים user_id, אנחנו יודעים מי זה!)
-    const { target_id, target_type } = await c.req.json()
+    // 3. קבלת הנתונים מהבקשה - כולל reaction_type
+    const { target_id, target_type, reaction_type = 'like' } = await c.req.json()
 
     if (!target_id || !target_type) {
       return c.json({ error: 'Missing target_id or target_type' }, 400)
     }
 
-    // 4. בדיקה אם כבר קיים לייק
-    const { data: existingLike, error: fetchError } = await supabase
+    // Validate reaction_type
+    if (!VALID_REACTIONS.includes(reaction_type as ReactionType)) {
+      return c.json({ error: `Invalid reaction_type. Must be one of: ${VALID_REACTIONS.join(', ')}` }, 400)
+    }
+
+    // 4. בדיקה אם כבר קיימת ריאקציה מהסוג הזה מהמשתמש
+    const { data: existingReaction, error: fetchError } = await supabase
       .from('likes')
       .select('id')
-      .eq('user_id', user.id) // שימוש ב-ID הבטוח מהטוקן
+      .eq('user_id', user.id)
       .eq('target_id', target_id)
+      .eq('target_type', target_type)
+      .eq('reaction_type', reaction_type)
       .maybeSingle()
 
     if (fetchError) {
       throw fetchError
     }
 
-    // 5. לוגיקת Toggle (הוספה/הסרה)
-    if (existingLike) {
-      // --- הסרת לייק ---
+    // 5. לוגיקת Reaction (הוספה/הסרה)
+    if (existingReaction) {
+      // אם הריאקציה כבר קיימת - הסר אותה (toggle off)
       const { error: deleteError } = await supabase
         .from('likes')
         .delete()
-        .eq('id', existingLike.id)
+        .eq('id', existingReaction.id)
 
       if (deleteError) throw deleteError
 
-      return c.json({ action: 'removed', target_id })
+      return c.json({ 
+        action: 'removed', 
+        target_id, 
+        target_type,
+        reaction_type 
+      })
     } else {
-      // --- הוספת לייק ---
+      // הוספת ריאקציה חדשה
       const { data: insertData, error: insertError } = await supabase
         .from('likes')
         .insert([{ 
-          user_id: user.id, // שימוש ב-ID הבטוח
+          user_id: user.id,
           target_id, 
-          target_type 
+          target_type,
+          reaction_type 
         }])
         .select()
         .single()
 
       if (insertError) throw insertError
 
-      return c.json({ action: 'added', data: insertData }, 201)
+      return c.json({ 
+        action: 'added', 
+        target_id,
+        target_type,
+        reaction_type,
+        data: insertData 
+      }, 201)
     }
 
   } catch (err) {
-    console.error('Like error:', err)
+    console.error('Reaction error:', err)
     return c.json({ error: err.message }, 500)
   }
 })
