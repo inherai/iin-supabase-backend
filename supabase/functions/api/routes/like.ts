@@ -4,7 +4,7 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 const app = new Hono()
 
 // Valid reaction types (like LinkedIn)
-const VALID_REACTIONS = ['like', 'celebrate', 'support', 'love'] as const
+const VALID_REACTIONS = ['like', 'celebrate', 'thank', 'love'] as const
 type ReactionType = typeof VALID_REACTIONS[number]
 
 app.post('/', async (c) => {
