@@ -75,7 +75,7 @@ async function ensureUserExists(supabase: any, email: string) {
     await supabase.from("users").insert({
       uuid: crypto.randomUUID(),
       email: cleanEmail,
-      name: cleanEmail.split('@')[0],
+      first_name: cleanEmail.split('@')[0],
       status: "Inactive"
     }).ignore();
   }
@@ -283,30 +283,40 @@ app.get('/', async (c) => {
     const last_id = c.req.query('last_id')
     const session_start = c.req.query('session_start') || new Date().toISOString()
 
-    const targetUserId = c.req.query('userid') // ה-ID שקיבלנו ב-Query
-    let filterEmail = null
+    const userid = c.req.query('userid')
 
-    if (targetUserId) {
-      // כאן אני מניח שיש לך טבלת profiles, תשני לפי הצורך
-      const { data: userData, error: userError } = await supabase
-        .from('profiles') 
+    let posts, postsError
+    
+    if (userid) {
+      const { data: userEmail } = await supabase
+        .from('public_users_view')
         .select('email')
-        .eq('id', targetUserId) // או 'uuid' תלוי בשם העמודה אצלך
+        .eq('uuid', userid)
         .single()
       
-      if (userError || !userData) {
-        return c.json({ error: 'User not found' }, 404)
+      if (userEmail) {
+        const { data: userPosts, error: userPostsError } = await supabase
+          .from('posts')
+          .select('*')
+          .eq('sender', userEmail.email)
+          .order('sent_at', { ascending: false })
+          .limit(25)
+        posts = userPosts
+        postsError = userPostsError
+      } else {
+        posts = []
+        postsError = null
       }
-      filterEmail = userData.email
+    } else {
+      const { data: feedPosts, error: feedPostsError } = await supabase.rpc('get_stabilized_feed', {
+        p_session_start: session_start,
+        p_last_effective_date: last_effective_date || null,
+        p_last_id: last_id || null,
+        p_limit: 25
+      })
+      posts = feedPosts
+      postsError = feedPostsError
     }
-
-    const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
-      p_session_start: session_start,
-      p_last_effective_date: last_effective_date || null,
-      p_last_id: last_id || null,
-      p_limit: 25,
-      p_filter_email: filterEmail
-    })
 
     if (postsError) throw postsError
     if (!posts || posts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
@@ -372,8 +382,13 @@ app.get('/', async (c) => {
     const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
       const profileData = usersMap?.[comment.sender?.toLowerCase()];
       const author = profileData
-        ? { ...profileData,id: profileData.uuid, name: profileData.name || '' }
-        : { name: comment.sender, image: null };
+        ? { 
+            ...profileData, 
+            id: profileData.uuid, 
+            first_name: profileData.first_name, 
+            last_name: profileData.last_name 
+          }
+        : { first_name: comment.sender, last_name: null, image: null };
 
       const commentLikes = allCommentLikes?.filter(
         (l: any) => l.target_id === comment.id.toString()
@@ -425,8 +440,12 @@ app.get('/', async (c) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
       const profileData = usersMap?.[post.sender?.toLowerCase()];
       const postAuthor = profileData
-        ? { ...profileData, name: profileData.name || '' }
-        : { name: post.sender, image: null };
+        ? { 
+            ...profileData, 
+            first_name: profileData.first_name, 
+            last_name: profileData.last_name 
+          }
+        : { first_name: post.sender, last_name: null, image: null };
 
       // ספירת ריאקציות לפי סוג
       const reactionCounts = postLikes.reduce((acc: any, like: any) => {
@@ -613,10 +632,10 @@ app.post('/comments', async (c) => {
 
     if (commentError) throw commentError
 
-    // 2. שליפת ה-uuid וה-name מטבלת users לפי המייל
+    // 2. שליפת ה-uuid וה-first_name, last_name מטבלת public_users_view לפי המייל
     const { data: userData, error: userError } = await supabase
-      .from('users')
-      .select('uuid, name') // הוספנו כאן את name
+      .from('public_users_view')
+      .select('uuid, first_name, last_name')
       .eq('email', user.email)
       .single()
 
@@ -633,7 +652,8 @@ app.post('/comments', async (c) => {
         ...commentData,
         author: {
           id: userData.uuid,
-          name: userData.name // הוספנו את השם כאן
+          first_name: userData.first_name,
+          last_name: userData.last_name
         }
       } 
     })

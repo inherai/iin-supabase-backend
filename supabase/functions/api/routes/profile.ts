@@ -154,10 +154,10 @@ app.post('/', async (c) => {
 
     const [byEmails, byIds] = await Promise.all([
       emails.length
-        ? supabase.from('users').select('*').in('email', emails)
+        ? supabase.from('public_users_view').select('*').in('email', emails)
         : Promise.resolve(emptyResult),
       ids.length
-        ? supabase.from('users').select('*').in('uuid', ids)
+        ? supabase.from('public_users_view').select('*').in('uuid', ids)
         : Promise.resolve(emptyResult),
     ])
 
@@ -171,29 +171,16 @@ app.post('/', async (c) => {
     })
     const users = [...usersMap.values()]
 
-    const hasAccess = (privacyArray: any) => {
-      if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
-      return privacyArray.includes(viewerBusinessRole)
-    }
-
     const enrichedUsers = users.map((u: any) => {
-      const isSelf = u.email === user.email
-      const isInactive = u.status === 'Inactive'
-      const showLastName = isSelf || hasAccess(u.privacy_lastname)
-      const showPicture = isSelf || hasAccess(u.privacy_picture)
-
-      const displayName = u.first_name
-        ? (showLastName && u.last_name ? `${u.first_name} ${u.last_name}` : u.first_name)
-        : (isInactive ? u.email : '')
-
       return {
         uuid: u.uuid,
         email: u.email,
-        name: displayName,
+        first_name: u.first_name,
+        last_name: u.last_name,
         role: u.role,
         headline: u.headline,
         cover_image_url: u.cover_image_url ?? null,
-        image: (showPicture && !!u.image) ? true : null,      // backward compatibility
+        image: u.image === 'true' ? true : null,
       }
     })
 
@@ -242,7 +229,7 @@ app.get('/', async (c) => {
         if (aiMatches && aiMatches.length > 0) {
           const userIds = aiMatches.map((m: any) => m.user_id)
           const { data: fetchedUsers } = await supabase
-            .from('users')
+            .from('public_users_view')
             .select('*')
             .in('uuid', userIds)
 
@@ -277,24 +264,11 @@ app.get('/', async (c) => {
         total = usersData[0]?.total_count || 0
       }
 
-      const hasAccess = (privacyArray: any) => {
-        if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
-        return privacyArray.includes(viewerBusinessRole)
-      }
-
       const enrichedUsers = usersData.map((u: any) => {
-        const isSelf = u.uuid === user.id || u.email === user.email
-        const isInactive = u.status === 'Inactive'
-        const showLastName = isSelf || hasAccess(u.privacy_lastname)
-        const showPicture = isSelf || hasAccess(u.privacy_picture)
-
-        const displayName = u.first_name
-          ? (showLastName && u.last_name ? `${u.first_name} ${u.last_name}` : u.first_name)
-          : (isInactive ? u.email : '')
-
         return {
           uuid: u.uuid,
-          name: displayName,
+          first_name: u.first_name,
+          last_name: u.last_name,
           headline: u.headline,
           cover_image_url: u.cover_image_url ?? null,
           location: u.location,
@@ -306,9 +280,8 @@ app.get('/', async (c) => {
           education: u.education,
           certifications: u.certifications,
           skills: u.skills,
-          last_name: showLastName ? u.last_name : null,
-          image: (showPicture && !!u.image) ? true : null,
-          contact_details: hasAccess(u.privacy_contact_details) ? {
+          image: u.image === 'true' ? true : null,
+          contact_details: (u.email || u.phone) ? {
             email: u.email,
             phone: u.phone
           } : null
@@ -330,7 +303,7 @@ app.get('/', async (c) => {
 
     // 4. שליפת המשתמש
     const { data: targetUser, error: fetchError } = await supabase
-      .from('users')
+      .from('public_users_view')
       .select('*')
       .eq('uuid', targetUserId)
       .single()
@@ -340,29 +313,13 @@ app.get('/', async (c) => {
     }
 
     // 5. לוגיקת סינון
-    const isSelf = targetUser.uuid === user.id || targetUser.email === user.email;
-    const isInactive = targetUser.status === 'Inactive';
-
-    const hasAccess = (privacyArray: any) => {
-      if (isSelf) return true;
-      if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
-      return privacyArray.includes(viewerBusinessRole)
-    }
-
-    // חישובים
-    const showLastName = isSelf || hasAccess(targetUser.privacy_lastname);
-    
-    // אותה לוגיקת שם חכם גם כאן
-    const displayName = targetUser.first_name
-      ? (showLastName && targetUser.last_name ? `${targetUser.first_name} ${targetUser.last_name}` : targetUser.first_name)
-      : (isInactive ? targetUser.email : '');
-
     // העשרת experience עם נתוני חברות
     const enrichedExperience = await enrichExperience(targetUser.experience, supabase);
 
     const publicProfile = {
       uuid: targetUser.uuid,
-      name: displayName, // השם לתצוגה הראשית
+      first_name: targetUser.first_name,
+      last_name: targetUser.last_name,
       headline: targetUser.headline,
       location: targetUser.location,
       about: targetUser.about,
@@ -373,20 +330,15 @@ app.get('/', async (c) => {
       education: targetUser.education,
       certifications: targetUser.certifications,
       skills: targetUser.skills,
-
-      // שדות מותנים
-      last_name: showLastName ? targetUser.last_name : null,
-      
-      image: (hasAccess(targetUser.privacy_picture) && !!targetUser.image) ? true : null,
+      image: targetUser.image === 'true' ? true : null,
       cover_image_url: targetUser.cover_image_url ?? null,
-      
-      contact_details: hasAccess(targetUser.privacy_contact_details) ? {
+      contact_details: (targetUser.email || targetUser.phone) ? {
         email: targetUser.email,
         phone: targetUser.phone
       } : null
     }
 
-    if (!isSelf) {
+    if (targetUser.uuid !== user.id) {
   // ביצוע Upsert - אם קיים שילוב של viewer_id ו-viewed_id, הוא רק יעדכן את הזמן
   const { error: upsertError } = await supabase
     .from('profile_views')
