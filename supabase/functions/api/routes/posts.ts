@@ -286,18 +286,28 @@ app.get('/', async (c) => {
     const targetUserId = c.req.query('userid') // ה-ID שקיבלנו ב-Query
     let filterEmail = null
 
-    if (targetUserId) {
-      // כאן אני מניח שיש לך טבלת profiles, תשני לפי הצורך
-      const { data: userData, error: userError } = await supabase
-        .from('profiles') 
-        .select('email')
-        .eq('id', targetUserId) // או 'uuid' תלוי בשם העמודה אצלך
-        .single()
+if (targetUserId) {
+      // ניקוי רווחים מה-ID
+      const cleanId = targetUserId.trim();
       
-      if (userError || !userData) {
-        return c.json({ error: 'User not found' }, 404)
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('email')
+        .eq('uuid', cleanId)
+        .single();
+      
+      if (userError) {
+        // הדפסה לטרמינל כדי שתוכלי לראות את השגיאה האמיתית (למשל RLS או Database error)
+        console.error("Supabase Error details:", userError);
+        
+        return c.json({ 
+          error: 'User not found', 
+          debug_message: userError.message, // זה יגיד לנו אם יש בעיית הרשאות
+          attempted_id: cleanId 
+        }, 404);
       }
-      filterEmail = userData.email
+      
+      filterEmail = userData.email;
     }
 
     const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
