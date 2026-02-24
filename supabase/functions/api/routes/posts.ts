@@ -283,11 +283,29 @@ app.get('/', async (c) => {
     const last_id = c.req.query('last_id')
     const session_start = c.req.query('session_start') || new Date().toISOString()
 
+    const targetUserId = c.req.query('userid') // ה-ID שקיבלנו ב-Query
+    let filterEmail = null
+
+    if (targetUserId) {
+      // כאן אני מניח שיש לך טבלת profiles, תשני לפי הצורך
+      const { data: userData, error: userError } = await supabase
+        .from('profiles') 
+        .select('email')
+        .eq('id', targetUserId) // או 'uuid' תלוי בשם העמודה אצלך
+        .single()
+      
+      if (userError || !userData) {
+        return c.json({ error: 'User not found' }, 404)
+      }
+      filterEmail = userData.email
+    }
+
     const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
       p_session_start: session_start,
       p_last_effective_date: last_effective_date || null,
       p_last_id: last_id || null,
-      p_limit: 25
+      p_limit: 25,
+      p_filter_email: filterEmail
     })
 
     if (postsError) throw postsError
