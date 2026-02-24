@@ -610,4 +610,107 @@ app.post('/comments', async (c) => {
     return c.json({ error: err.message }, 500)
   }
 })
+
+app.put('/:id', async (c) => {
+  try {
+    const user = c.get('user');
+    // נוודא שהמשתמש מחובר
+    if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+    const supabase = c.get('supabase');
+    const postId = c.req.param('id'); // שליפת מזהה הפוסט מה-URL
+    
+    if (!postId) return c.json({ error: "Post ID is required" }, 400);
+
+    let body;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON" }, 400);
+    }
+
+    // נכין את האובייקט לעדכון. אנחנו מעדכנים רק את מה שהתקבל, 
+    // אבל תמיד מעדכנים את זמן העריכה וסטטוס העריכה.
+    const updateData: any = {
+      updated_at: new Date().toISOString(),
+      is_edited: true
+    };
+
+    if (body.message !== undefined) updateData.message = body.message;
+    if (body.subject !== undefined) updateData.subject = body.subject;
+    if (body.post_type !== undefined) updateData.post_type = body.post_type;
+    
+    // אם נשלחו קבצים מצורפים חדשים, ננרמל אותם
+    if (body.attachments !== undefined) {
+      updateData.attachments = normalizeAttachments(body.attachments);
+    }
+
+    const communityMembersOnlyInput = body.communityMembersOnly;
+    if (communityMembersOnlyInput !== undefined) {
+      if (typeof communityMembersOnlyInput !== 'boolean') {
+        return c.json({ error: "community_members_only must be boolean" }, 400);
+      }
+      updateData.community_members_only = communityMembersOnlyInput;
+    }
+
+    // ביצוע העדכון במסד הנתונים
+    const { data, error } = await supabase
+      .from('posts')
+      .update(updateData)
+      .eq('id', postId)
+      .eq('sender', user.email) // הגנה: רק שולח הפוסט המקורי יכול לערוך אותו!
+      .select()
+      .single();
+
+    if (error) {
+      // אם אין תוצאות, כנראה שהפוסט לא קיים או שאינו שייך למשתמש
+      if (error.code === 'PGRST116') {
+         return c.json({ error: "Post not found or you don't have permission to edit it" }, 404);
+      }
+      throw error;
+    }
+
+    // חשוב! אם שינינו את התוכן, צריך לעדכן את הווקטור כדי שהחיפוש הסמנטי ימשיך לעבוד נכון
+    if (body.message !== undefined || body.subject !== undefined) {
+      updatePostVector(postId); 
+    }
+
+    return c.json({ success: true, data });
+
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+
+app.delete('/:id', async (c) => {
+  try {
+    const user = c.get('user');
+    // נוודא שהמשתמש מחובר
+    if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+    const supabase = c.get('supabase');
+    const postId = c.req.param('id');
+    
+    if (!postId) return c.json({ error: "Post ID is required" }, 400);
+
+    // מחיקה מהדאטהבייס
+    const { error } = await supabase
+      .from('posts')
+      .delete()
+      .eq('id', postId)
+      .eq('sender', user.email); // הגנה: רק הבעלים יכול למחוק
+
+    if (error) throw error;
+
+    // הערה: אם יש לך וקטורים שמורים בטבלה נפרדת, ייתכן שתצטרך למחוק גם אותם כאן,
+    // אלא אם הגדרת On Delete Cascade ב-Supabase (מה שמומלץ לעשות).
+
+    return c.json({ success: true, message: "Post deleted successfully" });
+
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
 export default app
