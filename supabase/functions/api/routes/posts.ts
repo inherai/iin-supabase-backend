@@ -287,27 +287,15 @@ app.get('/', async (c) => {
     let filterEmail = null
 
 if (targetUserId) {
-      // ניקוי רווחים מה-ID
-      const cleanId = targetUserId.trim();
-      
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('email')
-        .eq('uuid', cleanId)
-        .single();
-      
-      if (userError) {
-        // הדפסה לטרמינל כדי שתוכלי לראות את השגיאה האמיתית (למשל RLS או Database error)
-        console.error("Supabase Error details:", userError);
-        
-        return c.json({ 
-          error: 'User not found', 
-          debug_message: userError.message, // זה יגיד לנו אם יש בעיית הרשאות
-          attempted_id: cleanId 
-        }, 404);
+      const { data: email, error: emailError } = await supabase
+        .rpc('get_user_email_by_uuid', { p_uuid: targetUserId })
+
+      if (emailError || !email) {
+        console.error("Error fetching email:", emailError)
+        // אם לא מצאנו אימייל למשתמש הזה, נחזיר פיד ריק
+        return c.json({ data: [], meta: { next_cursor: null } })
       }
-      
-      filterEmail = userData.email;
+      filterEmail = email
     }
 
     const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
