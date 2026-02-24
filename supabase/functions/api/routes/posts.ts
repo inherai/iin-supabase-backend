@@ -81,23 +81,6 @@ async function ensureUserExists(supabase: any, email: string) {
   }
 }
 
-// מחזירה Author בלי email
-function toAuthor(profileData: any, fallbackEmail: string) {
-  if (profileData) {
-    return {
-      uuid: profileData.uuid,
-      name: profileData.name,
-      image: profileData.image ?? null,
-      role: profileData.role,
-      headline: profileData.headline
-    };
-  }
-  return {
-    name: fallbackEmail,
-    image: null
-  };
-}
-
 const RECRUITER_ROLE = 'recruiters';
 
 function isRecruiterViewer(user: any): boolean {
@@ -283,40 +266,28 @@ app.get('/', async (c) => {
     const last_id = c.req.query('last_id')
     const session_start = c.req.query('session_start') || new Date().toISOString()
 
-    const userid = c.req.query('userid')
+    const targetUserId = c.req.query('userid') // ה-ID שקיבלנו ב-Query
+    let filterEmail = null
 
-    let posts, postsError
-    
-    if (userid) {
-      const { data: userEmail } = await supabase
-        .from('public_users_view')
-        .select('email')
-        .eq('uuid', userid)
-        .single()
-      
-      if (userEmail) {
-        const { data: userPosts, error: userPostsError } = await supabase
-          .from('posts')
-          .select('*')
-          .eq('sender', userEmail.email)
-          .order('sent_at', { ascending: false })
-          .limit(25)
-        posts = userPosts
-        postsError = userPostsError
-      } else {
-        posts = []
-        postsError = null
+if (targetUserId) {
+      const { data: email, error: emailError } = await supabase
+        .rpc('get_user_email_by_uuid', { p_uuid: targetUserId })
+
+      if (emailError || !email) {
+        console.error("Error fetching email:", emailError)
+        // אם לא מצאנו אימייל למשתמש הזה, נחזיר פיד ריק
+        return c.json({ data: [], meta: { next_cursor: null } })
       }
-    } else {
-      const { data: feedPosts, error: feedPostsError } = await supabase.rpc('get_stabilized_feed', {
-        p_session_start: session_start,
-        p_last_effective_date: last_effective_date || null,
-        p_last_id: last_id || null,
-        p_limit: 25
-      })
-      posts = feedPosts
-      postsError = feedPostsError
+      filterEmail = email
     }
+
+    const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
+      p_session_start: session_start,
+      p_last_effective_date: last_effective_date || null,
+      p_last_id: last_id || null,
+      p_limit: 25,
+      p_filter_email: filterEmail
+    })
 
     if (postsError) throw postsError
     if (!posts || posts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
@@ -746,17 +717,22 @@ app.delete('/:id', async (c) => {
     
     if (!postId) return c.json({ error: "Post ID is required" }, 400);
 
-    // מחיקה מהדאטהבייס
+    // מחיקה מהדאטהבייס עם select().single() כדי לקבל שגיאה אם הפוסט לא שייך למשתמש
     const { error } = await supabase
       .from('posts')
       .delete()
       .eq('id', postId)
-      .eq('sender', user.email); // הגנה: רק הבעלים יכול למחוק
+      .eq('sender', user.email) // הגנה: רק הבעלים יכול למחוק
+      .select()
+      .single();
 
-    if (error) throw error;
-
-    // הערה: אם יש לך וקטורים שמורים בטבלה נפרדת, ייתכן שתצטרך למחוק גם אותם כאן,
-    // אלא אם הגדרת On Delete Cascade ב-Supabase (מה שמומלץ לעשות).
+    if (error) {
+      // אם אין תוצאות, כנראה שהפוסט לא קיים או שאינו שייך למשתמש
+      if (error.code === 'PGRST116') {
+         return c.json({ error: "Post not found or you don't have permission to delete it" }, 404);
+      }
+      throw error;
+    }
 
     return c.json({ success: true, message: "Post deleted successfully" });
 
