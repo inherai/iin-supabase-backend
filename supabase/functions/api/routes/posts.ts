@@ -724,17 +724,22 @@ app.delete('/:id', async (c) => {
     
     if (!postId) return c.json({ error: "Post ID is required" }, 400);
 
-    // מחיקה מהדאטהבייס
+    // מחיקה מהדאטהבייס עם select().single() כדי לקבל שגיאה אם הפוסט לא שייך למשתמש
     const { error } = await supabase
       .from('posts')
       .delete()
       .eq('id', postId)
-      .eq('sender', user.email); // הגנה: רק הבעלים יכול למחוק
+      .eq('sender', user.email) // הגנה: רק הבעלים יכול למחוק
+      .select()
+      .single();
 
-    if (error) throw error;
-
-    // הערה: אם יש לך וקטורים שמורים בטבלה נפרדת, ייתכן שתצטרך למחוק גם אותם כאן,
-    // אלא אם הגדרת On Delete Cascade ב-Supabase (מה שמומלץ לעשות).
+    if (error) {
+      // אם אין תוצאות, כנראה שהפוסט לא קיים או שאינו שייך למשתמש
+      if (error.code === 'PGRST116') {
+         return c.json({ error: "Post not found or you don't have permission to delete it" }, 404);
+      }
+      throw error;
+    }
 
     return c.json({ success: true, message: "Post deleted successfully" });
 
