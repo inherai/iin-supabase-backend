@@ -373,13 +373,20 @@ app.get('/', async (c) => {
         .filter((l: any) => l.user_id === current_user_uuid || l.user_uuid === current_user_uuid)
         .map((l: any) => l.reaction_type)
 
-      const likedUserIds = Array.from(
-        new Set(
-          commentLikes
-            .map((l: any) => l.user_id)
-            .filter((id: any) => id !== null && id !== undefined)
-        )
-      )
+      const seenCommentReactionUsers = new Set<string>()
+      const reactionUsers = commentLikes
+        .filter((l: any) => {
+          const userId = l?.user_id
+          if (userId === null || userId === undefined) return false
+          const normalizedUserId = String(userId)
+          if (seenCommentReactionUsers.has(normalizedUserId)) return false
+          seenCommentReactionUsers.add(normalizedUserId)
+          return true
+        })
+        .map((l: any) => ({
+          user_id: String(l.user_id),
+          reaction_type: l.reaction_type || 'like'
+        }))
 
       if (!acc[comment.post_id]) acc[comment.post_id] = []
       acc[comment.post_id].push({
@@ -387,7 +394,7 @@ app.get('/', async (c) => {
         attachments: normalizeAttachments(comment.attachments),
         author,
         likes_count: commentLikes.length,
-        liked_user_ids: likedUserIds,
+        reaction_users: reactionUsers,
         reaction_counts: reactionCounts,
         user_reactions: userReactions,
         user_reaction: userReactions[0] || null, // backward compatibility
@@ -415,13 +422,20 @@ app.get('/', async (c) => {
         .filter((l: any) => l.user_id === current_user_uuid || l.user_uuid === current_user_uuid)
         .map((l: any) => l.reaction_type)
 
-      const likedUserIds = Array.from(
-        new Set(
-          postLikes
-            .map((l: any) => l.user_id)
-            .filter((id: any) => id !== null && id !== undefined)
-        )
-      )
+      const seenPostReactionUsers = new Set<string>()
+      const reactionUsers = postLikes
+        .filter((l: any) => {
+          const userId = l?.user_id
+          if (userId === null || userId === undefined) return false
+          const normalizedUserId = String(userId)
+          if (seenPostReactionUsers.has(normalizedUserId)) return false
+          seenPostReactionUsers.add(normalizedUserId)
+          return true
+        })
+        .map((l: any) => ({
+          user_id: String(l.user_id),
+          reaction_type: l.reaction_type || 'like'
+        }))
 
       return {
         ...post, // כולל sender
@@ -429,7 +443,7 @@ app.get('/', async (c) => {
         author: postAuthor,
         comments: commentsByPostId?.[post.id] || [],
         likes_count: postLikes.length,
-        liked_user_ids: likedUserIds,
+        reaction_users: reactionUsers,
         reaction_counts: reactionCounts,
         user_reactions: userReactions,
         user_reaction: userReactions[0] || null, // backward compatibility
