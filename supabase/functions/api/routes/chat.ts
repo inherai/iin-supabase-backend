@@ -14,8 +14,8 @@ app.get("/", async (c) => {
     .from("conversations")
     .select(`
       *,
-      user1:user1_id(uuid, name, image, headline),
-      user2:user2_id(uuid, name, image, headline)
+      user1:public_users_view!user1_id(uuid, first_name, last_name, image, headline),
+      user2:public_users_view!user2_id(uuid, first_name, last_name, image, headline)
     `)
     .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
     .order("updated_at", { ascending: false });
