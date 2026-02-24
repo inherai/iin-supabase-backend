@@ -38,18 +38,18 @@ app.get('/', async (c) => {
 
   if (allEmployeeIds.length > 0) {
     const { data: users, error: usersError } = await supabase
-      .from('users')
-      .select('uuid, name, headline, image')
+      .from('public_users_view') // 1. שינוי שם הטבלה ל-View
+      .select('uuid, first_name, last_name, headline, image') // 2. שינוי שדות השם
       .in('uuid', allEmployeeIds)
 
     if (usersError) {
       return c.json({ error: usersError.message }, 400)
     }
 
-    // כאן אנחנו מבצעים את ה-Mapping עבור כל משתמש ברשימה
+   // 3. המרה בטוחה של ה-image מטקסט לבוליאני (אופציה ב')
     const enrichedUsers = (users || []).map((u: any) => ({
       ...u,
-      image: !!u.image ? true : null // לוגיקת ה-Boolean החדשה
+      image: u.image === 'true' ? true : null 
     }))
 
     usersById = new Map(enrichedUsers.map((u: any) => [u.uuid, u]))
@@ -113,15 +113,15 @@ app.get('/:id', async (c) => {
 
   if (employeeIds.length > 0) {
     const { data: users, error: usersError } = await supabase
-      .from('users')
-      .select('uuid, name, headline, image')
+      .from('public_users_view') // 1. שינוי שם הטבלה ל-View
+      .select('uuid, first_name, last_name, headline, image') // 2. שינוי שדות השם
       .in('uuid', employeeIds)
 
     if (!usersError && users) {
-      // החלת הלוגיקה על רשימת העובדים בחברה הבודדת
+      // 3. המרה בטוחה לבוליאני גם כאן
       employeesDetails = users.map((u: any) => ({
         ...u,
-        image: !!u.image ? true : null
+        image: u.image === 'true' ? true : null
       }))
     }
   }
