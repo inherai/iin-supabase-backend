@@ -4,8 +4,8 @@ const app = new Hono();
 const ALLOWED_UPDATE_STATUSES = new Set(["accepted"]);
 const CONNECTION_SELECT = `
   *,
-  requester:requester_id(uuid, name, image, headline),
-  receiver:receiver_id(uuid, name, image, headline)
+  requester:public_users_view!requester_id(uuid, first_name, last_name, image, headline),
+  receiver:public_users_view!receiver_id(uuid, first_name, last_name, image, headline)
 `;
 
 // GET /api/connections
