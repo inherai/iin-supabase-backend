@@ -359,9 +359,9 @@ if (targetUserId) {
         const isAnonymous = profileData.is_anonymous === true
         
         author = { 
+          ...profileData,
           first_name: profileData.first_name,
           last_name: profileData.last_name,
-          image: profileData.image,
           is_anonymous: isAnonymous
         }
       } else {
@@ -430,9 +430,9 @@ if (targetUserId) {
         const isAnonymous = profileData.is_anonymous === true
         
         postAuthor = { 
+          ...profileData,
           first_name: profileData.first_name,
           last_name: profileData.last_name,
-          image: profileData.image,
           is_anonymous: isAnonymous
         }
       } else {
