@@ -595,72 +595,6 @@ app.post('/', async (c) => {
   }
 })
 
-app.post('/comments', async (c) => {
-  try {
-    const supabase = c.get('supabase')
-    const user = c.get('user')
-    const postId = c.req.query('id')
-    const { message, attachments, community_members_only, communityMembersOnly } = await c.req.json()
-    const communityMembersOnlyInput =
-      community_members_only !== undefined ? community_members_only : communityMembersOnly
-
-    if (!user) return c.json({ error: "Unauthorized" }, 401)
-    if (!postId) return c.json({ error: "Post ID query param is required" }, 400)
-    if (!message) return c.json({ error: "Message is required" }, 400)
-    if (communityMembersOnlyInput !== undefined && typeof communityMembersOnlyInput !== 'boolean') {
-      return c.json({ error: "community_members_only must be boolean" }, 400)
-    }
-
-    const resolvedCommunityMembersOnly = communityMembersOnlyInput === true
-    const normalizedAttachments = normalizeAttachments(attachments)
-
-    // 1. הכנסת התגובה לטבלת comments
-    const { data: commentData, error: commentError } = await supabase
-      .from('comments')
-      .insert({
-        post_id: postId,
-        sender: user.email,
-        message: message,
-        attachments: normalizedAttachments,
-        community_members_only: resolvedCommunityMembersOnly,
-        created_at: new Date().toISOString()
-      })
-      .select()
-      .single()
-
-    if (commentError) throw commentError
-
-    // 2. שליפת ה-uuid וה-first_name, last_name מטבלת public_users_view לפי המייל
-    const { data: userData, error: userError } = await supabase
-      .from('public_users_view')
-      .select('uuid, first_name, last_name')
-      .eq('email', user.email)
-      .single()
-
-    if (userError) throw userError
-
-    if (isQualityPost(message)) {
-      updatePostVector(postId)
-    }
-
-    // 3. החזרת האובייקט המבוקש עם id ושם
-    return c.json({ 
-      success: true, 
-      data: {
-        ...commentData,
-        author: {
-          id: userData.uuid,
-          first_name: userData.first_name,
-          last_name: userData.last_name
-        }
-      } 
-    })
-
-  } catch (err: any) {
-    return c.json({ error: err.message }, 500)
-  }
-})
-
 app.put('/:id', async (c) => {
   try {
     const user = c.get('user');
@@ -840,6 +774,262 @@ app.delete('/:id', async (c) => {
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
-});
+})
+
+app.post('/comments', async (c) => {
+  try {
+    const supabase = c.get('supabase')
+    const user = c.get('user')
+    const postId = c.req.query('id')
+    const { message, attachments, community_members_only, communityMembersOnly } = await c.req.json()
+    const communityMembersOnlyInput =
+    communityMembersOnly !== undefined ? communityMembersOnly : community_members_only
+
+    if (!user) return c.json({ error: "Unauthorized" }, 401)
+    if (!postId) return c.json({ error: "Post ID query param is required" }, 400)
+    if (!message) return c.json({ error: "Message is required" }, 400)
+    if (communityMembersOnlyInput !== undefined && typeof communityMembersOnlyInput !== 'boolean') {
+      return c.json({ error: "community_members_only must be boolean" }, 400)
+    }
+
+    const resolvedCommunityMembersOnly = communityMembersOnlyInput === true
+    const normalizedAttachments = normalizeAttachments(attachments)
+
+    // 1. הכנסת התגובה לטבלת comments
+    const { data: commentData, error: commentError } = await supabase
+      .from('comments')
+      .insert({
+        post_id: postId,
+        sender: user.email,
+        message: message,
+        attachments: normalizedAttachments,
+        community_members_only: resolvedCommunityMembersOnly,
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single()
+
+    if (commentError) throw commentError
+
+    // 2. שליפת ה-uuid וה-first_name, last_name מטבלת public_users_view לפי המייל
+    const { data: userData, error: userError } = await supabase
+      .from('public_users_view')
+      .select('uuid, first_name, last_name')
+      .eq('email', user.email)
+      .single()
+
+    if (userError) throw userError
+
+    if (isQualityPost(message)) {
+      updatePostVector(postId)
+    }
+
+    // 3. החזרת האובייקט המבוקש עם id ושם
+    return c.json({ 
+      success: true, 
+      data: {
+        ...commentData,
+        author: {
+          id: userData.uuid,
+          first_name: userData.first_name,
+          last_name: userData.last_name
+        }
+      } 
+    })
+
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+// עדכון תגובה
+// עדכון תגובה (כולל טיפול במחיקת קבצים שהוסרו בעריכה)
+app.put('/:postId/comments/:commentId', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ error: "Unauthorized" }, 401)
+
+    const supabase = c.get('supabase')
+    const postId = c.req.param('postId')
+    const commentId = c.req.param('commentId')
+
+    if (!postId) return c.json({ error: "Post ID is required" }, 400)
+    if (!commentId) return c.json({ error: "Comment ID is required" }, 400)
+
+    let body: any
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: "Invalid JSON" }, 400)
+    }
+
+    // 1) שליפת התגובה הקיימת כדי שנוכל להשוות attachments
+    const { data: existingComment, error: fetchError } = await supabase
+      .from('comments')
+      .select('attachments')
+      .eq('id', commentId)
+      .eq('post_id', postId)
+      .eq('sender', user.email)
+      .single()
+
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        return c.json({ error: "Comment not found or you don't have permission to edit it" }, 404)
+      }
+      throw fetchError
+    }
+
+    // 2) נכין את האובייקט לעדכון
+    const updateData: any = {
+      updated_at: new Date().toISOString(),
+      is_edited: true
+    }
+
+    if (body.message !== undefined) updateData.message = body.message
+
+    const communityMembersOnlyInput =
+      body.communityMembersOnly !== undefined ? body.communityMembersOnly : body.community_members_only
+
+    if (communityMembersOnlyInput !== undefined) {
+      if (typeof communityMembersOnlyInput !== 'boolean') {
+        return c.json({ error: "community_members_only must be boolean" }, 400)
+      }
+      updateData.community_members_only = communityMembersOnlyInput
+    }
+
+    // 3) טיפול בקבצים ומציאת אלו שהוסרו בעריכה (כמו בפוסט)
+    let filesToDelete: string[] = []
+
+    if (body.attachments !== undefined) {
+      const normalizedNewAttachments = normalizeAttachments(body.attachments)
+      updateData.attachments = normalizedNewAttachments
+
+      const oldAttachments = existingComment.attachments || []
+
+      // מזהים חדשים: נעדיף localPath ואם אין אז url
+      const newIdentifiers = (normalizedNewAttachments || [])
+        .map((a: any) => (typeof a === 'string' ? a : (a.localPath || a.url)))
+        .filter(Boolean)
+
+      // עבור כל קובץ ישן - אם לא קיים בחדשים => למחוק מהבאקט
+      for (const oldAtt of oldAttachments) {
+        const oldIdentifier = typeof oldAtt === 'string' ? oldAtt : (oldAtt.localPath || oldAtt.url)
+
+        if (oldIdentifier && !newIdentifiers.includes(oldIdentifier)) {
+          // הנתיב בבאקט (כמו אצלך בפוסט)
+          let pathToStorage = typeof oldAtt === 'string' ? null : oldAtt.localPath
+
+          // גיבוי: אם אין localPath אבל יש URL - נחלץ נתיב
+          if (!pathToStorage && oldAtt?.url) {
+            const urlParts = oldAtt.url.split('/attachments/')
+            if (urlParts.length > 1) pathToStorage = urlParts[1]
+          }
+
+          if (pathToStorage) filesToDelete.push(pathToStorage)
+        }
+      }
+    }
+
+    // 4) ביצוע העדכון במסד הנתונים
+    const { data, error } = await supabase
+      .from('comments')
+      .update(updateData)
+      .eq('id', commentId)
+      .eq('post_id', postId)
+      .eq('sender', user.email)
+      .select()
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return c.json({ error: "Comment not found or you don't have permission to edit it" }, 404)
+      }
+      throw error
+    }
+
+    // 5) מחיקת הקבצים הפיזיים מהבאקט אם יש כאלה
+    if (filesToDelete.length > 0) {
+      const { error: storageError } = await supabase.storage.from('attachments').remove(filesToDelete)
+      if (storageError) {
+        console.error("Failed to delete old files from storage:", storageError)
+      }
+    }
+
+    // 6) עדכון וקטור אם הטקסט השתנה ואיכותי
+    if (body.message !== undefined && isQualityPost(body.message)) {
+      updatePostVector(postId)
+    }
+
+    return c.json({ success: true, data })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+// מחיקת תגובה
+app.delete('/:postId/comments/:commentId', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ error: "Unauthorized" }, 401)
+
+    const supabase = c.get('supabase')
+    const postId = c.req.param('postId')
+    const commentId = c.req.param('commentId')
+
+    if (!postId) return c.json({ error: "Post ID is required" }, 400)
+    if (!commentId) return c.json({ error: "Comment ID is required" }, 400)
+
+    // 1) מוחקים ומחזירים את השורה כדי שנוכל למחוק קבצים מהבאקט
+    const { data: deletedComment, error } = await supabase
+      .from('comments')
+      .delete()
+      .eq('id', commentId)
+      .eq('post_id', postId)
+      .eq('sender', user.email)
+      .select('id, post_id, attachments')
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return c.json({ error: "Comment not found or you don't have permission to delete it" }, 404)
+      }
+      throw error
+    }
+
+    // 2) מחיקת קבצים של התגובה מהבאקט (אם יש)
+    if (deletedComment?.attachments?.length > 0) {
+      const filesToDelete = deletedComment.attachments
+        .map((a: any) => {
+          if (typeof a === 'string') return null
+
+          if (a.localPath) return a.localPath
+
+          // גיבוי: אם אין localPath אבל יש URL
+          if (a.url) {
+            const parts = a.url.split('/attachments/')
+            return parts.length > 1 ? parts[1] : null
+          }
+
+          return null
+        })
+        .filter(Boolean)
+
+      if (filesToDelete.length > 0) {
+        const { error: storageError } = await supabase.storage.from('attachments').remove(filesToDelete)
+        if (storageError) console.error("Failed to delete files on comment deletion:", storageError)
+      }
+    }
+
+    // 3) עדכון הווקטור של הפוסט כדי להסיר את הטקסט של התגובה שנמחקה
+    //    חשוב שזה יקרה אחרי המחיקה
+    updatePostVector(postId)
+
+    return c.json({ success: true, message: "Comment deleted successfully" })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+
 
 export default app
