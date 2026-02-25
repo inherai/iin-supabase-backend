@@ -191,7 +191,7 @@ app.post('/', async (c) => {
         email: (isAnonymous && !isOwner) ? null : u.email,
         first_name: (isAnonymous && !isOwner) ? null : u.first_name,
         last_name: (isAnonymous && !isOwner) ? null : u.last_name,
-        role: u.role,
+        role: (isAnonymous && !isOwner) ? null : u.role,
         headline: (isAnonymous && !isOwner) ? null : u.headline,
         cover_image_url: (isAnonymous && !isOwner) ? null : u.cover_image_url,
         image: (isAnonymous && !isOwner) ? null : (u.image ? true : null),
