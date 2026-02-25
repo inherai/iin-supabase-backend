@@ -334,25 +334,29 @@ if (targetUserId) {
     }
 
     const enrichedUsers = await profileRes.json()
-    const usersMap = enrichedUsers.reduce((acc: any, u: any) => {
-      if (u.uuid) acc[u.uuid] = u
-      return acc
-    }, {})
+    
+    // יצירת מפה כפולה: לפי email ולפי uuid
+    const usersByEmail = new Map()
+    const usersByUuid = new Map()
+    
+    enrichedUsers.forEach((u: any) => {
+      if (u._internal_email_lookup) usersByEmail.set(u._internal_email_lookup, u)
+      if (u.uuid) usersByUuid.set(u.uuid, u)
+    })
 
     const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
       const senderEmail = comment.sender
-      const profileData = Object.values(usersMap).find((u: any) => 
-        u.email?.toLowerCase() === senderEmail?.toLowerCase()
-      );
+      const profileData = usersByEmail.get(senderEmail?.toLowerCase());
       
       let author
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
+        const { _internal_email_lookup, ...cleanProfile } = profileData
         
         author = { 
-          ...profileData,
-          first_name: profileData.first_name,
-          last_name: profileData.last_name,
+          ...cleanProfile,
+          first_name: cleanProfile.first_name,
+          last_name: cleanProfile.last_name,
           is_anonymous: isAnonymous
         }
       } else {
@@ -414,18 +418,17 @@ if (targetUserId) {
     const enrichedPosts = visiblePosts.map((post: any) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
       const senderEmail = post.sender
-      const profileData = Object.values(usersMap).find((u: any) => 
-        u.email?.toLowerCase() === senderEmail?.toLowerCase()
-      );
+      const profileData = usersByEmail.get(senderEmail?.toLowerCase());
       
       let postAuthor
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
+        const { _internal_email_lookup, ...cleanProfile } = profileData
         
         postAuthor = { 
-          ...profileData,
-          first_name: profileData.first_name,
-          last_name: profileData.last_name,
+          ...cleanProfile,
+          first_name: cleanProfile.first_name,
+          last_name: cleanProfile.last_name,
           is_anonymous: isAnonymous
         }
       } else {

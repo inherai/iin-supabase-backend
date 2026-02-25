@@ -184,6 +184,7 @@ app.post('/', async (c) => {
     const enrichedUsers = users.map((u: any) => {
       const isAnonymous = u.is_anonymous === true
       const isOwner = u.uuid === user.id
+      const originalEmail = u.email
       
       return {
         uuid: u.uuid,
@@ -194,7 +195,8 @@ app.post('/', async (c) => {
         headline: (isAnonymous && !isOwner) ? null : u.headline,
         cover_image_url: (isAnonymous && !isOwner) ? null : u.cover_image_url,
         image: (isAnonymous && !isOwner) ? null : (u.image ? true : null),
-        is_anonymous: isAnonymous
+        is_anonymous: isAnonymous,
+        _internal_email_lookup: originalEmail?.toLowerCase()
       }
     })
 
