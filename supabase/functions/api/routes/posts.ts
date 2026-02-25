@@ -428,20 +428,18 @@ if (targetUserId) {
       let postAuthor
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
-        const displayName = isAnonymous ? null : (profileData.first_name || senderEmail)
         
         postAuthor = { 
-          ...profileData,
-          first_name: displayName,
+          first_name: profileData.first_name,
           last_name: profileData.last_name,
+          image: profileData.image,
           is_anonymous: isAnonymous
         }
       } else {
         postAuthor = { 
           first_name: senderEmail, 
           last_name: null, 
-          image: null, 
-          email: senderEmail,
+          image: null,
           is_anonymous: false 
         }
       }
