@@ -170,12 +170,12 @@ app.post('/feed', async (c) => {
 
     console.log('[/feed] Fetched', data?.length || 0, 'users')
 
-    const usersMap = new Map<string, any>()
+    const usersMap = new Map()
     (data || []).forEach((u) => {
       if (u.email) usersMap.set(u.email.toLowerCase(), u)
     })
 
-    const enrichedUsers = [...usersMap.values()].map((u: any) => {
+    const enrichedUsers = Array.from(usersMap.values()).map((u: any) => {
       const isAnonymous = u.is_anonymous === true
       const isOwner = u.uuid === user.id
       const originalEmail = u.email
