@@ -608,127 +608,6 @@ app.post('/', async (c) => {
   }
 })
 
-// app.put('/:id', async (c) => {
-//   try {
-//     const user = c.get('user');
-//     // נוודא שהמשתמש מחובר
-//     if (!user) return c.json({ error: "Unauthorized" }, 401);
-
-//     const supabase = c.get('supabase');
-//     const postId = c.req.param('id');
-    
-//     if (!postId) return c.json({ error: "Post ID is required" }, 400);
-
-//     let body;
-//     try {
-//       body = await c.req.json();
-//     } catch {
-//       return c.json({ error: "Invalid JSON" }, 400);
-//     }
-
-//     // 1. שליפת הפוסט הקיים כדי שנוכל להשוות אילו קבצים היו בו לפני העריכה
-//     const { data: existingPost, error: fetchError } = await supabase
-//       .from('posts')
-//       .select('attachments')
-//       .eq('id', postId)
-//       .eq('sender', user.email)
-//       .single();
-
-//     if (fetchError) {
-//       if (fetchError.code === 'PGRST116') {
-//          return c.json({ error: "Post not found or you don't have permission to edit it" }, 404);
-//       }
-//       throw fetchError;
-//     }
-
-//     // נכין את האובייקט לעדכון
-//     const updateData: any = {
-//       updated_at: new Date().toISOString(),
-//       is_edited: true
-//     };
-
-//     if (body.message !== undefined) updateData.message = body.message;
-//     if (body.subject !== undefined) updateData.subject = body.subject;
-//     if (body.post_type !== undefined) updateData.post_type = body.post_type;
-    
-//     let filesToDelete: string[] = [];
-
-//     // 2. טיפול בקבצים ומציאת אלו שהוסרו בעריכה
-//     if (body.attachments !== undefined) {
-//       const normalizedNewAttachments = normalizeAttachments(body.attachments);
-//       updateData.attachments = normalizedNewAttachments;
-
-//       const oldAttachments = existingPost.attachments || [];
-      
-//       // ניצור רשימה של המזהים החדשים (נעדיף localPath, ואם אין אז url)
-//       const newIdentifiers = normalizedNewAttachments.map((a: any) => 
-//         typeof a === 'string' ? a : (a.localPath || a.url)
-//       );
-
-//       // נעבור על הישנים - אם המזהה הישן לא נמצא ברשימה החדשה, הקובץ נמחק בעריכה
-//       for (const oldAtt of oldAttachments) {
-//         const oldIdentifier = typeof oldAtt === 'string' ? oldAtt : (oldAtt.localPath || oldAtt.url);
-        
-//         if (oldIdentifier && !newIdentifiers.includes(oldIdentifier)) {
-//           // מצאנו קובץ שנמחק! נשלוף את הנתיב שלו בבאקט
-//           let pathToStorage = typeof oldAtt === 'string' ? null : oldAtt.localPath;
-          
-//           // גיבוי: אם אין localPath (למשל בקבצים ישנים), ננסה לחלץ מה-URL
-//           if (!pathToStorage && oldAtt.url) {
-//             const urlParts = oldAtt.url.split('/attachments/');
-//             if (urlParts.length > 1) pathToStorage = urlParts[1];
-//           }
-
-//           if (pathToStorage) filesToDelete.push(pathToStorage);
-//         }
-//       }
-//     }
-
-//     const communityMembersOnlyInput = body.communityMembersOnly;
-//     if (communityMembersOnlyInput !== undefined) {
-//       if (typeof communityMembersOnlyInput !== 'boolean') {
-//         return c.json({ error: "community_members_only must be boolean" }, 400);
-//       }
-//       updateData.community_members_only = communityMembersOnlyInput;
-//     }
-
-//     // 3. ביצוע העדכון במסד הנתונים
-//     const { data, error } = await supabase
-//       .from('posts')
-//       .update(updateData)
-//       .eq('id', postId)
-//       .eq('sender', user.email)
-//       .select()
-//       .single();
-
-//     if (error) {
-//       // אם אין תוצאות, כנראה שהפוסט לא קיים או שאינו שייך למשתמש
-//       if (error.code === 'PGRST116') {
-//          return c.json({ error: "Post not found or you don't have permission to edit it" }, 404);
-//       }
-//       throw error;
-//     }
-
-//     // 4. מחיקת הקבצים הפיזיים מהבאקט אם יש כאלה
-//     if (filesToDelete.length > 0) {
-//       // הנתיבים כבר מכילים "extracted_attachments/..." ולכן זה יעבוד מושלם בבאקט "attachments"
-//       const { error: storageError } = await supabase.storage.from('attachments').remove(filesToDelete);
-//       if (storageError) {
-//         console.error("Failed to delete old files from storage:", storageError);
-//       }
-//     }
-
-//     // עדכון הווקטור אם התוכן השתנה
-//     if (body.message !== undefined || body.subject !== undefined) {
-//       updatePostVector(postId); 
-//     }
-
-//     return c.json({ success: true, data });
-
-//   } catch (err: any) {
-//     return c.json({ error: err.message }, 500);
-//   }
-// });
 
 app.put('/:id', async (c) => {
   try {
@@ -975,8 +854,131 @@ app.post('/comments', async (c) => {
   }
 })
 
-// עדכון תגובה
-// עדכון תגובה (כולל טיפול במחיקת קבצים שהוסרו בעריכה)
+// // עדכון תגובה
+// // עדכון תגובה (כולל טיפול במחיקת קבצים שהוסרו בעריכה)
+// app.put('/:postId/comments/:commentId', async (c) => {
+//   try {
+//     const user = c.get('user')
+//     if (!user) return c.json({ error: "Unauthorized" }, 401)
+
+//     const supabase = c.get('supabase')
+//     const postId = c.req.param('postId')
+//     const commentId = c.req.param('commentId')
+
+//     if (!postId) return c.json({ error: "Post ID is required" }, 400)
+//     if (!commentId) return c.json({ error: "Comment ID is required" }, 400)
+
+//     let body: any
+//     try {
+//       body = await c.req.json()
+//     } catch {
+//       return c.json({ error: "Invalid JSON" }, 400)
+//     }
+
+//     // 1) שליפת התגובה הקיימת כדי שנוכל להשוות attachments
+//     const { data: existingComment, error: fetchError } = await supabase
+//       .from('comments')
+//       .select('attachments')
+//       .eq('id', commentId)
+//       .eq('post_id', postId)
+//       .eq('sender', user.email)
+//       .single()
+
+//     if (fetchError) {
+//       if (fetchError.code === 'PGRST116') {
+//         return c.json({ error: "Comment not found or you don't have permission to edit it" }, 404)
+//       }
+//       throw fetchError
+//     }
+
+//     // 2) נכין את האובייקט לעדכון
+//     const updateData: any = {
+//       updated_at: new Date().toISOString(),
+//       is_edited: true
+//     }
+
+//     if (body.message !== undefined) updateData.message = body.message
+
+//     const communityMembersOnlyInput =
+//       body.communityMembersOnly !== undefined ? body.communityMembersOnly : body.community_members_only
+
+//     if (communityMembersOnlyInput !== undefined) {
+//       if (typeof communityMembersOnlyInput !== 'boolean') {
+//         return c.json({ error: "community_members_only must be boolean" }, 400)
+//       }
+//       updateData.community_members_only = communityMembersOnlyInput
+//     }
+
+//     // 3) טיפול בקבצים ומציאת אלו שהוסרו בעריכה (כמו בפוסט)
+//     let filesToDelete: string[] = []
+
+//     if (body.attachments !== undefined) {
+//       const normalizedNewAttachments = normalizeAttachments(body.attachments)
+//       updateData.attachments = normalizedNewAttachments
+
+//       const oldAttachments = existingComment.attachments || []
+
+//       // מזהים חדשים: נעדיף localPath ואם אין אז url
+//       const newIdentifiers = (normalizedNewAttachments || [])
+//         .map((a: any) => (typeof a === 'string' ? a : (a.localPath || a.url)))
+//         .filter(Boolean)
+
+//       // עבור כל קובץ ישן - אם לא קיים בחדשים => למחוק מהבאקט
+//       for (const oldAtt of oldAttachments) {
+//         const oldIdentifier = typeof oldAtt === 'string' ? oldAtt : (oldAtt.localPath || oldAtt.url)
+
+//         if (oldIdentifier && !newIdentifiers.includes(oldIdentifier)) {
+//           // הנתיב בבאקט (כמו אצלך בפוסט)
+//           let pathToStorage = typeof oldAtt === 'string' ? null : oldAtt.localPath
+
+//           // גיבוי: אם אין localPath אבל יש URL - נחלץ נתיב
+//           if (!pathToStorage && oldAtt?.url) {
+//             const urlParts = oldAtt.url.split('/attachments/')
+//             if (urlParts.length > 1) pathToStorage = urlParts[1]
+//           }
+
+//           if (pathToStorage) filesToDelete.push(pathToStorage)
+//         }
+//       }
+//     }
+
+//     // 4) ביצוע העדכון במסד הנתונים
+//     const { data, error } = await supabase
+//       .from('comments')
+//       .update(updateData)
+//       .eq('id', commentId)
+//       .eq('post_id', postId)
+//       .eq('sender', user.email)
+//       .select()
+//       .single()
+
+//     if (error) {
+//       if (error.code === 'PGRST116') {
+//         return c.json({ error: "Comment not found or you don't have permission to edit it" }, 404)
+//       }
+//       throw error
+//     }
+
+//     // 5) מחיקת הקבצים הפיזיים מהבאקט אם יש כאלה
+//     if (filesToDelete.length > 0) {
+//       const { error: storageError } = await supabase.storage.from('attachments').remove(filesToDelete)
+//       if (storageError) {
+//         console.error("Failed to delete old files from storage:", storageError)
+//       }
+//     }
+
+//     // 6) עדכון וקטור אם הטקסט השתנה ואיכותי
+//     if (body.message !== undefined && isQualityPost(body.message)) {
+//       updatePostVector(postId)
+//     }
+
+//     return c.json({ success: true, data })
+//   } catch (err: any) {
+//     return c.json({ error: err.message }, 500)
+//   }
+// })
+
+
 app.put('/:postId/comments/:commentId', async (c) => {
   try {
     const user = c.get('user')
@@ -996,7 +998,7 @@ app.put('/:postId/comments/:commentId', async (c) => {
       return c.json({ error: "Invalid JSON" }, 400)
     }
 
-    // 1) שליפת התגובה הקיימת כדי שנוכל להשוות attachments
+    // 1) שליפת התגובה הקיימת כדי להשוות attachments
     const { data: existingComment, error: fetchError } = await supabase
       .from('comments')
       .select('attachments')
@@ -1030,36 +1032,38 @@ app.put('/:postId/comments/:commentId', async (c) => {
       updateData.community_members_only = communityMembersOnlyInput
     }
 
-    // 3) טיפול בקבצים ומציאת אלו שהוסרו בעריכה (כמו בפוסט)
+    // 3) טיפול ב-attachments בצורה בטוחה (URL מלא ↔ path יחסי)
     let filesToDelete: string[] = []
 
     if (body.attachments !== undefined) {
-      const normalizedNewAttachments = normalizeAttachments(body.attachments)
-      updateData.attachments = normalizedNewAttachments
+      const normalizedNewAttachments = (normalizeAttachments(body.attachments) || [])
+
+      // ✅ נוודא שכל localPath נשמר כ-path יחסי בלבד
+      const cleanedNewAttachments = normalizedNewAttachments.map((a: any) => {
+        if (!a || typeof a === 'string') return a
+        const p = toStoragePath(a) // extracted_attachments/... או null
+        return p ? { ...a, localPath: p } : a
+      })
+
+      updateData.attachments = cleanedNewAttachments
 
       const oldAttachments = existingComment.attachments || []
 
-      // מזהים חדשים: נעדיף localPath ואם אין אז url
-      const newIdentifiers = (normalizedNewAttachments || [])
-        .map((a: any) => (typeof a === 'string' ? a : (a.localPath || a.url)))
-        .filter(Boolean)
+      // ✅ מזהים חדשים להשוואה: תמיד storage path
+      const newIdentifiers = cleanedNewAttachments
+        .map((a: any) => toStoragePath(a))
+        .filter(Boolean) as string[]
 
-      // עבור כל קובץ ישן - אם לא קיים בחדשים => למחוק מהבאקט
-      for (const oldAtt of oldAttachments) {
-        const oldIdentifier = typeof oldAtt === 'string' ? oldAtt : (oldAtt.localPath || oldAtt.url)
-
-        if (oldIdentifier && !newIdentifiers.includes(oldIdentifier)) {
-          // הנתיב בבאקט (כמו אצלך בפוסט)
-          let pathToStorage = typeof oldAtt === 'string' ? null : oldAtt.localPath
-
-          // גיבוי: אם אין localPath אבל יש URL - נחלץ נתיב
-          if (!pathToStorage && oldAtt?.url) {
-            const urlParts = oldAtt.url.split('/attachments/')
-            if (urlParts.length > 1) pathToStorage = urlParts[1]
+      // ✅ Fail-safe: אם לא הצלחנו לגזור מזהים חדשים, לא מוחקים כלום
+      if (newIdentifiers.length > 0) {
+        for (const oldAtt of oldAttachments) {
+          const oldPath = toStoragePath(oldAtt)
+          if (oldPath && !newIdentifiers.includes(oldPath)) {
+            filesToDelete.push(oldPath)
           }
-
-          if (pathToStorage) filesToDelete.push(pathToStorage)
         }
+      } else {
+        console.warn("Skipping deletion: could not derive storage paths from new attachments")
       }
     }
 
@@ -1080,12 +1084,10 @@ app.put('/:postId/comments/:commentId', async (c) => {
       throw error
     }
 
-    // 5) מחיקת הקבצים הפיזיים מהבאקט אם יש כאלה
+    // 5) מחיקת הקבצים הפיזיים מהבאקט (רק paths יחסיים!)
     if (filesToDelete.length > 0) {
       const { error: storageError } = await supabase.storage.from('attachments').remove(filesToDelete)
-      if (storageError) {
-        console.error("Failed to delete old files from storage:", storageError)
-      }
+      if (storageError) console.error("Failed to delete old files from storage:", storageError)
     }
 
     // 6) עדכון וקטור אם הטקסט השתנה ואיכותי
