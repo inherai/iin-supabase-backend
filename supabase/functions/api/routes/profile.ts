@@ -214,10 +214,10 @@ app.get('/', async (c) => {
       const viewerBusinessRole = user.app_metadata.role
 
       let usersData: any[] = []
-      let total = 0
-      let isAiMode = false
+      let aiTotal = 0
+      let randomTotal = 0
 
-      // ניסיון ראשון: המלצות AI דרך match_users (עם offset לפגינציה)
+      // ניסיון ראשון: המלצות AI דרך match_users
       if (!searchQuery) {
         const { data: aiMatches } = await supabase.rpc('match_users', {
           p_user_id: user.id,
@@ -227,32 +227,42 @@ app.get('/', async (c) => {
         })
 
         if (aiMatches && aiMatches.length > 0) {
+          aiTotal = parseInt(aiMatches[0].total_count) || 0
           const userIds = aiMatches.map((m: any) => m.user_id)
           const { data: fetchedUsers } = await supabase
             .from('public_users_view')
             .select('*')
             .in('uuid', userIds)
 
-          if (fetchedUsers && fetchedUsers.length > 0) {
+          if (fetchedUsers) {
             usersData = userIds
               .map((id: string) => fetchedUsers.find((u: any) => u.uuid === id))
               .filter(Boolean)
-            // total_count מה-RPC + באפר של 50 כדי שתמיד יהיה אפשר לגלול לרנדומליים
-            const aiTotal = parseInt(aiMatches[0].total_count) || 0
-            total = aiTotal + 50
-            isAiMode = true
+          }
+        } else if (offset > 0) {
+          // אם בעמוד מתקדם וה-AI נגמר, שולפים את ה-total_count מעמוד 1
+          const { data: countCheck } = await supabase.rpc('match_users', {
+            p_user_id: user.id,
+            p_threshold: 0.3,
+            p_match_count: 1,
+            p_offset: 0
+          })
+          if (countCheck && countCheck.length > 0) {
+            aiTotal = parseInt(countCheck[0].total_count) || 0
           }
         }
       }
 
-      // fallback: רנדומלי (פרופיל ריק / חיפוש טקסטואלי / נגמרו ה-AI)
-      if (!isAiMode) {
+      // השלמה: אם חסרים משתמשים להשלמת העמוד
+      const needMore = limit - usersData.length
+      if (needMore > 0) {
+        const randomOffset = Math.max(0, offset - aiTotal)
         const { data: randomUsers, error: fetchError } = await supabase
           .rpc('get_random_unconnected_users', {
             current_user_id: user.id,
             requestor_role: viewerBusinessRole,
-            page_limit: limit,
-            page_offset: offset,
+            page_limit: needMore,
+            page_offset: randomOffset,
             search_text: searchQuery
           })
 
@@ -260,9 +270,13 @@ app.get('/', async (c) => {
           return c.json({ error: fetchError.message }, 500)
         }
 
-        usersData = randomUsers || []
-        total = usersData[0]?.total_count || 0
+        if (randomUsers && randomUsers.length > 0) {
+          randomTotal = parseInt(randomUsers[0].total_count) || 0
+          usersData = [...usersData, ...randomUsers]
+        }
       }
+
+      const total = aiTotal + randomTotal
 
       const enrichedUsers = usersData.map((u: any) => {
         return {
