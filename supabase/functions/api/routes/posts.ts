@@ -357,13 +357,11 @@ if (targetUserId) {
       let author
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
-        const displayName = isAnonymous ? null : (profileData.first_name || senderEmail)
         
         author = { 
-          ...profileData,
-          id: profileData.uuid,
-          first_name: displayName,
+          first_name: profileData.first_name,
           last_name: profileData.last_name,
+          image: profileData.image,
           is_anonymous: isAnonymous
         }
       } else {
@@ -371,7 +369,6 @@ if (targetUserId) {
           first_name: senderEmail, 
           last_name: null, 
           image: null, 
-          email: senderEmail,
           is_anonymous: false 
         }
       }
