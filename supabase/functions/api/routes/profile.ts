@@ -144,19 +144,31 @@ app.post('/feed', async (c) => {
       ? body.emails.filter((e: unknown) => typeof e === 'string' && e.trim())
       : []
 
+    console.log('[/feed] Received request for', emails.length, 'emails')
+
     if (emails.length === 0) return c.json([])
 
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    )
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    
+    if (!supabaseUrl || !supabaseKey) {
+      console.error('[/feed] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
+      return c.json({ error: 'Server configuration error' }, 500)
+    }
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseKey)
 
     const { data, error } = await supabaseAdmin
       .from('users')
       .select('uuid, email, first_name, last_name, headline, cover_image_url, image, is_anonymous')
       .in('email', emails)
 
-    if (error) return c.json({ error: error.message }, 500)
+    if (error) {
+      console.error('[/feed] Error fetching users:', error)
+      return c.json({ error: error.message }, 500)
+    }
+
+    console.log('[/feed] Fetched', data?.length || 0, 'users')
 
     const usersMap = new Map<string, any>()
     (data || []).forEach((u) => {
@@ -183,6 +195,7 @@ app.post('/feed', async (c) => {
 
     return c.json(enrichedUsers)
   } catch (err: any) {
+    console.error('[/feed] Unexpected error:', err)
     return c.json({ error: err.message }, 500)
   }
 })

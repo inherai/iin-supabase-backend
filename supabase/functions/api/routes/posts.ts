@@ -329,7 +329,9 @@ if (targetUserId) {
     })
 
     if (!profileRes.ok) {
-      console.error('Failed to fetch profiles via API', await profileRes.text())
+      const errorText = await profileRes.text()
+      console.error('Failed to fetch profiles via API:', errorText)
+      console.error('Status:', profileRes.status, 'StatusText:', profileRes.statusText)
       throw new Error('Failed to fetch user profiles')
     }
 
