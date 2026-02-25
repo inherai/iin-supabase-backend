@@ -67,20 +67,6 @@ async function updatePostVector(postId: any) {
   }
 }
 
-async function ensureUserExists(supabase: any, email: string) {
-  if (!email || !email.includes('@')) return;
-  const cleanEmail = email.toLowerCase().trim();
-  const { data } = await supabase.from("users").select("email").eq("email", cleanEmail).maybeSingle();
-  if (!data) {
-    await supabase.from("users").insert({
-      uuid: crypto.randomUUID(),
-      email: cleanEmail,
-      first_name: cleanEmail.split('@')[0],
-      status: "Inactive"
-    }).ignore();
-  }
-}
-
 const RECRUITER_ROLE = 'recruiters';
 
 function isRecruiterViewer(user: any): boolean {
@@ -331,7 +317,7 @@ if (targetUserId) {
 
     const uniqueEmails = Array.from(emailsToFetch)
     const PROJECT_URL = Deno.env.get('SUPABASE_URL')
-    const PROFILE_API_URL = `${PROJECT_URL}/functions/v1/api/profile`
+    const PROFILE_API_URL = `${PROJECT_URL}/functions/v1/api/profile/feed`
 
     const profileRes = await fetch(PROFILE_API_URL, {
       method: 'POST',
@@ -348,20 +334,29 @@ if (targetUserId) {
     }
 
     const enrichedUsers = await profileRes.json()
-    const usersMap = enrichedUsers.reduce((acc: any, u: any) => ({ ...acc, [u.email?.toLowerCase()]: u }), {})
+    
+    // יצירת מפה כפולה: לפי email ולפי uuid
+    const usersByEmail = new Map()
+    const usersByUuid = new Map()
+    
+    enrichedUsers.forEach((u: any) => {
+      if (u._internal_email_lookup) usersByEmail.set(u._internal_email_lookup, u)
+      if (u.uuid) usersByUuid.set(u.uuid, u)
+    })
 
     const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
       const senderEmail = comment.sender
-      const profileData = usersMap?.[senderEmail?.toLowerCase()];
+      const profileData = usersByEmail.get(senderEmail?.toLowerCase());
       
       let author
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
+        const { _internal_email_lookup, ...cleanProfile } = profileData
         
         author = { 
-          ...profileData,
-          first_name: profileData.first_name,
-          last_name: profileData.last_name,
+          ...cleanProfile,
+          first_name: cleanProfile.first_name,
+          last_name: cleanProfile.last_name,
           is_anonymous: isAnonymous
         }
       } else {
@@ -423,16 +418,17 @@ if (targetUserId) {
     const enrichedPosts = visiblePosts.map((post: any) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
       const senderEmail = post.sender
-      const profileData = usersMap?.[senderEmail?.toLowerCase()];
+      const profileData = usersByEmail.get(senderEmail?.toLowerCase());
       
       let postAuthor
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
+        const { _internal_email_lookup, ...cleanProfile } = profileData
         
         postAuthor = { 
-          ...profileData,
-          first_name: profileData.first_name,
-          last_name: profileData.last_name,
+          ...cleanProfile,
+          first_name: cleanProfile.first_name,
+          last_name: cleanProfile.last_name,
           is_anonymous: isAnonymous
         }
       } else {
@@ -519,7 +515,6 @@ app.post('/', async (c) => {
           if (!senderEmail) continue;
           const normalizedAttachments = normalizeAttachments(msg.attachments);
 
-          await ensureUserExists(supabaseAdmin, senderEmail);
           const postId = await deterministicInt8(msg.googleThreadId);
           const messageUniqueId = msg.googleMessageId;
 
