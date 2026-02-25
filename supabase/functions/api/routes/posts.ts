@@ -234,22 +234,22 @@ function normalizeAttachments(rawAttachments: any): any[] {
   return attachmentsList
     .map((attachment) => normalizeAttachment(attachment))
     .filter((attachment) => attachment !== null);
+}
 
-    function toStoragePath(v: any): string | null {
-      if (!v) return null;
-    
-      const s = (typeof v === 'string' ? v : (v.localPath || v.url || '')).toString().trim();
-      if (!s) return null;
-    
-      // אם זה כבר path יחסי
-      if (!s.startsWith('http')) return s;
-    
-      // אם זה URL מלא - נחלץ את החלק שאחרי /attachments/
-      const parts = s.split('/attachments/');
-      if (parts.length > 1) return parts[1].trim();
-    
-      return null;
-    }
+function toStoragePath(v: any): string | null {
+  if (!v) return null;
+
+  const s = (typeof v === 'string' ? v : (v.localPath || v.url || '')).toString().trim();
+  if (!s) return null;
+
+  // אם זה כבר path יחסי
+  if (!s.startsWith('http')) return s;
+
+  // אם זה URL מלא - נחלץ את החלק שאחרי /attachments/
+  const parts = s.split('/attachments/');
+  if (parts.length > 1) return parts[1].trim();
+
+  return null;
 }
 //support all types of attachment.
 
