@@ -7,15 +7,13 @@ const corsHeaders = {
 
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
 
-// פונקציית עזר לבדיקת תוקף ההזמנה
 const isInviteExpired = (expiresAtValue: string | null) => {
-  if (!expiresAtValue) return false; // אם אין תאריך תפוגה, היא תמיד ולידית
+  if (!expiresAtValue) return false;
   const expiresAtMs = new Date(expiresAtValue).getTime();
   return expiresAtMs <= Date.now();
 };
 
 Deno.serve(async (req) => {
-  // טיפול ב-CORS עבור ה-Frontend
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -27,6 +25,22 @@ Deno.serve(async (req) => {
     });
   }
 
+  // הגדרת קליינט אדמין מראש כדי שיהיה זמין למחיקה במקרה של שגיאה
+  const supabaseAdmin = createClient(
+    Deno.env.get("SUPABASE_URL") ?? "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+  );
+
+  let currentUserId: string | null = null;
+
+  // פונקציית עזר למחיקת המשתמש מה-Auth במקרה של כישלון
+  const deleteAuthUser = async (id: string | null) => {
+    if (id) {
+      await supabaseAdmin.auth.admin.deleteUser(id);
+      console.log(`User ${id} deleted from Auth due to failed validation.`);
+    }
+  };
+
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -36,7 +50,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 1. אימות המשתמש מול ה-JWT (קבלת המייל וה-ID ישירות מסופאבייס)
     const supabaseAuth = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
@@ -44,6 +57,7 @@ Deno.serve(async (req) => {
     );
 
     const { data: authData, error: authError } = await supabaseAuth.auth.getUser();
+    
     if (authError || !authData.user) {
       return new Response(JSON.stringify({ error: "Invalid JWT token" }), {
         status: 401,
@@ -51,27 +65,20 @@ Deno.serve(async (req) => {
       });
     }
 
+    currentUserId = authData.user.id;
     const userEmailFromJwt = authData.user.email?.toLowerCase().trim();
-    const userIdFromJwt = authData.user.id;
 
-    // 2. שליפת הטוקן מה-Body שנשלח מה-Frontend (ה-Callback)
     const { invite_token } = await req.json().catch(() => ({}));
     const cleanToken = invite_token?.trim();
 
     if (!cleanToken) {
+      await deleteAuthUser(currentUserId); // מחיקה כי אין טוקן
       return new Response(JSON.stringify({ error: "invite_token is required" }), {
         status: 400,
         headers: jsonHeaders,
       });
     }
 
-    // 3. יצירת קליינט Admin (עם Service Role) לביצוע שינויים בטבלאות
-    const supabaseAdmin = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-    );
-
-    // 4. בדיקת ההזמנה בטבלת ה-invites
     const { data: invite, error: inviteError } = await supabaseAdmin
       .from("invites")
       .select("id, recipient_email, status, expires_at")
@@ -79,22 +86,23 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (inviteError || !invite) {
+      await deleteAuthUser(currentUserId); // מחיקה כי ההזמנה לא נמצאה
       return new Response(JSON.stringify({ error: "Invite not found or invalid" }), {
         status: 404,
         headers: jsonHeaders,
       });
     }
 
-    // 5. בדיקת התאמת מייל (JWT מול ההזמנה)
     if (invite.recipient_email.toLowerCase().trim() !== userEmailFromJwt) {
-      return new Response(JSON.stringify({ error: "This invite belongs to a different email" }), {
+      await deleteAuthUser(currentUserId); // מחיקה כי המייל לא תואם
+      return new Response(JSON.stringify({ error: "Email does not match this invite" }), {
         status: 403,
         headers: jsonHeaders,
       });
     }
 
-    // 6. בדיקת סטטוס ותוקף
     if (invite.status !== "pending") {
+      await deleteAuthUser(currentUserId); // מחיקה כי ההזמנה נוצלה
       return new Response(JSON.stringify({ error: "Invite has already been accepted" }), {
         status: 409,
         headers: jsonHeaders,
@@ -102,36 +110,29 @@ Deno.serve(async (req) => {
     }
 
     if (isInviteExpired(invite.expires_at)) {
+      await deleteAuthUser(currentUserId); // מחיקה כי פג תוקף
       return new Response(JSON.stringify({ error: "Invite has expired" }), {
         status: 410,
         headers: jsonHeaders,
       });
     }
 
-    // --- הכל תקין! מבצעים את השינויים ---
-
-    // 7. יצירת המשתמש בטבלת public.users
     const { error: insertError } = await supabaseAdmin
       .from("users")
-      .upsert({ // שימוש ב-upsert למניעת קריסה במקרה של Refresh
-        uuid: userIdFromJwt,
+      .upsert({
+        uuid: currentUserId,
         email: userEmailFromJwt,
         status: "onboarding",
       });
 
-    if (insertError) {
-      throw new Error(`Failed to create user profile: ${insertError.message}`);
-    }
+    if (insertError) throw insertError;
 
-    // 8. עדכון סטטוס ההזמנה
     const { error: updateError } = await supabaseAdmin
       .from("invites")
       .update({ status: "accepted" })
       .eq("token", cleanToken);
 
-    if (updateError) {
-      throw new Error(`Failed to update invite status: ${updateError.message}`);
-    }
+    if (updateError) throw updateError;
 
     return new Response(
       JSON.stringify({ message: "Registration completed", status: "onboarding" }),
@@ -139,6 +140,9 @@ Deno.serve(async (req) => {
     );
 
   } catch (error: any) {
+    // במקרה של שגיאה לא צפויה בשרת, ננסה למחוק את המשתמש ליתר ביטחון
+    if (currentUserId) await deleteAuthUser(currentUserId);
+    
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: jsonHeaders,
