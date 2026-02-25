@@ -1,5 +1,6 @@
 // supabase/functions/api/routes/profile.ts
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const app = new Hono()
 
@@ -148,13 +149,17 @@ app.post('/', async (c) => {
 
     if (emails.length === 0 && ids.length === 0) return c.json([])
 
-    const viewerBusinessRole = user.app_metadata.role
-
     const emptyResult = { data: [] as any[], error: null as any }
+
+    // כשיש מיילים - צריך service role key כדי לגשת לטבלת users ישירות
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    )
 
     const [byEmails, byIds] = await Promise.all([
       emails.length
-        ? supabase.from('public_users_view').select('*').in('email', emails)
+        ? supabaseAdmin.from('users').select('uuid, email, first_name, last_name, role, headline, cover_image_url, image, is_anonymous').in('email', emails)
         : Promise.resolve(emptyResult),
       ids.length
         ? supabase.from('public_users_view').select('*').in('uuid', ids)
@@ -166,22 +171,30 @@ app.post('/', async (c) => {
     }
 
     const usersMap = new Map<string, any>()
+    
     ;[...(byEmails.data || []), ...(byIds.data || [])].forEach((u) => {
-      usersMap.set(u.uuid || u.email, u)
+      if (u.email) {
+        usersMap.set(u.email.toLowerCase(), u)
+      } else if (u.uuid) {
+        usersMap.set(u.uuid, u)
+      }
     })
     const users = [...usersMap.values()]
 
     const enrichedUsers = users.map((u: any) => {
+      const isAnonymous = u.is_anonymous === true
+      const isOwner = u.uuid === user.id
+      
       return {
         uuid: u.uuid,
-        email: u.email,
-        first_name: u.first_name,
-        last_name: u.last_name,
+        email: (isAnonymous && !isOwner) ? null : u.email,
+        first_name: (isAnonymous && !isOwner) ? null : u.first_name,
+        last_name: (isAnonymous && !isOwner) ? null : u.last_name,
         role: u.role,
-        headline: u.headline,
-        cover_image_url: u.cover_image_url ?? null,
-        image: u.image === 'true' ? true : null,
-        is_anonymous: u.is_anonymous === true
+        headline: (isAnonymous && !isOwner) ? null : u.headline,
+        cover_image_url: (isAnonymous && !isOwner) ? null : u.cover_image_url,
+        image: (isAnonymous && !isOwner) ? null : (u.image ? true : null),
+        is_anonymous: isAnonymous
       }
     })
 

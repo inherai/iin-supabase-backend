@@ -67,20 +67,6 @@ async function updatePostVector(postId: any) {
   }
 }
 
-async function ensureUserExists(supabase: any, email: string) {
-  if (!email || !email.includes('@')) return;
-  const cleanEmail = email.toLowerCase().trim();
-  const { data } = await supabase.from("users").select("email").eq("email", cleanEmail).maybeSingle();
-  if (!data) {
-    await supabase.from("users").insert({
-      uuid: crypto.randomUUID(),
-      email: cleanEmail,
-      first_name: cleanEmail.split('@')[0],
-      status: "Inactive"
-    }).ignore();
-  }
-}
-
 const RECRUITER_ROLE = 'recruiters';
 
 function isRecruiterViewer(user: any): boolean {
@@ -348,11 +334,16 @@ if (targetUserId) {
     }
 
     const enrichedUsers = await profileRes.json()
-    const usersMap = enrichedUsers.reduce((acc: any, u: any) => ({ ...acc, [u.email?.toLowerCase()]: u }), {})
+    const usersMap = enrichedUsers.reduce((acc: any, u: any) => {
+      if (u.uuid) acc[u.uuid] = u
+      return acc
+    }, {})
 
     const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
       const senderEmail = comment.sender
-      const profileData = usersMap?.[senderEmail?.toLowerCase()];
+      const profileData = Object.values(usersMap).find((u: any) => 
+        u.email?.toLowerCase() === senderEmail?.toLowerCase()
+      );
       
       let author
       if (profileData) {
@@ -423,7 +414,9 @@ if (targetUserId) {
     const enrichedPosts = visiblePosts.map((post: any) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
       const senderEmail = post.sender
-      const profileData = usersMap?.[senderEmail?.toLowerCase()];
+      const profileData = Object.values(usersMap).find((u: any) => 
+        u.email?.toLowerCase() === senderEmail?.toLowerCase()
+      );
       
       let postAuthor
       if (profileData) {
@@ -519,7 +512,6 @@ app.post('/', async (c) => {
           if (!senderEmail) continue;
           const normalizedAttachments = normalizeAttachments(msg.attachments);
 
-          await ensureUserExists(supabaseAdmin, senderEmail);
           const postId = await deterministicInt8(msg.googleThreadId);
           const messageUniqueId = msg.googleMessageId;
 
