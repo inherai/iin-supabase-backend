@@ -348,18 +348,33 @@ if (targetUserId) {
     }
 
     const enrichedUsers = await profileRes.json()
-    const usersMap = enrichedUsers.reduce((acc: any, u: any) => ({ ...acc, [u.email.toLowerCase()]: u }), {})
+    const usersMap = enrichedUsers.reduce((acc: any, u: any) => ({ ...acc, [u.email?.toLowerCase()]: u }), {})
 
     const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
-      const profileData = usersMap?.[comment.sender?.toLowerCase()];
-      const author = profileData
-        ? { 
-            ...profileData, 
-            id: profileData.uuid, 
-            first_name: profileData.first_name, 
-            last_name: profileData.last_name 
-          }
-        : { first_name: comment.sender, last_name: null, image: null };
+      const senderEmail = comment.sender
+      const profileData = usersMap?.[senderEmail?.toLowerCase()];
+      
+      let author
+      if (profileData) {
+        const isAnonymous = profileData.is_anonymous === true
+        const displayName = isAnonymous ? null : (profileData.first_name || senderEmail)
+        
+        author = { 
+          ...profileData,
+          id: profileData.uuid,
+          first_name: displayName,
+          last_name: profileData.last_name,
+          is_anonymous: isAnonymous
+        }
+      } else {
+        author = { 
+          first_name: senderEmail, 
+          last_name: null, 
+          image: null, 
+          email: senderEmail,
+          is_anonymous: false 
+        }
+      }
 
       const commentLikes = allCommentLikes?.filter(
         (l: any) => l.target_id === comment.id.toString()
@@ -393,8 +408,9 @@ if (targetUserId) {
         }))
 
       if (!acc[comment.post_id]) acc[comment.post_id] = []
+      const { sender, ...commentWithoutSender } = comment
       acc[comment.post_id].push({
-        ...comment, // כולל sender
+        ...commentWithoutSender,
         attachments: normalizeAttachments(comment.attachments),
         author,
         likes_count: commentLikes.length,
@@ -409,14 +425,29 @@ if (targetUserId) {
 
     const enrichedPosts = visiblePosts.map((post: any) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
-      const profileData = usersMap?.[post.sender?.toLowerCase()];
-      const postAuthor = profileData
-        ? { 
-            ...profileData, 
-            first_name: profileData.first_name, 
-            last_name: profileData.last_name 
-          }
-        : { first_name: post.sender, last_name: null, image: null };
+      const senderEmail = post.sender
+      const profileData = usersMap?.[senderEmail?.toLowerCase()];
+      
+      let postAuthor
+      if (profileData) {
+        const isAnonymous = profileData.is_anonymous === true
+        const displayName = isAnonymous ? null : (profileData.first_name || senderEmail)
+        
+        postAuthor = { 
+          ...profileData,
+          first_name: displayName,
+          last_name: profileData.last_name,
+          is_anonymous: isAnonymous
+        }
+      } else {
+        postAuthor = { 
+          first_name: senderEmail, 
+          last_name: null, 
+          image: null, 
+          email: senderEmail,
+          is_anonymous: false 
+        }
+      }
 
       // ספירת ריאקציות לפי סוג
       const reactionCounts = postLikes.reduce((acc: any, like: any) => {
@@ -445,8 +476,9 @@ if (targetUserId) {
           reaction_type: l.reaction_type || 'like'
         }))
 
+      const { sender, ...postWithoutSender } = post
       return {
-        ...post, // כולל sender
+        ...postWithoutSender,
         attachments: normalizeAttachments(post.attachments),
         author: postAuthor,
         comments: commentsByPostId?.[post.id] || [],

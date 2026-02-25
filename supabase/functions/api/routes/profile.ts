@@ -181,6 +181,7 @@ app.post('/', async (c) => {
         headline: u.headline,
         cover_image_url: u.cover_image_url ?? null,
         image: u.image === 'true' ? true : null,
+        is_anonymous: u.is_anonymous === true
       }
     })
 
