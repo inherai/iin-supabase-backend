@@ -245,6 +245,11 @@ app.get('/', async (c) => {
       return c.json({ error: 'Unauthorized: You must be logged in to view profiles' }, 401)
     }
 
+    // חסימת משתמשים אנונימיים
+    if (user.app_metadata?.role === 'feed_participant') {
+      return c.json({ error: 'Access denied for anonymous users' }, 403)
+    }
+
     const targetUserId = c.req.query('id')
     const searchQuery = c.req.query('search') || null
     
