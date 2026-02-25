@@ -359,7 +359,7 @@ if (targetUserId) {
             first_name: profileData.first_name, 
             last_name: profileData.last_name 
           }
-        : { first_name: null, last_name: null, image: null, email: null };
+        : { first_name: comment.sender, last_name: null, image: null };
 
       const commentLikes = allCommentLikes?.filter(
         (l: any) => l.target_id === comment.id.toString()
@@ -416,7 +416,7 @@ if (targetUserId) {
             first_name: profileData.first_name, 
             last_name: profileData.last_name 
           }
-        : { first_name: null, last_name: null, image: null, email: null };
+        : { first_name: post.sender, last_name: null, image: null };
 
       // ספירת ריאקציות לפי סוג
       const reactionCounts = postLikes.reduce((acc: any, like: any) => {
