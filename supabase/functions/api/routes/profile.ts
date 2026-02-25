@@ -423,11 +423,13 @@ app.put('/privacy', async (c) => {
       return c.json({ error: updateError.message }, 500)
     }
 
-    // עדכון role ב-app_metadata אם המשתמש הפך לאנונימי
-    if (is_anonymous === true) {
+    // עדכון role בטבלה וב-app_metadata
+    if (typeof is_anonymous === 'boolean') {
+      const newRole = is_anonymous ? 'feed_participant' : 'community'
+
       await supabase
         .from('users')
-        .update({ role: 'feed_participant' })
+        .update({ role: newRole })
         .eq('uuid', user.id)
 
       const supabaseAdmin = createClient(
@@ -436,7 +438,7 @@ app.put('/privacy', async (c) => {
       )
 
       await supabaseAdmin.auth.admin.updateUserById(user.id, {
-        app_metadata: { role: 'feed_participant' }
+        app_metadata: { role: newRole }
       })
     }
 
