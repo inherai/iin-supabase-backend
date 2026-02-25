@@ -153,7 +153,7 @@ app.post('/feed', async (c) => {
 
     const { data, error } = await supabaseAdmin
       .from('users')
-      .select('uuid, email, first_name, last_name, role, headline, cover_image_url, image, is_anonymous')
+      .select('uuid, email, first_name, last_name, headline, cover_image_url, image, is_anonymous')
       .in('email', emails)
 
     if (error) return c.json({ error: error.message }, 500)
@@ -173,7 +173,6 @@ app.post('/feed', async (c) => {
         email: (isAnonymous && !isOwner) ? null : u.email,
         first_name: (isAnonymous && !isOwner) ? null : u.first_name,
         last_name: (isAnonymous && !isOwner) ? null : u.last_name,
-        role: (isAnonymous && !isOwner) ? null : u.role,
         headline: (isAnonymous && !isOwner) ? null : u.headline,
         cover_image_url: (isAnonymous && !isOwner) ? null : u.cover_image_url,
         image: (isAnonymous && !isOwner) ? null : (u.image ? true : null),
