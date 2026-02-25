@@ -34,5 +34,31 @@ export const authMiddleware = async (c: Context, next: Next) => {
   c.set('supabase', supabaseClient);
   c.set('user', data.user);
 
+  // חסימת feed_participant מרואוטים מסוימים
+  const role = data.user?.app_metadata?.role;
+  if (role === 'feed_participant') {
+    const path = c.req.path;
+    const allowed = [
+      '/api/me',
+      '/api/posts',
+      '/api/jobs',
+      '/api/profile/feed',
+      '/api/like',
+      '/api/companies',
+      '/api/interests',
+      '/api/work-preferences',
+      '/api/languages',
+      '/api/locations',
+      '/api/educational-institutions',
+      '/api/skills',
+      '/api/degrees',
+      '/api/fields-of-study',
+      '/api'
+    ];
+    if (!allowed.some(p => path === p || path.startsWith(p + '/'))) {
+      return c.json({ error: 'Access denied for anonymous users' }, 403);
+    }
+  }
+
   await next();
 }

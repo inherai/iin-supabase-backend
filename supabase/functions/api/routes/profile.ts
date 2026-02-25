@@ -129,10 +129,10 @@ const enrichExperience = async (experience: any[], supabase: any) => {
 
 
 // ====================================================================
-// POST /api/profile
-// מקבל רשימת אימיילים (למשל עבור ה-Feed) ומחזיר רשימת משתמשים מסוננת
+// POST /api/profile/feed
+// מקבל רשימת אימיילים (עבור ה-Feed) ומחזיר רשימת משתמשים מסוננת
 // ====================================================================
-app.post('/', async (c) => {
+app.post('/feed', async (c) => {
   try {
     const user = c.get('user')
     const supabase = c.get('supabase')
@@ -143,45 +143,27 @@ app.post('/', async (c) => {
     const emails = Array.isArray(body?.emails)
       ? body.emails.filter((e: unknown) => typeof e === 'string' && e.trim())
       : []
-    const ids = Array.isArray(body?.ids)
-      ? body.ids.filter((id: unknown) => typeof id === 'string' && id.trim())
-      : []
 
-    if (emails.length === 0 && ids.length === 0) return c.json([])
+    if (emails.length === 0) return c.json([])
 
-    const emptyResult = { data: [] as any[], error: null as any }
-
-    // כשיש מיילים - צריך service role key כדי לגשת לטבלת users ישירות
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     )
 
-    const [byEmails, byIds] = await Promise.all([
-      emails.length
-        ? supabaseAdmin.from('users').select('uuid, email, first_name, last_name, role, headline, cover_image_url, image, is_anonymous').in('email', emails)
-        : Promise.resolve(emptyResult),
-      ids.length
-        ? supabase.from('public_users_view').select('*').in('uuid', ids)
-        : Promise.resolve(emptyResult),
-    ])
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .select('uuid, email, first_name, last_name, role, headline, cover_image_url, image, is_anonymous')
+      .in('email', emails)
 
-    if (byEmails.error || byIds.error) {
-      return c.json({ error: byEmails.error?.message || byIds.error?.message }, 500)
-    }
+    if (error) return c.json({ error: error.message }, 500)
 
     const usersMap = new Map<string, any>()
-    
-    ;[...(byEmails.data || []), ...(byIds.data || [])].forEach((u) => {
-      if (u.email) {
-        usersMap.set(u.email.toLowerCase(), u)
-      } else if (u.uuid) {
-        usersMap.set(u.uuid, u)
-      }
+    (data || []).forEach((u) => {
+      if (u.email) usersMap.set(u.email.toLowerCase(), u)
     })
-    const users = [...usersMap.values()]
 
-    const enrichedUsers = users.map((u: any) => {
+    const enrichedUsers = [...usersMap.values()].map((u: any) => {
       const isAnonymous = u.is_anonymous === true
       const isOwner = u.uuid === user.id
       const originalEmail = u.email
@@ -201,6 +183,37 @@ app.post('/', async (c) => {
     })
 
     return c.json(enrichedUsers)
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+// ====================================================================
+// POST /api/profile
+// מקבל רשימת IDs ומחזיר רשימת משתמשים
+// ====================================================================
+app.post('/', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
+
+    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+    const body = await c.req.json().catch(() => ({}))
+    const ids = Array.isArray(body?.ids)
+      ? body.ids.filter((id: unknown) => typeof id === 'string' && id.trim())
+      : []
+
+    if (ids.length === 0) return c.json([])
+
+    const { data, error } = await supabase
+      .from('public_users_view')
+      .select('*')
+      .in('uuid', ids)
+
+    if (error) return c.json({ error: error.message }, 500)
+
+    return c.json(data || [])
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
@@ -437,6 +450,27 @@ app.put('/privacy', async (c) => {
 
     if (updateError) {
       return c.json({ error: updateError.message }, 500)
+    }
+
+    // עדכון role ב-app_metadata אם המשתמש הפך לאנונימי
+    if (typeof is_anonymous === 'boolean') {
+      const currentRole = user.app_metadata.role
+      
+      // רק community יכול להפוך לאנונימי
+      if (is_anonymous && currentRole !== 'community') {
+        return c.json({ error: 'Only community members can become anonymous' }, 403)
+      }
+
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      )
+
+      const newRole = is_anonymous ? 'feed_participant' : 'community'
+
+      await supabaseAdmin.auth.admin.updateUserById(user.id, {
+        app_metadata: { role: newRole }
+      })
     }
 
     return c.json({ success: true, updated: updates })

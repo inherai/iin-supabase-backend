@@ -317,7 +317,7 @@ if (targetUserId) {
 
     const uniqueEmails = Array.from(emailsToFetch)
     const PROJECT_URL = Deno.env.get('SUPABASE_URL')
-    const PROFILE_API_URL = `${PROJECT_URL}/functions/v1/api/profile`
+    const PROFILE_API_URL = `${PROJECT_URL}/functions/v1/api/profile/feed`
 
     const profileRes = await fetch(PROFILE_API_URL, {
       method: 'POST',
