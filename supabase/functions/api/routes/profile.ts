@@ -425,12 +425,10 @@ app.put('/privacy', async (c) => {
 
     // עדכון role ב-app_metadata אם המשתמש הפך לאנונימי
     if (is_anonymous === true) {
-      const currentRole = user.app_metadata.role
-      
-      // רק community יכול להפוך לאנונימי
-      if (currentRole !== 'community') {
-        return c.json({ error: 'Only community members can become anonymous' }, 403)
-      }
+      await supabase
+        .from('users')
+        .update({ role: 'feed_participant' })
+        .eq('uuid', user.id)
 
       const supabaseAdmin = createClient(
         Deno.env.get('SUPABASE_URL')!,
