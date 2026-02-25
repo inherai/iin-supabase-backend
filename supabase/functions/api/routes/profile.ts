@@ -144,46 +144,59 @@ app.post('/feed', async (c) => {
       ? body.emails.filter((e: unknown) => typeof e === 'string' && e.trim())
       : []
 
+    console.log('[/feed] Received request for', emails.length, 'emails')
+
     if (emails.length === 0) return c.json([])
 
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    )
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    
+    if (!supabaseUrl || !supabaseKey) {
+      console.error('[/feed] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
+      return c.json({ error: 'Server configuration error' }, 500)
+    }
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseKey)
 
     const { data, error } = await supabaseAdmin
       .from('users')
-      .select('uuid, email, first_name, last_name, role, headline, cover_image_url, image, is_anonymous')
+      .select('uuid, email, first_name, last_name, headline, cover_image_url, image, is_anonymous')
       .in('email', emails)
 
-    if (error) return c.json({ error: error.message }, 500)
+    if (error) {
+      console.error('[/feed] Error fetching users:', error)
+      return c.json({ error: error.message }, 500)
+    }
 
-    const usersMap = new Map<string, any>()
+    console.log('[/feed] Fetched', data?.length || 0, 'users')
+
+    const usersMap = new Map();
     (data || []).forEach((u) => {
       if (u.email) usersMap.set(u.email.toLowerCase(), u)
     })
 
-    const enrichedUsers = [...usersMap.values()].map((u: any) => {
+    const enrichedUsers = []
+    for (const u of usersMap.values()) {
       const isAnonymous = u.is_anonymous === true
       const isOwner = u.uuid === user.id
       const originalEmail = u.email
       
-      return {
+      enrichedUsers.push({
         uuid: u.uuid,
         email: (isAnonymous && !isOwner) ? null : u.email,
         first_name: (isAnonymous && !isOwner) ? null : u.first_name,
         last_name: (isAnonymous && !isOwner) ? null : u.last_name,
-        role: (isAnonymous && !isOwner) ? null : u.role,
         headline: (isAnonymous && !isOwner) ? null : u.headline,
         cover_image_url: (isAnonymous && !isOwner) ? null : u.cover_image_url,
         image: (isAnonymous && !isOwner) ? null : (u.image ? true : null),
         is_anonymous: isAnonymous,
         _internal_email_lookup: originalEmail?.toLowerCase()
-      }
-    })
+      })
+    }
 
     return c.json(enrichedUsers)
   } catch (err: any) {
+    console.error('[/feed] Unexpected error:', err)
     return c.json({ error: err.message }, 500)
   }
 })
@@ -232,6 +245,11 @@ app.get('/', async (c) => {
       return c.json({ error: 'Unauthorized: You must be logged in to view profiles' }, 401)
     }
 
+    // חסימת משתמשים אנונימיים
+    if (user.app_metadata?.role === 'feed_participant') {
+      return c.json({ error: 'Access denied for anonymous users' }, 403)
+    }
+
     const targetUserId = c.req.query('id')
     const searchQuery = c.req.query('search') || null
     
@@ -240,83 +258,36 @@ app.get('/', async (c) => {
       const page = parseInt(c.req.query('page') || '1')
       const limit = 10
       const offset = (page - 1) * limit
-      const viewerBusinessRole = user.app_metadata.role
 
-      let usersData: any[] = []
-      let aiTotal = 0
-      let randomTotal = 0
+      const { data: aiMatches, error: aiError } = await supabase.rpc('match_users', {
+        p_user_id: user.id,
+        p_threshold: 0.3,
+        p_match_count: limit,
+        p_offset: offset
+      })
 
-      // ניסיון ראשון: המלצות AI דרך match_users
-      if (!searchQuery) {
-        const { data: aiMatches, error: aiError } = await supabase.rpc('match_users', {
-          p_user_id: user.id,
-          p_threshold: 0.3,
-          p_match_count: limit,
-          p_offset: offset
+      if (aiError) {
+        return c.json({ error: aiError.message }, 500)
+      }
+
+      const total = aiMatches?.[0]?.total_count || 0
+      const userIds = (aiMatches || []).map((m: any) => m.user_id)
+
+      if (userIds.length === 0) {
+        return c.json({
+          users: [],
+          pagination: { page, limit, total: 0, totalPages: 0 }
         })
-
-        console.log('[AI] aiMatches:', aiMatches?.length || 0, 'error:', aiError)
-
-        if (aiMatches && aiMatches.length > 0) {
-          aiTotal = parseInt(aiMatches[0].total_count) || 0
-          console.log('[AI] aiTotal:', aiTotal)
-          const userIds = aiMatches.map((m: any) => m.user_id)
-          const { data: fetchedUsers } = await supabase
-            .from('public_users_view')
-            .select('*')
-            .in('uuid', userIds)
-
-          if (fetchedUsers) {
-            usersData = userIds
-              .map((id: string) => fetchedUsers.find((u: any) => u.uuid === id))
-              .filter(Boolean)
-            console.log('[AI] usersData:', usersData.length)
-          }
-        } else if (offset > 0) {
-          // אם בעמוד מתקדם וה-AI נגמר, שולפים את ה-total_count מעמוד 1
-          const { data: countCheck } = await supabase.rpc('match_users', {
-            p_user_id: user.id,
-            p_threshold: 0.3,
-            p_match_count: 1,
-            p_offset: 0
-          })
-          if (countCheck && countCheck.length > 0) {
-            aiTotal = parseInt(countCheck[0].total_count) || 0
-            console.log('[AI] aiTotal from page 1:', aiTotal)
-          }
-        }
       }
 
-      // השלמה: אם חסרים משתמשים להשלמת העמוד
-      const needMore = limit - usersData.length
-      console.log('[Random] needMore:', needMore, 'aiTotal:', aiTotal, 'offset:', offset)
-      if (needMore > 0) {
-        const randomOffset = Math.max(0, offset - aiTotal)
-        console.log('[Random] randomOffset:', randomOffset)
-        const { data: randomUsers, error: fetchError } = await supabase
-          .rpc('get_random_unconnected_users', {
-            current_user_id: user.id,
-            requestor_role: viewerBusinessRole,
-            page_limit: needMore,
-            page_offset: randomOffset,
-            search_text: searchQuery
-          })
+      const { data: fetchedUsers } = await supabase
+        .from('public_users_view')
+        .select('*')
+        .in('uuid', userIds)
 
-        console.log('[Random] randomUsers:', randomUsers?.length || 0, 'error:', fetchError)
-
-        if (fetchError) {
-          return c.json({ error: fetchError.message }, 500)
-        }
-
-        if (randomUsers && randomUsers.length > 0) {
-          randomTotal = parseInt(randomUsers[0].total_count) || 0
-          console.log('[Random] randomTotal:', randomTotal)
-          usersData = [...usersData, ...randomUsers]
-        }
-      }
-
-      const total = aiTotal + randomTotal
-      console.log('[Final] total:', total, 'usersData:', usersData.length)
+      const usersData = userIds
+        .map((id: string) => fetchedUsers?.find((u: any) => u.uuid === id))
+        .filter(Boolean)
 
       const enrichedUsers = usersData.map((u: any) => {
         return {

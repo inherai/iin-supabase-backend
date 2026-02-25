@@ -41,8 +41,10 @@ export const authMiddleware = async (c: Context, next: Next) => {
     const allowed = [
       '/api/me',
       '/api/posts',
+      '/api/summary',     
+      '/api/search-ai',    
       '/api/jobs',
-      '/api/profile/feed',
+      '/api/profile',
       '/api/like',
       '/api/companies',
       '/api/interests',
@@ -53,7 +55,9 @@ export const authMiddleware = async (c: Context, next: Next) => {
       '/api/skills',
       '/api/degrees',
       '/api/fields-of-study',
-      '/api'
+      '/api/activity',     
+      '/api/avatar',       
+      '/api/saved-resources' 
     ];
     if (!allowed.some(p => path === p || path.startsWith(p + '/'))) {
       return c.json({ error: 'Access denied for anonymous users' }, 403);
