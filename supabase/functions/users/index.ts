@@ -1,4 +1,4 @@
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,14 +7,15 @@ const corsHeaders = {
 
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
 
+// פונקציית עזר לבדיקת תוקף ההזמנה
 const isInviteExpired = (expiresAtValue: string | null) => {
-  if (!expiresAtValue) return true;
+  if (!expiresAtValue) return false; // אם אין תאריך תפוגה, היא תמיד ולידית
   const expiresAtMs = new Date(expiresAtValue).getTime();
-  if (Number.isNaN(expiresAtMs)) return true;
   return expiresAtMs <= Date.now();
 };
 
 Deno.serve(async (req) => {
+  // טיפול ב-CORS עבור ה-Frontend
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -29,78 +30,72 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      return new Response(JSON.stringify({ error: "No Authorization header" }), {
         status: 401,
         headers: jsonHeaders,
       });
     }
 
+    // 1. אימות המשתמש מול ה-JWT (קבלת המייל וה-ID ישירות מסופאבייס)
     const supabaseAuth = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } },
+      { global: { headers: { Authorization: authHeader } } }
     );
 
     const { data: authData, error: authError } = await supabaseAuth.auth.getUser();
     if (authError || !authData.user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      return new Response(JSON.stringify({ error: "Invalid JWT token" }), {
         status: 401,
         headers: jsonHeaders,
       });
     }
 
-    const normalizedUserEmail = authData.user.email?.trim()?.toLowerCase();
-    if (!normalizedUserEmail) {
-      return new Response(JSON.stringify({ error: "Email is missing in auth token" }), {
-        status: 400,
-        headers: jsonHeaders,
-      });
-    }
+    const userEmailFromJwt = authData.user.email?.toLowerCase().trim();
+    const userIdFromJwt = authData.user.id;
 
-    const body = await req.json().catch(() => ({}));
-    const inviteToken = body?.invite_token?.trim()?.toLowerCase();
+    // 2. שליפת הטוקן מה-Body שנשלח מה-Frontend (ה-Callback)
+    const { invite_token } = await req.json().catch(() => ({}));
+    const cleanToken = invite_token?.trim();
 
-    if (!inviteToken) {
+    if (!cleanToken) {
       return new Response(JSON.stringify({ error: "invite_token is required" }), {
         status: 400,
         headers: jsonHeaders,
       });
     }
 
+    // 3. יצירת קליינט Admin (עם Service Role) לביצוע שינויים בטבלאות
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
 
+    // 4. בדיקת ההזמנה בטבלת ה-invites
     const { data: invite, error: inviteError } = await supabaseAdmin
       .from("invites")
       .select("id, recipient_email, status, expires_at")
-      .eq("token", inviteToken)
+      .eq("token", cleanToken)
       .maybeSingle();
 
-    if (inviteError) {
-      return new Response(JSON.stringify({ error: inviteError.message }), {
-        status: 500,
-        headers: jsonHeaders,
-      });
-    }
-
-    if (!invite) {
-      return new Response(JSON.stringify({ error: "Invite was not found" }), {
+    if (inviteError || !invite) {
+      return new Response(JSON.stringify({ error: "Invite not found or invalid" }), {
         status: 404,
         headers: jsonHeaders,
       });
     }
 
-    if ((invite.recipient_email ?? "").toLowerCase() !== normalizedUserEmail) {
-      return new Response(JSON.stringify({ error: "Email does not match this invite" }), {
+    // 5. בדיקת התאמת מייל (JWT מול ההזמנה)
+    if (invite.recipient_email.toLowerCase().trim() !== userEmailFromJwt) {
+      return new Response(JSON.stringify({ error: "This invite belongs to a different email" }), {
         status: 403,
         headers: jsonHeaders,
       });
     }
 
+    // 6. בדיקת סטטוס ותוקף
     if (invite.status !== "pending") {
-      return new Response(JSON.stringify({ error: "Invite is no longer active" }), {
+      return new Response(JSON.stringify({ error: "Invite has already been accepted" }), {
         status: 409,
         headers: jsonHeaders,
       });
@@ -113,50 +108,36 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { error: insertUserError } = await supabaseAdmin
-      .from("users")
-      .insert([
-        {
-          uuid: authData.user.id,
-          email: normalizedUserEmail,
-          status: "onboarding",
-        },
-      ]);
+    // --- הכל תקין! מבצעים את השינויים ---
 
-    if (insertUserError) {
-      return new Response(JSON.stringify({ error: insertUserError.message }), {
-        status: 500,
-        headers: jsonHeaders,
+    // 7. יצירת המשתמש בטבלת public.users
+    const { error: insertError } = await supabaseAdmin
+      .from("users")
+      .upsert({ // שימוש ב-upsert למניעת קריסה במקרה של Refresh
+        uuid: userIdFromJwt,
+        email: userEmailFromJwt,
+        status: "onboarding",
       });
+
+    if (insertError) {
+      throw new Error(`Failed to create user profile: ${insertError.message}`);
     }
 
+    // 8. עדכון סטטוס ההזמנה
     const { error: updateError } = await supabaseAdmin
       .from("invites")
       .update({ status: "accepted" })
-      .eq("token", inviteToken)
-      .eq("status", "pending");
+      .eq("token", cleanToken);
 
     if (updateError) {
-      return new Response(JSON.stringify({ error: updateError.message }), {
-        status: 500,
-        headers: jsonHeaders,
-      });
+      throw new Error(`Failed to update invite status: ${updateError.message}`);
     }
 
     return new Response(
-      JSON.stringify({
-        message: "User created successfully",
-        user: {
-          uuid: authData.user.id,
-          email: normalizedUserEmail,
-          status: "onboarding",
-        },
-      }),
-      {
-        status: 200,
-        headers: jsonHeaders,
-      },
+      JSON.stringify({ message: "Registration completed", status: "onboarding" }),
+      { status: 200, headers: jsonHeaders }
     );
+
   } catch (error: any) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
@@ -164,4 +145,3 @@ Deno.serve(async (req) => {
     });
   }
 });
-
