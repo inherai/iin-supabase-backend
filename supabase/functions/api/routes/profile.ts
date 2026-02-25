@@ -170,17 +170,18 @@ app.post('/feed', async (c) => {
 
     console.log('[/feed] Fetched', data?.length || 0, 'users')
 
-    const usersMap = new Map()
+    const usersMap = new Map();
     (data || []).forEach((u) => {
       if (u.email) usersMap.set(u.email.toLowerCase(), u)
     })
 
-    const enrichedUsers = Array.from(usersMap.values()).map((u: any) => {
+    const enrichedUsers = []
+    for (const u of usersMap.values()) {
       const isAnonymous = u.is_anonymous === true
       const isOwner = u.uuid === user.id
       const originalEmail = u.email
       
-      return {
+      enrichedUsers.push({
         uuid: u.uuid,
         email: (isAnonymous && !isOwner) ? null : u.email,
         first_name: (isAnonymous && !isOwner) ? null : u.first_name,
@@ -190,8 +191,8 @@ app.post('/feed', async (c) => {
         image: (isAnonymous && !isOwner) ? null : (u.image ? true : null),
         is_anonymous: isAnonymous,
         _internal_email_lookup: originalEmail?.toLowerCase()
-      }
-    })
+      })
+    }
 
     return c.json(enrichedUsers)
   } catch (err: any) {
