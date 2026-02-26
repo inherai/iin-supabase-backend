@@ -396,10 +396,7 @@ app.put('/privacy', async (c) => {
   try {
     const user = c.get('user')
     const supabase = c.get('supabase')
-
-    if (!user) {
-      return c.json({ error: 'Unauthorized' }, 401)
-    }
+    if (!user) return c.json({ error: 'unauthorized' }, 401)
 
     const body = await c.req.json().catch(() => ({}))
     const { privacy_lastname, privacy_picture, privacy_contact_details, is_anonymous } = body
@@ -408,42 +405,37 @@ app.put('/privacy', async (c) => {
     if (privacy_lastname) updates.privacy_lastname = privacy_lastname
     if (privacy_picture) updates.privacy_picture = privacy_picture
     if (privacy_contact_details) updates.privacy_contact_details = privacy_contact_details
-    if (typeof is_anonymous === 'boolean') updates.is_anonymous = is_anonymous
-
-    if (Object.keys(updates).length === 0) {
-      return c.json({ error: 'No privacy settings provided' }, 400)
+    
+    // שואלים פעם אחת, ומכינים את כל הנתונים
+    if (typeof is_anonymous === 'boolean') {
+      updates.is_anonymous = is_anonymous
+      updates.role = is_anonymous ? 'feed_participant' : 'community'
     }
 
+    if (Object.keys(updates).length === 0) {
+      return c.json({ error: 'no privacy settings provided' }, 400)
+    }
+
+    // עדכון אחד ב-DB (מפעיל את הטריגר בצורה מושלמת)
     const { error: updateError } = await supabase
       .from('users')
       .update(updates)
       .eq('uuid', user.id)
 
-    if (updateError) {
-      return c.json({ error: updateError.message }, 500)
-    }
+    if (updateError) return c.json({ error: updateError.message }, 500)
 
-    // עדכון role בטבלה וב-app_metadata
-    if (typeof is_anonymous === 'boolean') {
-      const newRole = is_anonymous ? 'feed_participant' : 'community'
-
-      await supabase
-        .from('users')
-        .update({ role: newRole })
-        .eq('uuid', user.id)
-
+    // אם עדכנו אנונימיות, נעדכן גם את ה-metadata של ה-auth
+    if (updates.role) {
       const supabaseAdmin = createClient(
         Deno.env.get('SUPABASE_URL')!,
         Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
       )
-
       await supabaseAdmin.auth.admin.updateUserById(user.id, {
-        app_metadata: { role: newRole }
+        app_metadata: { role: updates.role }
       })
     }
 
     return c.json({ success: true, updated: updates })
-
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
