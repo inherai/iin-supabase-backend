@@ -2,8 +2,7 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 
 const app = new Hono();
 
-// GET /api/chat
-// Return all conversations for the current user (inbox list)
+// GET /api/chat - רשימת שיחות עם אינדיקציה לחיבור
 app.get("/", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
@@ -15,17 +14,26 @@ app.get("/", async (c) => {
     .select(`
       *,
       user1:public_users_view!user1_id(uuid, first_name, last_name, image, headline),
-      user2:public_users_view!user2_id(uuid, first_name, last_name, image, headline)
+      user2:public_users_view!user2_id(uuid, first_name, last_name, image, headline),
+      # כאן אנחנו מוסיפים בדיקה של הקשר
+      connection:connections!inner(status) 
     `)
+    // אנחנו צריכים לוודא שה-Join של הקשר מתאים למשתמשים בשיחה
     .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
     .order("updated_at", { ascending: false });
 
   if (error) return c.json({ error: error.message }, 400);
-  return c.json(data ?? []);
+
+  // הוספת שדה בוליאני פשוט לכל שיחה כדי להקל על ה-Frontend
+  const enhancedData = data?.map(conv => ({
+    ...conv,
+    is_connection_active: conv.connection?.status === 'accepted'
+  }));
+
+  return c.json(enhancedData ?? []);
 });
 
-// POST /api/chat
-// Accept partner_id and create/find a conversation
+// POST /api/chat - יצירת שיחה
 app.post("/", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
@@ -35,37 +43,30 @@ app.post("/", async (c) => {
   const body = await c.req.json().catch(() => null);
   const partnerId = body?.partner_id;
 
-  if (!partnerId || typeof partnerId !== "string") {
-    return c.json({ error: "partner_id is required" }, 400);
-  }
+  if (!partnerId) return c.json({ error: "partner_id is required" }, 400);
 
+  // 1. בדיקה מהירה אם קיים קשר מאושר
   const { data: connection, error: connError } = await supabase
     .from("connections")
     .select("status")
-    .or(
-      `and(requester_id.eq.${user.id},receiver_id.eq.${partnerId}),and(requester_id.eq.${partnerId},receiver_id.eq.${user.id})`,
-    )
+    .or(`and(requester_id.eq.${user.id},receiver_id.eq.${partnerId}),and(requester_id.eq.${partnerId},receiver_id.eq.${user.id})`)
     .eq("status", "accepted")
     .maybeSingle();
 
   if (connError || !connection) {
-    return c.json(
-      { error: "You can only start a conversation with an accepted connection" },
-      403,
-    );
+    return c.json({ error: "No accepted connection found" }, 403);
   }
 
-  // Keep participant ordering stable to avoid duplicates.
   const [u1, u2] = [user.id, partnerId].sort();
 
-  const { data: existing, error: existingError } = await supabase
+  // 2. מציאת או יצירת שיחה
+  const { data: existing, error: findError } = await supabase
     .from("conversations")
     .select("*")
     .eq("user1_id", u1)
     .eq("user2_id", u2)
     .maybeSingle();
 
-  if (existingError) return c.json({ error: existingError.message }, 400);
   if (existing) return c.json(existing);
 
   const { data: newConv, error: createError } = await supabase
