@@ -3,40 +3,87 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Context, Next } from 'https://deno.land/x/hono/mod.ts'
 
 export const authMiddleware = async (c: Context, next: Next) => {
-  // 1. דילוג מהיר על בקשות CORS Preflight (חוסך זמן ומשאבים)
+  // 1. דילוג מהיר על בקשות CORS Preflight
   if (c.req.method === 'OPTIONS') {
     return await next();
   }
 
   const authHeader = c.req.header('Authorization');
   
-  let supabaseClient;
-  let user = null;
-
-  if (authHeader) {
-    // --- תרחיש א': יש טוקן ---
-    supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    );
-    
-    // בדיקה מהירה: האם הטוקן באמת תקין?
-    const { data, error } = await supabaseClient.auth.getUser();
-    if (!error && data.user) {
-        user = data.user;
-    }
-  } else {
-    // --- תרחיש ב': אין טוקן ---
-    supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? ''
-    );
+  // --- עצירה מוקדמת: אין טוקן בכלל ---
+  if (!authHeader) {
+    return c.json({ error: 'Unauthorized: Missing authentication token' }, 401);
   }
 
-  // הזרקה לקונטקסט
+  // יש טוקן - ניצור קליינט של סופאבייס
+  const supabaseClient = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+    { global: { headers: { Authorization: authHeader } } }
+  );
+  
+  // בדיקה מול סופאבייס: האם הטוקן באמת תקין ולא פג תוקף?
+  const { data, error } = await supabaseClient.auth.getUser();
+  
+  // --- עצירה מוקדמת: הטוקן מזויף, שגוי או פג תוקף ---
+  if (error || !data.user) {
+    return c.json({ error: 'Unauthorized: Invalid or expired token' }, 401);
+  }
+
+  // בדיקה אם המשתמש קיים בטבלת users
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  );
+
+  const { data: userRecord, error: userError } = await supabaseAdmin
+    .from('users')
+    .select('uuid')
+    .eq('uuid', data.user.id)
+    .maybeSingle();
+
+  if (userError) {
+    return c.json({ error: 'Database error' }, 500);
+  }
+
+  if (!userRecord) {
+    await supabaseAdmin.auth.admin.deleteUser(data.user.id);
+    return c.json({ error: 'User not found, deleted from auth' }, 404);
+  }
+
+  // הכל תקין! מזריקים לקונטקסט וממשיכים הלאה
   c.set('supabase', supabaseClient);
-  c.set('user', user);
+  c.set('user', data.user);
+
+  // חסימת feed_participant מרואוטים מסוימים
+  const role = data.user?.app_metadata?.role;
+  if (role === 'feed_participant') {
+    const path = c.req.path;
+    const allowed = [
+      '/api/me',
+      '/api/posts',
+      '/api/summary',     
+      '/api/search-ai',    
+      '/api/jobs',
+      '/api/profile',
+      '/api/like',
+      '/api/companies',
+      '/api/interests',
+      '/api/work-preferences',
+      '/api/languages',
+      '/api/locations',
+      '/api/educational-institutions',
+      '/api/skills',
+      '/api/degrees',
+      '/api/fields-of-study',
+      '/api/activity',     
+      '/api/avatar',       
+      '/api/saved-resources' 
+    ];
+    if (!allowed.some(p => path === p || path.startsWith(p + '/'))) {
+      return c.json({ error: 'Access denied for anonymous users' }, 403);
+    }
+  }
 
   await next();
 }

@@ -61,12 +61,14 @@ app.post('/', async (c) => {
     // אתחול OpenAI
     const openai = new OpenAI({ apiKey: Deno.env.get("TEST_OPENAI_API_KEY") });
     
-    // שים לב: כאן אנחנו יוצרים קליינט חדש עם Service Role 
-    // כדי שיהיה אפשר לחפש בכל הדאטה בייס ללא מגבלות משתמש רגיל
-    const supabase = createClient(
+    // קליינט אדמין - רק לחיפוש ווקטורי שדורש עקיפת הרשאות
+    const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
+    
+    // קליינט של המשתמש המחובר - שומר על ה-auth.uid() לטובת ה-View!
+    const supabaseUser = c.get('supabase');
     const currentUser = c.get('user');
     const viewerIsRecruiter = isRecruiterViewer(currentUser);
 
@@ -107,7 +109,7 @@ app.post('/', async (c) => {
     });
     const queryVector = emb.data[0].embedding;
 
-    const { data: rawMatches, error: rpcError } = await supabase.rpc('match_posts', {
+    const { data: rawMatches, error: rpcError } = await supabaseAdmin.rpc('match_posts', {
       query_embedding: queryVector,
       similarity_threshold: dynamicThreshold, 
       match_limit: FETCH_K_SQL
@@ -159,8 +161,8 @@ app.post('/', async (c) => {
              if (p.sender) emailsToFetch.add(p.sender);
         });
 
-        // 2. שולפים תגובות
-        const { data: comments, error: commentsError } = await supabase
+        // 2. שולפים תגובות דרך המשתמש
+        const { data: comments, error: commentsError } = await supabaseUser
           .from('comments')
           .select('*')
           .in('post_id', postIds)
@@ -177,22 +179,38 @@ app.post('/', async (c) => {
             if (c.sender) emailsToFetch.add(c.sender);
         });
 
-        // 3. שולפים משתמשים (Users)
-        const { data: users, error: usersError } = await supabase
-            .from('users')
-            .select('uuid, email, name, image, role')
+        // 3. שולפים משתמשים דרך המשתמש (כדי שה-View יידע מי מחפש!)
+        const { data: users, error: usersError } = await supabaseUser
+            .from('public_users_view')
+            .select('uuid, email, first_name, last_name, image, role, headline')
             .in('email', Array.from(emailsToFetch));
 
         if (usersError) throw usersError;
 
         // 4. יוצרים מפה של משתמשים
         const usersMap = users?.reduce((acc: any, user: any) => {
-            if (user.email) acc[user.email] = user;
+            if (user.email) {
+                // בונים את השם המלא!
+                const displayName = user.first_name
+                  ? (user.last_name ? `${user.first_name} ${user.last_name}` : user.first_name)
+                  : (user.email || 'Anonymous User');
+
+                acc[user.email] = {
+                    uuid: user.uuid,
+                    email: user.email,
+                    name: displayName,
+                    first_name: user.first_name,
+                    last_name: user.last_name,
+                    image: user.image === 'true' ? true : null,
+                    role: user.role,
+                    headline: user.headline
+                };
+            }
             return acc;
         }, {} as Record<string, any>);
 
         const getAuthor = (email: string) => usersMap?.[email] || { 
-            uuid: null, email: email, name: email || 'Unknown', image: null, role: 'unknown' 
+            uuid: null, email: email, name: email || 'Unknown', first_name: email || 'Unknown', last_name: null, image: null, role: 'unknown' 
         };
 
         // 5. מחברים משתמשים לתגובות ומסדרים לפי פוסט
@@ -230,7 +248,7 @@ app.post('/', async (c) => {
     // =================================================================
     // שלב 5: יצירת תשובה
     // =================================================================
-    const chat = await openai.chat.completions.create({
+      const chat = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },

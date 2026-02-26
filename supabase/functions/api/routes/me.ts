@@ -151,9 +151,7 @@ app.put('/', async (c) => {
     .eq('uuid', user.id)
     .single()
 
-  // אובייקט העדכון - ללא השדה image!
   const updateData = {
-    name: `${profileData.first_name} ${profileData.last_name}`,
     first_name: profileData.first_name,
     last_name: profileData.last_name,
     phone: profileData.phone,

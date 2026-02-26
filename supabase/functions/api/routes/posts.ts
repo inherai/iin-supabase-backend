@@ -67,37 +67,6 @@ async function updatePostVector(postId: any) {
   }
 }
 
-async function ensureUserExists(supabase: any, email: string) {
-  if (!email || !email.includes('@')) return;
-  const cleanEmail = email.toLowerCase().trim();
-  const { data } = await supabase.from("users").select("email").eq("email", cleanEmail).maybeSingle();
-  if (!data) {
-    await supabase.from("users").insert({
-      uuid: crypto.randomUUID(),
-      email: cleanEmail,
-      name: cleanEmail.split('@')[0],
-      status: "Inactive"
-    }).ignore();
-  }
-}
-
-// מחזירה Author בלי email
-function toAuthor(profileData: any, fallbackEmail: string) {
-  if (profileData) {
-    return {
-      uuid: profileData.uuid,
-      name: profileData.name,
-      image: profileData.image ?? null,
-      role: profileData.role,
-      headline: profileData.headline
-    };
-  }
-  return {
-    name: fallbackEmail,
-    image: null
-  };
-}
-
 const RECRUITER_ROLE = 'recruiters';
 
 function isRecruiterViewer(user: any): boolean {
@@ -266,6 +235,22 @@ function normalizeAttachments(rawAttachments: any): any[] {
     .map((attachment) => normalizeAttachment(attachment))
     .filter((attachment) => attachment !== null);
 }
+
+function toStoragePath(v: any): string | null {
+  if (!v) return null;
+
+  const s = (typeof v === 'string' ? v : (v.localPath || v.url || '')).toString().trim();
+  if (!s) return null;
+
+  // אם זה כבר path יחסי
+  if (!s.startsWith('http')) return s;
+
+  // אם זה URL מלא - נחלץ את החלק שאחרי /attachments/
+  const parts = s.split('/attachments/');
+  if (parts.length > 1) return parts[1].trim();
+
+  return null;
+}
 //support all types of attachment.
 
 // ====================================================================
@@ -283,11 +268,27 @@ app.get('/', async (c) => {
     const last_id = c.req.query('last_id')
     const session_start = c.req.query('session_start') || new Date().toISOString()
 
+    const targetUserId = c.req.query('userid') // ה-ID שקיבלנו ב-Query
+    let filterEmail = null
+
+if (targetUserId) {
+      const { data: email, error: emailError } = await supabase
+        .rpc('get_user_email_by_uuid', { p_uuid: targetUserId })
+
+      if (emailError || !email) {
+        console.error("Error fetching email:", emailError)
+        // אם לא מצאנו אימייל למשתמש הזה, נחזיר פיד ריק
+        return c.json({ data: [], meta: { next_cursor: null } })
+      }
+      filterEmail = email
+    }
+
     const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
       p_session_start: session_start,
       p_last_effective_date: last_effective_date || null,
       p_last_id: last_id || null,
-      p_limit: 25
+      p_limit: 25,
+      p_filter_email: filterEmail
     })
 
     if (postsError) throw postsError
@@ -332,7 +333,7 @@ app.get('/', async (c) => {
 
     const uniqueEmails = Array.from(emailsToFetch)
     const PROJECT_URL = Deno.env.get('SUPABASE_URL')
-    const PROFILE_API_URL = `${PROJECT_URL}/functions/v1/api/profile`
+    const PROFILE_API_URL = `${PROJECT_URL}/functions/v1/api/profile/feed`
 
     const profileRes = await fetch(PROFILE_API_URL, {
       method: 'POST',
@@ -344,18 +345,46 @@ app.get('/', async (c) => {
     })
 
     if (!profileRes.ok) {
-      console.error('Failed to fetch profiles via API', await profileRes.text())
+      const errorText = await profileRes.text()
+      console.error('Failed to fetch profiles via API:', errorText)
+      console.error('Status:', profileRes.status, 'StatusText:', profileRes.statusText)
       throw new Error('Failed to fetch user profiles')
     }
 
     const enrichedUsers = await profileRes.json()
-    const usersMap = enrichedUsers.reduce((acc: any, u: any) => ({ ...acc, [u.email.toLowerCase()]: u }), {})
+    
+    // יצירת מפה כפולה: לפי email ולפי uuid
+    const usersByEmail = new Map()
+    const usersByUuid = new Map()
+    
+    enrichedUsers.forEach((u: any) => {
+      if (u._internal_email_lookup) usersByEmail.set(u._internal_email_lookup, u)
+      if (u.uuid) usersByUuid.set(u.uuid, u)
+    })
 
     const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
-      const profileData = usersMap?.[comment.sender?.toLowerCase()];
-      const author = profileData
-        ? { ...profileData,id: profileData.uuid, name: profileData.name || '' }
-        : { name: comment.sender, image: null };
+      const senderEmail = comment.sender
+      const profileData = usersByEmail.get(senderEmail?.toLowerCase());
+      
+      let author
+      if (profileData) {
+        const isAnonymous = profileData.is_anonymous === true
+        const { _internal_email_lookup, ...cleanProfile } = profileData
+        
+        author = { 
+          ...cleanProfile,
+          first_name: cleanProfile.first_name,
+          last_name: cleanProfile.last_name,
+          is_anonymous: isAnonymous
+        }
+      } else {
+        author = { 
+          first_name: senderEmail, 
+          last_name: null, 
+          image: null, 
+          is_anonymous: false 
+        }
+      }
 
       const commentLikes = allCommentLikes?.filter(
         (l: any) => l.target_id === comment.id.toString()
@@ -389,8 +418,9 @@ app.get('/', async (c) => {
         }))
 
       if (!acc[comment.post_id]) acc[comment.post_id] = []
+      const { sender, ...commentWithoutSender } = comment
       acc[comment.post_id].push({
-        ...comment, // כולל sender
+        ...commentWithoutSender,
         attachments: normalizeAttachments(comment.attachments),
         author,
         likes_count: commentLikes.length,
@@ -405,10 +435,28 @@ app.get('/', async (c) => {
 
     const enrichedPosts = visiblePosts.map((post: any) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
-      const profileData = usersMap?.[post.sender?.toLowerCase()];
-      const postAuthor = profileData
-        ? { ...profileData, name: profileData.name || '' }
-        : { name: post.sender, image: null };
+      const senderEmail = post.sender
+      const profileData = usersByEmail.get(senderEmail?.toLowerCase());
+      
+      let postAuthor
+      if (profileData) {
+        const isAnonymous = profileData.is_anonymous === true
+        const { _internal_email_lookup, ...cleanProfile } = profileData
+        
+        postAuthor = { 
+          ...cleanProfile,
+          first_name: cleanProfile.first_name,
+          last_name: cleanProfile.last_name,
+          is_anonymous: isAnonymous
+        }
+      } else {
+        postAuthor = { 
+          first_name: senderEmail, 
+          last_name: null, 
+          image: null,
+          is_anonymous: false 
+        }
+      }
 
       // ספירת ריאקציות לפי סוג
       const reactionCounts = postLikes.reduce((acc: any, like: any) => {
@@ -437,8 +485,9 @@ app.get('/', async (c) => {
           reaction_type: l.reaction_type || 'like'
         }))
 
+      const { sender, ...postWithoutSender } = post
       return {
-        ...post, // כולל sender
+        ...postWithoutSender,
         attachments: normalizeAttachments(post.attachments),
         author: postAuthor,
         comments: commentsByPostId?.[post.id] || [],
@@ -484,7 +533,6 @@ app.post('/', async (c) => {
           if (!senderEmail) continue;
           const normalizedAttachments = normalizeAttachments(msg.attachments);
 
-          await ensureUserExists(supabaseAdmin, senderEmail);
           const postId = await deterministicInt8(msg.googleThreadId);
           const messageUniqueId = msg.googleMessageId;
 
@@ -560,6 +608,186 @@ app.post('/', async (c) => {
   }
 })
 
+
+app.put('/:id', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ error: "Unauthorized" }, 401)
+
+    const supabase = c.get('supabase')
+    const postId = c.req.param('id')
+
+    if (!postId) return c.json({ error: "Post ID is required" }, 400)
+
+    let body: any
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: "Invalid JSON" }, 400)
+    }
+
+    // 1) שליפת הפוסט הקיים כדי להשוות attachments
+    const { data: existingPost, error: fetchError } = await supabase
+      .from('posts')
+      .select('attachments')
+      .eq('id', postId)
+      .eq('sender', user.email)
+      .single()
+
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        return c.json({ error: "Post not found or you don't have permission to edit it" }, 404)
+      }
+      throw fetchError
+    }
+
+    // 2) הכנת אובייקט עדכון
+    const updateData: any = {
+      updated_at: new Date().toISOString(),
+      is_edited: true
+    }
+
+    if (body.message !== undefined) updateData.message = body.message
+    if (body.subject !== undefined) updateData.subject = body.subject
+    if (body.post_type !== undefined) updateData.post_type = body.post_type
+
+    const communityMembersOnlyInput = body.communityMembersOnly
+    if (communityMembersOnlyInput !== undefined) {
+      if (typeof communityMembersOnlyInput !== 'boolean') {
+        return c.json({ error: "community_members_only must be boolean" }, 400)
+      }
+      updateData.community_members_only = communityMembersOnlyInput
+    }
+
+    // 3) טיפול ב-attachments בצורה בטוחה (URL מלא ↔ path יחסי)
+    let filesToDelete: string[] = []
+
+    if (body.attachments !== undefined) {
+      const normalizedNewAttachments = (normalizeAttachments(body.attachments) || [])
+
+      // ✅ נוודא שכל localPath נשמר כ-path יחסי בלבד (extracted_attachments/...)
+      const cleanedNewAttachments = normalizedNewAttachments.map((a: any) => {
+        if (!a || typeof a === 'string') return a
+
+        const p = toStoragePath(a) // מחזיר extracted_attachments/... או null
+        if (p) return { ...a, localPath: p }
+        return a
+      })
+
+      updateData.attachments = cleanedNewAttachments
+
+      const oldAttachments = existingPost.attachments || []
+
+      const newIdentifiers = cleanedNewAttachments
+        .map((a: any) => toStoragePath(a))
+        .filter(Boolean) as string[]
+
+      // ✅ Fail-safe: אם אי אפשר לגזור מזהים חדשים, לא מוחקים כלום
+      if (newIdentifiers.length > 0) {
+        for (const oldAtt of oldAttachments) {
+          const oldPath = toStoragePath(oldAtt)
+          if (oldPath && !newIdentifiers.includes(oldPath)) {
+            filesToDelete.push(oldPath)
+          }
+        }
+      } else {
+        console.warn("Skipping deletion: could not derive storage paths from new attachments")
+      }
+    }
+
+    // 4) עדכון DB
+    const { data, error } = await supabase
+      .from('posts')
+      .update(updateData)
+      .eq('id', postId)
+      .eq('sender', user.email)
+      .select()
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return c.json({ error: "Post not found or you don't have permission to edit it" }, 404)
+      }
+      throw error
+    }
+
+    // 5) מחיקה פיזית של קבצים שהוסרו (רק paths יחסיים!)
+    if (filesToDelete.length > 0) {
+      const { error: storageError } = await supabase.storage.from('attachments').remove(filesToDelete)
+      if (storageError) console.error("Failed to delete old files from storage:", storageError)
+    }
+
+    // 6) עדכון וקטור אם טקסט השתנה
+    if (body.message !== undefined || body.subject !== undefined) {
+      updatePostVector(postId)
+    }
+
+    return c.json({ success: true, data })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+
+app.delete('/:id', async (c) => {
+  try {
+    const user = c.get('user');
+    // נוודא שהמשתמש מחובר
+    if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+    const supabase = c.get('supabase');
+    const postId = c.req.param('id');
+    
+    if (!postId) return c.json({ error: "Post ID is required" }, 400);
+
+    // 1. מחיקה מהדאטהבייס עם select().single() כדי לקבל את הפוסט שנמחק
+    const { data: deletedPost, error } = await supabase
+      .from('posts')
+      .delete()
+      .eq('id', postId)
+      .eq('sender', user.email)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+         return c.json({ error: "Post not found or you don't have permission to delete it" }, 404);
+      }
+      throw error;
+    }
+
+    // 2. מחיקת כל הקבצים של הפוסט מהבאקט
+    if (deletedPost && deletedPost.attachments && deletedPost.attachments.length > 0) {
+      const filesToDelete = deletedPost.attachments
+        .map((a: any) => {
+          if (typeof a === 'string') return null;
+          
+          // הכי בטוח ומהיר - להשתמש ב-localPath
+          if (a.localPath) return a.localPath;
+          
+          // גיבוי למקרה שאין localPath אבל יש URL
+          if (a.url) {
+            const parts = a.url.split('/attachments/');
+            return parts.length > 1 ? parts[1] : null;
+          }
+          
+          return null;
+        })
+        .filter(Boolean); // מסנן ערכים ריקים
+
+      if (filesToDelete.length > 0) {
+        const { error: storageError } = await supabase.storage.from('attachments').remove(filesToDelete);
+        if (storageError) console.error("Failed to delete files on post deletion:", storageError);
+      }
+    }
+
+    return c.json({ success: true, message: "Post and files deleted successfully" });
+
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+})
+
 app.post('/comments', async (c) => {
   try {
     const supabase = c.get('supabase')
@@ -567,7 +795,7 @@ app.post('/comments', async (c) => {
     const postId = c.req.query('id')
     const { message, attachments, community_members_only, communityMembersOnly } = await c.req.json()
     const communityMembersOnlyInput =
-      community_members_only !== undefined ? community_members_only : communityMembersOnly
+    communityMembersOnly !== undefined ? communityMembersOnly : community_members_only
 
     if (!user) return c.json({ error: "Unauthorized" }, 401)
     if (!postId) return c.json({ error: "Post ID query param is required" }, 400)
@@ -595,10 +823,10 @@ app.post('/comments', async (c) => {
 
     if (commentError) throw commentError
 
-    // 2. שליפת ה-uuid וה-name מטבלת users לפי המייל
+    // 2. שליפת ה-uuid וה-first_name, last_name מטבלת public_users_view לפי המייל
     const { data: userData, error: userError } = await supabase
-      .from('users')
-      .select('uuid, name') // הוספנו כאן את name
+      .from('public_users_view')
+      .select('uuid, first_name, last_name')
       .eq('email', user.email)
       .single()
 
@@ -615,7 +843,8 @@ app.post('/comments', async (c) => {
         ...commentData,
         author: {
           id: userData.uuid,
-          name: userData.name // הוספנו את השם כאן
+          first_name: userData.first_name,
+          last_name: userData.last_name
         }
       } 
     })
@@ -624,4 +853,195 @@ app.post('/comments', async (c) => {
     return c.json({ error: err.message }, 500)
   }
 })
+
+// // עדכון תגובה
+// // עדכון תגובה (כולל טיפול במחיקת קבצים שהוסרו בעריכה)
+app.put('/:postId/comments/:commentId', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ error: "Unauthorized" }, 401)
+
+    const supabase = c.get('supabase')
+    const postId = c.req.param('postId')
+    const commentId = c.req.param('commentId')
+
+    if (!postId) return c.json({ error: "Post ID is required" }, 400)
+    if (!commentId) return c.json({ error: "Comment ID is required" }, 400)
+
+    let body: any
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: "Invalid JSON" }, 400)
+    }
+
+    // 1) שליפת התגובה הקיימת כדי להשוות attachments
+    const { data: existingComment, error: fetchError } = await supabase
+      .from('comments')
+      .select('attachments')
+      .eq('id', commentId)
+      .eq('post_id', postId)
+      .eq('sender', user.email)
+      .single()
+
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        return c.json({ error: "Comment not found or you don't have permission to edit it" }, 404)
+      }
+      throw fetchError
+    }
+
+    // 2) נכין את האובייקט לעדכון
+    const updateData: any = {
+      updated_at: new Date().toISOString(),
+      is_edited: true
+    }
+
+    if (body.message !== undefined) updateData.message = body.message
+
+    const communityMembersOnlyInput =
+      body.communityMembersOnly !== undefined ? body.communityMembersOnly : body.community_members_only
+
+    if (communityMembersOnlyInput !== undefined) {
+      if (typeof communityMembersOnlyInput !== 'boolean') {
+        return c.json({ error: "community_members_only must be boolean" }, 400)
+      }
+      updateData.community_members_only = communityMembersOnlyInput
+    }
+
+    // 3) טיפול ב-attachments בצורה בטוחה (URL מלא ↔ path יחסי)
+    let filesToDelete: string[] = []
+
+    if (body.attachments !== undefined) {
+      const normalizedNewAttachments = (normalizeAttachments(body.attachments) || [])
+
+      // ✅ נוודא שכל localPath נשמר כ-path יחסי בלבד
+      const cleanedNewAttachments = normalizedNewAttachments.map((a: any) => {
+        if (!a || typeof a === 'string') return a
+        const p = toStoragePath(a) // extracted_attachments/... או null
+        return p ? { ...a, localPath: p } : a
+      })
+
+      updateData.attachments = cleanedNewAttachments
+
+      const oldAttachments = existingComment.attachments || []
+
+      // ✅ מזהים חדשים להשוואה: תמיד storage path
+      const newIdentifiers = cleanedNewAttachments
+        .map((a: any) => toStoragePath(a))
+        .filter(Boolean) as string[]
+
+      // ✅ Fail-safe: אם לא הצלחנו לגזור מזהים חדשים, לא מוחקים כלום
+      if (newIdentifiers.length > 0) {
+        for (const oldAtt of oldAttachments) {
+          const oldPath = toStoragePath(oldAtt)
+          if (oldPath && !newIdentifiers.includes(oldPath)) {
+            filesToDelete.push(oldPath)
+          }
+        }
+      } else {
+        console.warn("Skipping deletion: could not derive storage paths from new attachments")
+      }
+    }
+
+    // 4) ביצוע העדכון במסד הנתונים
+    const { data, error } = await supabase
+      .from('comments')
+      .update(updateData)
+      .eq('id', commentId)
+      .eq('post_id', postId)
+      .eq('sender', user.email)
+      .select()
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return c.json({ error: "Comment not found or you don't have permission to edit it" }, 404)
+      }
+      throw error
+    }
+
+    // 5) מחיקת הקבצים הפיזיים מהבאקט (רק paths יחסיים!)
+    if (filesToDelete.length > 0) {
+      const { error: storageError } = await supabase.storage.from('attachments').remove(filesToDelete)
+      if (storageError) console.error("Failed to delete old files from storage:", storageError)
+    }
+
+    // 6) עדכון וקטור אם הטקסט השתנה ואיכותי
+    if (body.message !== undefined && isQualityPost(body.message)) {
+      updatePostVector(postId)
+    }
+
+    return c.json({ success: true, data })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+// מחיקת תגובה
+app.delete('/:postId/comments/:commentId', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ error: "Unauthorized" }, 401)
+
+    const supabase = c.get('supabase')
+    const postId = c.req.param('postId')
+    const commentId = c.req.param('commentId')
+
+    if (!postId) return c.json({ error: "Post ID is required" }, 400)
+    if (!commentId) return c.json({ error: "Comment ID is required" }, 400)
+
+    // 1) מוחקים ומחזירים את השורה כדי שנוכל למחוק קבצים מהבאקט
+    const { data: deletedComment, error } = await supabase
+      .from('comments')
+      .delete()
+      .eq('id', commentId)
+      .eq('post_id', postId)
+      .eq('sender', user.email)
+      .select('id, post_id, attachments')
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return c.json({ error: "Comment not found or you don't have permission to delete it" }, 404)
+      }
+      throw error
+    }
+
+    // 2) מחיקת קבצים של התגובה מהבאקט (אם יש)
+    if (deletedComment?.attachments?.length > 0) {
+      const filesToDelete = deletedComment.attachments
+        .map((a: any) => {
+          if (typeof a === 'string') return null
+
+          if (a.localPath) return a.localPath
+
+          // גיבוי: אם אין localPath אבל יש URL
+          if (a.url) {
+            const parts = a.url.split('/attachments/')
+            return parts.length > 1 ? parts[1] : null
+          }
+
+          return null
+        })
+        .filter(Boolean)
+
+      if (filesToDelete.length > 0) {
+        const { error: storageError } = await supabase.storage.from('attachments').remove(filesToDelete)
+        if (storageError) console.error("Failed to delete files on comment deletion:", storageError)
+      }
+    }
+
+    // 3) עדכון הווקטור של הפוסט כדי להסיר את הטקסט של התגובה שנמחקה
+    //    חשוב שזה יקרה אחרי המחיקה
+    updatePostVector(postId)
+
+    return c.json({ success: true, message: "Comment deleted successfully" })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+
+
 export default app
