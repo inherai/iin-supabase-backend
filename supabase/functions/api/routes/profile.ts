@@ -7,7 +7,6 @@ const app = new Hono()
 app.get('/views/count', async (c) => {
   try {
     const user = c.get('user')
-    const supabase = c.get('supabase')
 
     if (!user) {
       return c.json({ error: 'Unauthorized: You must be logged in to view profile views count' }, 401)
@@ -15,7 +14,12 @@ app.get('/views/count', async (c) => {
 
     const targetUserId = c.req.query('id') || user.id
 
-    const { count, error } = await supabase
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    const { count, error } = await supabaseAdmin
       .from('profile_views')
       .select('id', { count: 'exact', head: true })
       .eq('viewed_id', targetUserId)
@@ -32,7 +36,6 @@ app.get('/views/count', async (c) => {
 app.get('/posts/count', async (c) => {
   try {
     const user = c.get('user')
-    const supabase = c.get('supabase')
 
     if (!user) {
       return c.json({ error: 'Unauthorized: You must be logged in to view posts count' }, 401)
@@ -40,7 +43,12 @@ app.get('/posts/count', async (c) => {
 
     const targetUserId = c.req.query('id') || user.id
 
-    const { data: targetUser } = await supabase
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    const { data: targetUser } = await supabaseAdmin
       .from('users')
       .select('email')
       .eq('uuid', targetUserId)
@@ -50,7 +58,7 @@ app.get('/posts/count', async (c) => {
       return c.json({ error: 'User not found' }, 404)
     }
 
-    const { count, error } = await supabase
+    const { count, error } = await supabaseAdmin
       .from('posts')
       .select('id', { count: 'exact', head: true })
       .eq('sender', targetUser.email)
@@ -68,7 +76,6 @@ app.get('/posts/count', async (c) => {
 app.get('/comments/count', async (c) => {
   try {
     const user = c.get('user')
-    const supabase = c.get('supabase')
 
     if (!user) {
       return c.json({ error: 'Unauthorized: You must be logged in to view comments count' }, 401)
@@ -76,7 +83,12 @@ app.get('/comments/count', async (c) => {
 
     const targetUserId = c.req.query('id') || user.id
 
-    const { data: targetUser } = await supabase
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    const { data: targetUser } = await supabaseAdmin
       .from('users')
       .select('email')
       .eq('uuid', targetUserId)
@@ -86,7 +98,7 @@ app.get('/comments/count', async (c) => {
       return c.json({ error: 'User not found' }, 404)
     }
 
-    const { count, error } = await supabase
+    const { count, error } = await supabaseAdmin
       .from('comments')
       .select('id', { count: 'exact', head: true })
       .eq('sender', targetUser.email)
@@ -104,7 +116,6 @@ app.get('/comments/count', async (c) => {
 app.get('/connections/count', async (c) => {
   try {
     const user = c.get('user')
-    const supabase = c.get('supabase')
 
     if (!user) {
       return c.json({ error: 'Unauthorized: You must be logged in to view connections count' }, 401)
@@ -112,7 +123,12 @@ app.get('/connections/count', async (c) => {
 
     const targetUserId = c.req.query('id') || user.id
 
-    const { count, error } = await supabase
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    const { count, error } = await supabaseAdmin
       .from('connections')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'accepted')
@@ -289,17 +305,25 @@ app.get('/', async (c) => {
 
       // אם יש חיפוש, נחפש לפי שם
       if (searchQuery) {
-        const { data: searchResults, error: searchError, count } = await supabase
-          .from('public_users_view')
-          .select('*', { count: 'exact' })
-          .or(`first_name.ilike.%${searchQuery}%,last_name.ilike.%${searchQuery}%`)
-          .range(offset, offset + limit - 1)
+        const { data: searchResults, error: searchError } = await supabase
+          .rpc('search_users', {
+            current_user_id: user.id,
+            search_text: searchQuery,
+            page_limit: limit,
+            page_offset: offset
+          })
 
         if (searchError) {
           return c.json({ error: searchError.message }, 500)
         }
 
-        const enrichedUsers = (searchResults || []).map((u: any) => ({
+        const total = searchResults?.[0]?.total_count || 0
+        const cleanResults = (searchResults || []).map((u: any) => {
+          const { total_count, ...rest } = u
+          return rest
+        })
+
+        const enrichedUsers = cleanResults.map((u: any) => ({
           uuid: u.uuid,
           first_name: u.first_name,
           last_name: u.last_name,
@@ -326,8 +350,8 @@ app.get('/', async (c) => {
           pagination: {
             page,
             limit,
-            total: count ?? 0,
-            totalPages: Math.ceil((count ?? 0) / limit)
+            total,
+            totalPages: Math.ceil(total / limit)
           }
         })
       }
