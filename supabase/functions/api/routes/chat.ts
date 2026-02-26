@@ -2,7 +2,7 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 
 const app = new Hono();
 
-// GET /api/chat - רשימת שיחות עם אינדיקציה לחיבור
+// GET /api/chat - גרסה מתוקנת
 app.get("/", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
@@ -15,18 +15,16 @@ app.get("/", async (c) => {
       *,
       user1:public_users_view!user1_id(uuid, first_name, last_name, image, headline),
       user2:public_users_view!user2_id(uuid, first_name, last_name, image, headline),
-      # כאן אנחנו מוסיפים בדיקה של הקשר
-      connection:connections!inner(status) 
+      connection:connections!inner(status)
     `)
-    // אנחנו צריכים לוודא שה-Join של הקשר מתאים למשתמשים בשיחה
     .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
     .order("updated_at", { ascending: false });
 
   if (error) return c.json({ error: error.message }, 400);
 
-  // הוספת שדה בוליאני פשוט לכל שיחה כדי להקל על ה-Frontend
   const enhancedData = data?.map(conv => ({
     ...conv,
+    // הוספת האינדיקציה לפרונטנד
     is_connection_active: conv.connection?.status === 'accepted'
   }));
 
