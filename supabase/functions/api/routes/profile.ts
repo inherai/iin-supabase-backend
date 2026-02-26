@@ -305,17 +305,25 @@ app.get('/', async (c) => {
 
       // אם יש חיפוש, נחפש לפי שם
       if (searchQuery) {
-        const { data: searchResults, error: searchError, count } = await supabase
-          .from('public_users_view')
-          .select('*', { count: 'exact' })
-          .or(`first_name.ilike.%${searchQuery}%,last_name.ilike.%${searchQuery}%`)
-          .range(offset, offset + limit - 1)
+        const { data: searchResults, error: searchError } = await supabase
+          .rpc('search_users', {
+            current_user_id: user.id,
+            search_text: searchQuery,
+            page_limit: limit,
+            page_offset: offset
+          })
 
         if (searchError) {
           return c.json({ error: searchError.message }, 500)
         }
 
-        const enrichedUsers = (searchResults || []).map((u: any) => ({
+        const total = searchResults?.[0]?.total_count || 0
+        const cleanResults = (searchResults || []).map((u: any) => {
+          const { total_count, ...rest } = u
+          return rest
+        })
+
+        const enrichedUsers = cleanResults.map((u: any) => ({
           uuid: u.uuid,
           first_name: u.first_name,
           last_name: u.last_name,
@@ -342,8 +350,8 @@ app.get('/', async (c) => {
           pagination: {
             page,
             limit,
-            total: count ?? 0,
-            totalPages: Math.ceil((count ?? 0) / limit)
+            total,
+            totalPages: Math.ceil(total / limit)
           }
         })
       }
