@@ -30,6 +30,27 @@ export const authMiddleware = async (c: Context, next: Next) => {
     return c.json({ error: 'Unauthorized: Invalid or expired token' }, 401);
   }
 
+  // בדיקה אם המשתמש קיים בטבלת users
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  );
+
+  const { data: userRecord, error: userError } = await supabaseAdmin
+    .from('users')
+    .select('uuid')
+    .eq('uuid', data.user.id)
+    .maybeSingle();
+
+  if (userError) {
+    return c.json({ error: 'Database error' }, 500);
+  }
+
+  if (!userRecord) {
+    await supabaseAdmin.auth.admin.deleteUser(data.user.id);
+    return c.json({ error: 'User not found, deleted from auth' }, 404);
+  }
+
   // הכל תקין! מזריקים לקונטקסט וממשיכים הלאה
   c.set('supabase', supabaseClient);
   c.set('user', data.user);
