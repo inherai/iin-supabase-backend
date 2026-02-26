@@ -2,33 +2,50 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 
 const app = new Hono();
 
-// GET /api/chat - גרסה מתוקנת
 app.get("/", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
 
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-  const { data, error } = await supabase
+  // 1. שליפת השיחות
+  const { data: convs, error: convError } = await supabase
     .from("conversations")
     .select(`
       *,
       user1:public_users_view!user1_id(uuid, first_name, last_name, image, headline),
-      user2:public_users_view!user2_id(uuid, first_name, last_name, image, headline),
-      connection:connections!inner(status)
+      user2:public_users_view!user2_id(uuid, first_name, last_name, image, headline)
     `)
     .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
     .order("updated_at", { ascending: false });
 
-  if (error) return c.json({ error: error.message }, 400);
+  if (convError) return c.json({ error: convError.message }, 400);
 
-  const enhancedData = data?.map(conv => ({
-    ...conv,
-    // הוספת האינדיקציה לפרונטנד
-    is_connection_active: conv.connection?.status === 'accepted'
-  }));
+  // 2. שליפת כל הקשרים המאושרים של המשתמש הנוכחי
+  const { data: conns, error: connError } = await supabase
+    .from("connections")
+    .select("requester_id, receiver_id, status")
+    .eq("status", "accepted")
+    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
 
-  return c.json(enhancedData ?? []);
+  if (connError) return c.json({ error: connError.message }, 400);
+
+  // 3. הצלבת הנתונים בקוד
+  const enhancedData = convs.map(conv => {
+    const partnerId = conv.user1_id === user.id ? conv.user2_id : conv.user1_id;
+    
+    // בדיקה האם קיים קשר מאושר עם הפרטנר של השיחה הזו
+    const hasActiveConn = conns.some(conn => 
+      (conn.requester_id === partnerId || conn.receiver_id === partnerId)
+    );
+
+    return {
+      ...conv,
+      is_connection_active: hasActiveConn
+    };
+  });
+
+  return c.json(enhancedData);
 });
 
 // POST /api/chat - יצירת שיחה
