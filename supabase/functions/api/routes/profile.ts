@@ -287,6 +287,51 @@ app.get('/', async (c) => {
       const limit = 10
       const offset = (page - 1) * limit
 
+      // אם יש חיפוש, נחפש לפי שם
+      if (searchQuery) {
+        const { data: searchResults, error: searchError, count } = await supabase
+          .from('public_users_view')
+          .select('*', { count: 'exact' })
+          .or(`first_name.ilike.%${searchQuery}%,last_name.ilike.%${searchQuery}%`)
+          .range(offset, offset + limit - 1)
+
+        if (searchError) {
+          return c.json({ error: searchError.message }, 500)
+        }
+
+        const enrichedUsers = (searchResults || []).map((u: any) => ({
+          uuid: u.uuid,
+          first_name: u.first_name,
+          last_name: u.last_name,
+          headline: u.headline,
+          cover_image_url: u.cover_image_url ?? null,
+          location: u.location,
+          about: u.about,
+          interests: u.interests,
+          languages: u.languages,
+          work_preferences: u.work_preferences,
+          experience: u.experience,
+          education: u.education,
+          certifications: u.certifications,
+          skills: u.skills,
+          image: u.image === 'true' ? true : null,
+          contact_details: (u.email || u.phone) ? {
+            email: u.email,
+            phone: u.phone
+          } : null
+        }))
+
+        return c.json({
+          users: enrichedUsers,
+          pagination: {
+            page,
+            limit,
+            total: count ?? 0,
+            totalPages: Math.ceil((count ?? 0) / limit)
+          }
+        })
+      }
+
       const { data: aiMatches, error: aiError } = await supabase.rpc('match_users', {
         p_user_id: user.id,
         p_threshold: 0.3,
