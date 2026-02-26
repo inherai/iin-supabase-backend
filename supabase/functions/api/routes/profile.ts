@@ -13,10 +13,12 @@ app.get('/views/count', async (c) => {
       return c.json({ error: 'Unauthorized: You must be logged in to view profile views count' }, 401)
     }
 
+    const targetUserId = c.req.query('id') || user.id
+
     const { count, error } = await supabase
       .from('profile_views')
       .select('id', { count: 'exact', head: true })
-      .eq('viewed_id', user.id)
+      .eq('viewed_id', targetUserId)
 
     if (error) {
       return c.json({ error: error.message }, 500)
@@ -36,10 +38,22 @@ app.get('/posts/count', async (c) => {
       return c.json({ error: 'Unauthorized: You must be logged in to view posts count' }, 401)
     }
 
+    const targetUserId = c.req.query('id') || user.id
+
+    const { data: targetUser } = await supabase
+      .from('users')
+      .select('email')
+      .eq('uuid', targetUserId)
+      .single()
+
+    if (!targetUser) {
+      return c.json({ error: 'User not found' }, 404)
+    }
+
     const { count, error } = await supabase
       .from('posts')
       .select('id', { count: 'exact', head: true })
-      .eq('sender', user.email)
+      .eq('sender', targetUser.email)
 
     if (error) {
       return c.json({ error: error.message }, 500)
@@ -60,10 +74,22 @@ app.get('/comments/count', async (c) => {
       return c.json({ error: 'Unauthorized: You must be logged in to view comments count' }, 401)
     }
 
+    const targetUserId = c.req.query('id') || user.id
+
+    const { data: targetUser } = await supabase
+      .from('users')
+      .select('email')
+      .eq('uuid', targetUserId)
+      .single()
+
+    if (!targetUser) {
+      return c.json({ error: 'User not found' }, 404)
+    }
+
     const { count, error } = await supabase
       .from('comments')
       .select('id', { count: 'exact', head: true })
-      .eq('sender', user.email)
+      .eq('sender', targetUser.email)
 
     if (error) {
       return c.json({ error: error.message }, 500)
@@ -84,11 +110,13 @@ app.get('/connections/count', async (c) => {
       return c.json({ error: 'Unauthorized: You must be logged in to view connections count' }, 401)
     }
 
+    const targetUserId = c.req.query('id') || user.id
+
     const { count, error } = await supabase
       .from('connections')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'accepted')
-      .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+      .or(`requester_id.eq.${targetUserId},receiver_id.eq.${targetUserId}`)
 
     if (error) {
       return c.json({ error: error.message }, 500)
