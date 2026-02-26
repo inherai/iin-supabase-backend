@@ -111,7 +111,7 @@ app.post('/', async (c) => {
       query_embedding: queryVector,
       similarity_threshold: dynamicThreshold, 
       match_limit: FETCH_K_SQL
-    });
+    }).select('*');
 
     if (rpcError) throw rpcError;
 
