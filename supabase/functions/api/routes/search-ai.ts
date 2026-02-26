@@ -113,7 +113,7 @@ app.post('/', async (c) => {
       query_embedding: queryVector,
       similarity_threshold: dynamicThreshold, 
       match_limit: FETCH_K_SQL
-    }).select('*');
+    }).select('id, subject, message, sent_at, sender, attachments, community_members_only, similarity');
 
     if (rpcError) throw rpcError;
 
