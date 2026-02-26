@@ -88,7 +88,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
   }
 
   // חסימת recruiters מעדכון הגדרות פרטיות
-  if (role === 'recruiters' && path === '/api/profile/privacy' && method === 'PUT') {
+  if (role === 'recruiters' && path.startsWith('/api/profile/privacy') && method === 'PUT') {
     return c.json({ error: 'Recruiters cannot update privacy settings' }, 403);
   }
 
