@@ -513,24 +513,13 @@ app.put('/privacy', async (c) => {
       return c.json({ error: 'no privacy settings provided' }, 400)
     }
 
-    // עדכון אחד ב-DB (מפעיל את הטריגר בצורה מושלמת)
+    // עדכון אחד ב-DB (הטריגר יעדכן את app_metadata אוטומטית)
     const { error: updateError } = await supabase
       .from('users')
       .update(updates)
       .eq('uuid', user.id)
 
     if (updateError) return c.json({ error: updateError.message }, 500)
-
-    // אם עדכנו אנונימיות, נעדכן גם את ה-metadata של ה-auth
-    if (updates.role) {
-      const supabaseAdmin = createClient(
-        Deno.env.get('SUPABASE_URL')!,
-        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-      )
-      await supabaseAdmin.auth.admin.updateUserById(user.id, {
-        app_metadata: { role: updates.role }
-      })
-    }
 
     return c.json({ success: true, updated: updates })
   } catch (err: any) {
