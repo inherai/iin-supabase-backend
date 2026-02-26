@@ -423,14 +423,9 @@ app.put('/privacy', async (c) => {
       return c.json({ error: updateError.message }, 500)
     }
 
-    // עדכון role בטבלה וב-app_metadata
+    // עדכון app_metadata בלבד
     if (typeof is_anonymous === 'boolean') {
       const newRole = is_anonymous ? 'feed_participant' : 'community'
-
-      await supabase
-        .from('users')
-        .update({ role: newRole })
-        .eq('uuid', user.id)
 
       const supabaseAdmin = createClient(
         Deno.env.get('SUPABASE_URL')!,
