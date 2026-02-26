@@ -113,7 +113,7 @@ app.post('/', async (c) => {
       query_embedding: queryVector,
       similarity_threshold: dynamicThreshold, 
       match_limit: FETCH_K_SQL
-    }).select('id, subject, message, sent_at, sender, attachments, community_members_only, similarity');
+    }).select('id, subject, message, sent_at, sender, attachments, similarity');
 
     if (rpcError) throw rpcError;
 
@@ -142,9 +142,13 @@ app.post('/', async (c) => {
 
       // מיון ראשוני לפי ציון משוקלל (תאריך + דמיון)
       scoredItems.sort((a: any, b: any) => b.final_score - a.final_score);
+      // TODO: Re-enable this filter once the column issue is resolved
+      finalItems = scoredItems;
+      /*
       finalItems = viewerIsRecruiter
         ? scoredItems.filter((p: any) => p.community_members_only !== true)
         : scoredItems;
+      */
     }
 
     // =================================================================
