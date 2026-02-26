@@ -238,4 +238,69 @@ app.put('/image', async (c) => {
   return c.json(responseData)
 })
 
+
+// --------------------------------------------------------------------
+// PUT /api/me/status
+// עדכון סטטוס משתמש (מותר רק onboarding -> active)
+// Body נתמך: { status: "active" }  
+// --------------------------------------------------------------------
+app.put('/status', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
+
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
+    // קרא body בצורה בטוחה
+    const payload = await c.req.json().catch(() => ({} as any))
+
+    // 1) { status: "active" }
+    const requestedStatus = typeof payload?.status === 'string' ? payload.status.trim().toLowerCase() : null
+
+    const wantsActive = requestedStatus === 'active' 
+    // אם לא ביקשו Active — לא משנים כלום
+    if (!wantsActive) {
+      return c.json({
+        updated: false,
+        reason: 'No change: only "active" is allowed',
+      })
+    }
+
+    // שלוף מצב נוכחי לפני העדכון - להשוואה
+    const { data: currentUser, error: currentErr } = await supabase
+      .from('users')
+      .select('status')
+      .eq('uuid', user.id)
+      .single()
+
+    if (currentErr) {
+      return c.json({ error: currentErr.message }, 500)
+    }
+
+    // רק אם כרגע onboarding מאפשרים מעבר ל-active
+    if (currentUser?.status !== 'onboarding') {
+      return c.json({
+        updated: false,
+        reason: `No change: status must be "onboarding" to update (current: ${currentUser?.status ?? 'null'})`,
+      }, 400)
+    }
+
+    // עדכון בפועל
+    const { error: updateErr } = await supabase
+      .from('users')
+      .update({ status: 'Active' })
+      .eq('uuid', user.id)
+
+    if (updateErr) {
+      return c.json({ error: updateErr.message }, 500)
+    }
+
+    return c.json({ updated: true, status: 'active' })
+  } catch (e: any) {
+    return c.json({ error: e?.message ?? 'Unknown error' }, 500)
+  }
+})
+
 export default app
