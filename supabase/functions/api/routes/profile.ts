@@ -265,12 +265,31 @@ app.post('/', async (c) => {
 
     const { data, error } = await supabase
       .from('public_users_view')
-      .select('*')
+      .select('uuid, email, first_name, last_name, headline, role, image, cover_image_url')
       .in('uuid', ids)
 
     if (error) return c.json({ error: error.message }, 500)
 
-    return c.json(data || [])
+    const profiles = (data || []).map((profile: any) => {
+      const resolvedName = [profile.first_name, profile.last_name].filter(Boolean).join(' ')
+
+      // The user's snippet uses 'image_url', which likely corresponds to 'cover_image_url' in the DB
+      const image =
+        (typeof profile.cover_image_url === 'string' && profile.cover_image_url) ||
+        (typeof profile.image === 'string' && profile.image) ||
+        undefined
+
+      return {
+        id: profile.uuid || undefined,
+        email: profile.email || undefined,
+        name: resolvedName || undefined,
+        headline: profile.headline || profile.role || undefined,
+        role: profile.role || undefined,
+        image,
+      }
+    })
+
+    return c.json(profiles)
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
