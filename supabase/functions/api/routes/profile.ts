@@ -283,7 +283,7 @@ app.post('/', async (c) => {
         id: profile.uuid || undefined,
         email: profile.email || undefined,
         name: resolvedName || undefined,
-        headline: profile.headline || profile.role || undefined,
+        headline: profile.headline || '',
         role: profile.role || undefined,
         image,
       }
