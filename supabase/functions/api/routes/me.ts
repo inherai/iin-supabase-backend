@@ -147,11 +147,11 @@ app.put('/', async (c) => {
   // שלוף מצב נוכחי לפני העדכון - להשוואה
   const { data: currentUser } = await supabase
     .from('users')
-    .select(EMBEDDING_FIELDS.join(', '))
+    .select(EMBEDDING_FIELDS.join(', ') + ', values_agreed')
     .eq('uuid', user.id)
     .single()
 
-  const updateData = {
+  const updateData: any = {
     first_name: profileData.first_name,
     last_name: profileData.last_name,
     phone: profileData.phone,
@@ -165,8 +165,13 @@ app.put('/', async (c) => {
     education: profileData.education,
     certifications: profileData.certifications,
     skills: profileData.skills,
-    cover_image_url: profileData.cover_image_url ?? null
+    cover_image_url: profileData.cover_image_url ?? null,
+    values_agreed: profileData.values_agreed
   };
+
+  if (profileData.values_agreed === true && !currentUser?.values_agreed) {
+    updateData.values_agreed_at = new Date().toISOString();
+  }
 
   const { data, error } = await supabase
     .from('users')
