@@ -6,8 +6,8 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 
 // GET /api/interests
-// - without q: returns interests in random order
-// - with q: returns autocomplete suggestions by name (ordered alphabetically)
+// - without q: returns all interests
+// - with q: returns autocomplete suggestions by name
 app.get("/", async (c) => {
   try {
     const supabase = c.get("supabase");
@@ -22,19 +22,12 @@ app.get("/", async (c) => {
 
     let request = supabase
       .from("interests")
-      .select("id, name");
+      .select("id, name")
+      .order("name", { ascending: true });
 
     if (query) {
       // ILIKE supports case-insensitive autocomplete and partial matching.
-      request = request
-        .ilike("name", `%${query}%`)
-        .order("name", { ascending: true })
-        .limit(limit);
-    } else {
-      // When no search query, return random results
-      request = request
-        .order("random()", { ascending: true })
-        .limit(limit);
+      request = request.ilike("name", `%${query}%`).limit(limit);
     }
 
     const { data, error } = await request;
