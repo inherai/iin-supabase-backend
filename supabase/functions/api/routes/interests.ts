@@ -22,12 +22,14 @@ app.get("/", async (c) => {
 
     let request = supabase
       .from("interests")
-      .select("id, name")
-      .order("name", { ascending: true });
+      .select("id, name");
 
     if (query) {
       // ILIKE supports case-insensitive autocomplete and partial matching.
-      request = request.ilike("name", `%${query}%`).limit(limit);
+      request = request.ilike("name", `%${query}%`).order("name", { ascending: true }).limit(limit);
+    } else {
+      // בלי q - לא מוסיף order, כך שהתוצאות לא ממוינות
+      request = request.limit(limit);
     }
 
     const { data, error } = await request;

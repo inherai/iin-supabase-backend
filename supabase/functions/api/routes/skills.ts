@@ -23,15 +23,14 @@ app.get("/", async (c) => {
 
     let request = supabase
       .from("skills")
-      .select("id, name")
-      .order("name", { ascending: true });
+      .select("id, name");
 
     if (query) {
-      // מחפש לפי השאילתה
-      request = request.ilike("name", `%${query}%`);
+      // מחפש לפי השאילתה - ממוין
+      request = request.ilike("name", `%${query}%`).order("name", { ascending: true });
     }
+    // בלי q - לא מוסיף order, כך שהתוצאות לא ממוינות
 
-    // התיקון: ה-limit   כדי שיפעל בכל מקרה
     const { data, error } = await request.limit(limit);
 
     if (error) {
