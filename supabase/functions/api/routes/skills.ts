@@ -21,17 +21,24 @@ app.get("/", async (c) => {
       ? Math.min(Math.max(limitParam, 1), MAX_LIMIT)
       : DEFAULT_LIMIT;
 
-    let request = supabase
-      .from("skills")
-      .select("id, name");
+    let data, error;
 
     if (query) {
       // מחפש לפי השאילתה - ממוין
-      request = request.ilike("name", `%${query}%`).order("name", { ascending: true });
+      const result = await supabase
+        .from("skills")
+        .select("id, name")
+        .ilike("name", `%${query}%`)
+        .order("name", { ascending: true })
+        .limit(limit);
+      data = result.data;
+      error = result.error;
+    } else {
+      // בלי q - מחזיר בסדר רנדומלי
+      const result = await supabase.rpc("get_random_skills", { row_limit: limit });
+      data = result.data;
+      error = result.error;
     }
-    // בלי q - לא מוסיף order, כך שהתוצאות לא ממוינות
-
-    const { data, error } = await request.limit(limit);
 
     if (error) {
       return c.json({ error: error.message }, 400);

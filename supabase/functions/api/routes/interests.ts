@@ -20,19 +20,24 @@ app.get("/", async (c) => {
       ? Math.min(Math.max(limitParam, 1), MAX_LIMIT)
       : DEFAULT_LIMIT;
 
-    let request = supabase
-      .from("interests")
-      .select("id, name");
+    let data, error;
 
     if (query) {
       // ILIKE supports case-insensitive autocomplete and partial matching.
-      request = request.ilike("name", `%${query}%`).order("name", { ascending: true }).limit(limit);
+      const result = await supabase
+        .from("interests")
+        .select("id, name")
+        .ilike("name", `%${query}%`)
+        .order("name", { ascending: true })
+        .limit(limit);
+      data = result.data;
+      error = result.error;
     } else {
-      // בלי q - לא מוסיף order, כך שהתוצאות לא ממוינות
-      request = request.limit(limit);
+      // בלי q - מחזיר בסדר רנדומלי
+      const result = await supabase.rpc("get_random_interests", { row_limit: limit });
+      data = result.data;
+      error = result.error;
     }
-
-    const { data, error } = await request;
 
     if (error) {
       return c.json({ error: error.message }, 400);
