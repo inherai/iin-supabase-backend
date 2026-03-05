@@ -308,4 +308,151 @@ app.put('/status', async (c) => {
   }
 })
 
+// --------------------------------------------------------------------
+// GET /api/me/strength
+// חישוב חוזק הפרופיל של המשתמש המחובר
+// --------------------------------------------------------------------
+app.get('/strength', async (c) => {
+  const user = c.get('user')
+
+  if (!user) {
+    return c.json({ error: 'Unauthorized: You must be logged in' }, 401)
+  }
+
+  const supabase = c.get('supabase')
+
+  const { data: userData, error: userError } = await supabase
+    .from('users')
+    .select('headline, about, skills, experience, education, work_preferences, image')
+    .eq('uuid', user.id)
+    .single()
+
+  if (userError) {
+    return c.json({ error: userError.message }, 400)
+  }
+
+  const { count: connectionsCount, error: connectionsError } = await supabase
+    .from('connections')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'accepted')
+    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+
+  if (connectionsError) {
+    return c.json({ error: connectionsError.message }, 400)
+  }
+
+  const oneMonthAgo = new Date()
+  oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1)
+
+  const { count: postsCount, error: postsError } = await supabase
+    .from('posts')
+    .select('id', { count: 'exact', head: true })
+    .eq('sender', user.email)
+    .gte('sent_at', oneMonthAgo.toISOString())
+
+  if (postsError) {
+    return c.json({ error: postsError.message }, 400)
+  }
+
+  const hasPhoto = !!(userData.image && userData.image !== 'null' && userData.image !== 'false')
+  const aboutText = userData.about?.trim() ?? ''
+  const aboutScore = aboutText.length === 0 ? 0 : aboutText.length < 80 ? 0.5 : 1
+  const connections = connectionsCount ?? 0
+  const connectionsScore =
+    connections >= 30 ? 1 :
+    connections >= 15 ? 0.75 :
+    connections >= 5  ? 0.5 :
+    connections >= 1  ? 0.25 : 0
+  const recentPosts = postsCount ?? 0
+  const postsScore =
+    recentPosts >= 10 ? 1 :
+    recentPosts >= 6  ? 0.75 :
+    recentPosts >= 3  ? 0.5 :
+    recentPosts >= 1  ? 0.25 : 0
+
+  const items = [
+    {
+      key: 'headline',
+      label: 'Professional headline',
+      tip: 'Your headline is the first thing recruiters see in search',
+      score: userData.headline?.trim() ? 1 : 0,
+      weight: 0.18,
+    },
+    {
+      key: 'experience',
+      label: 'Work experience',
+      tip: 'The first thing recruiters look for when filtering candidates',
+      score: (userData.experience?.length ?? 0) >= 1 ? 1 : 0,
+      weight: 0.18,
+    },
+    {
+      key: 'photo',
+      label: 'Profile photo',
+      tip: 'Profiles with a photo get 40% more recruiter outreach',
+      score: hasPhoto ? 1 : 0,
+      weight: 0.13,
+    },
+    {
+      key: 'skills',
+      label: 'At least 3 skills',
+      tip: 'Recruiters search by skills — the more you add, the better',
+      score: (userData.skills?.length ?? 0) >= 3 ? 1 : 0,
+      weight: 0.13,
+    },
+    {
+      key: 'education',
+      label: 'Education',
+      tip: 'Shows your academic background and qualifications to recruiters',
+      score: (userData.education?.length ?? 0) >= 1 ? 1 : 0,
+      weight: 0.13,
+    },
+    {
+      key: 'about',
+      label: aboutScore === 0.5 ? 'Expand your About section' : 'About section',
+      tip: aboutScore === 0.5
+        ? 'Your bio is a bit short — aim for 80+ characters to make a real impression'
+        : 'A personal story increases the chance of direct outreach',
+      score: aboutScore,
+      weight: 0.10,
+    },
+    {
+      key: 'connections',
+      label: 'Community connections',
+      tip: connectionsScore === 0
+        ? 'Connect with community members to expand your network'
+        : 'Keep connecting — aim for 30+ connections for full credit',
+      score: connectionsScore,
+      weight: 0.08,
+    },
+    {
+      key: 'posts',
+      label: 'Recent posts',
+      tip: postsScore === 0
+        ? 'Share a post to show your expertise to the community'
+        : 'Keep posting — aim for 10+ posts this month for full credit',
+      score: postsScore,
+      weight: 0.06,
+    },
+    {
+      key: 'preferences',
+      label: 'Work preferences',
+      tip: 'Enables precise matching between your needs and open roles',
+      score: (userData.work_preferences?.length ?? 0) >= 1 ? 1 : 0,
+      weight: 0.01,
+    },
+  ]
+
+  const totalScore = items.reduce((sum, i) => sum + i.score * i.weight, 0)
+  const percentage = Math.round(totalScore * 100)
+  const nextItem = items.find((i) => i.score < 1) ?? null
+  const tier =
+    percentage >= 95 ? 'Elite' :
+    percentage >= 85 ? 'Expert' :
+    percentage >= 70 ? 'Strong' :
+    percentage >= 40 ? 'Building' :
+    'Starter'
+
+  return c.json({ items, percentage, tier, nextItem })
+})
+
 export default app
