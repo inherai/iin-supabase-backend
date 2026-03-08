@@ -22,6 +22,7 @@ app.get('/', async (c) => {
     const rawTextSearch = (c.req.query('query') ?? c.req.query('search') ?? '').trim()
     const rawCategory = (c.req.query('category') ?? c.req.query('categories') ?? '').trim()
     const id = c.req.query('id')
+    const companyId = c.req.query('company_id')
 
     const page = parseInt(c.req.query('page') || '1')
     const limit = parseInt(c.req.query('limit') || '25')
@@ -85,7 +86,11 @@ app.get('/', async (c) => {
         }
 
         query = query.contains('categories', [category])
-    }
+      }
+
+      if (companyId) {
+        query = query.eq('company_id', parseInt(companyId))
+      }
 
         const { data, count, error } = await query.range(from, to);
 

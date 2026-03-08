@@ -8,9 +8,9 @@ app.get('/', async (c) => {
   const supabase = c.get('supabase')
 
   const page = parseInt(c.req.query('page') || '1')
-  const limit = 20
+  const pageSize = parseInt(c.req.query('pageSize') || c.req.query('limit') || '20')
   const search = c.req.query('search') || ''
-  const offset = (page - 1) * limit
+  const offset = (page - 1) * pageSize
 
   let query = supabase
     .from('companies')
@@ -21,7 +21,7 @@ app.get('/', async (c) => {
   }
 
   const { data, error, count } = await query
-    .range(offset, offset + limit - 1)
+    .range(offset, offset + pageSize - 1)
 
   if (error) {
     return c.json({ error: error.message }, 400)
@@ -81,9 +81,9 @@ app.get('/', async (c) => {
     companies: processedData,
     pagination: {
       page,
-      limit,
+      pageSize,
       total: count,
-      totalPages: Math.ceil((count || 0) / limit)
+      totalPages: Math.ceil((count || 0) / pageSize)
     }
   })
 })
