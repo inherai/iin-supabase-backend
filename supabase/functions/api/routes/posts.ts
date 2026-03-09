@@ -513,6 +513,232 @@ if (targetUserId) {
   }
 })
 
+app.get('/:id', async (c) => {
+  try {
+    const supabase = c.get('supabase')
+    const currentUser = c.get('user')
+    const currentUserUuid = currentUser?.id
+    const viewerIsRecruiter = isRecruiterViewer(currentUser)
+    const postId = c.req.param('id')
+
+    if (!postId) return c.json({ error: 'Post ID is required' }, 400)
+
+    const { data: post, error: postError } = await supabase
+      .from('posts')
+      .select('*')
+      .eq('id', postId)
+      .single()
+
+    if (postError) {
+      if (postError.code === 'PGRST116') {
+        return c.json({ error: 'Post not found' }, 404)
+      }
+      throw postError
+    }
+
+    if (viewerIsRecruiter && post.community_members_only === true) {
+      return c.json({ error: 'Post not found' }, 404)
+    }
+
+    const { data: postLikes } = await supabase
+      .from('likes')
+      .select('target_id, user_id, reaction_type')
+      .eq('target_id', post.id)
+
+    const { data: savedRow } = await supabase
+      .from('saved_resources')
+      .select('id')
+      .eq('user_id', currentUserUuid)
+      .eq('saved_resource_type', 'post')
+      .eq('saved_resource_id', String(post.id))
+      .maybeSingle()
+
+    const { data: commentsRaw } = await supabase
+      .from('comments')
+      .select('*')
+      .eq('post_id', post.id)
+      .order('created_at', { ascending: true })
+
+    const comments = viewerIsRecruiter
+      ? (commentsRaw || []).filter((c: any) => c.community_members_only !== true)
+      : (commentsRaw || [])
+
+    const commentIds = comments.map((c: any) => c.id.toString())
+    const { data: commentLikes } = commentIds.length > 0
+      ? await supabase
+          .from('likes')
+          .select('target_id, user_id, reaction_type')
+          .in('target_id', commentIds)
+      : { data: [] as any[] }
+
+    const emailsToFetch = new Set<string>()
+    if (post.sender) emailsToFetch.add(post.sender)
+    comments.forEach((comment: any) => {
+      if (comment.sender) emailsToFetch.add(comment.sender)
+    })
+
+    const uniqueEmails = Array.from(emailsToFetch)
+    const PROJECT_URL = Deno.env.get('SUPABASE_URL')
+    const PROFILE_API_URL = `${PROJECT_URL}/functions/v1/api/profile/feed`
+
+    const profileRes = await fetch(PROFILE_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': c.req.header('Authorization') || '',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ emails: uniqueEmails })
+    })
+
+    if (!profileRes.ok) {
+      const errorText = await profileRes.text()
+      console.error('Failed to fetch profiles via API:', errorText)
+      throw new Error('Failed to fetch user profiles')
+    }
+
+    const enrichedUsers = await profileRes.json()
+    const usersByEmail = new Map()
+    enrichedUsers.forEach((u: any) => {
+      if (u._internal_email_lookup) usersByEmail.set(u._internal_email_lookup, u)
+    })
+
+    const commentsEnriched = comments.map((comment: any) => {
+      const senderEmail = comment.sender
+      const profileData = usersByEmail.get(senderEmail?.toLowerCase())
+
+      let author
+      if (profileData) {
+        const isAnonymous = profileData.is_anonymous === true
+        const { _internal_email_lookup, ...cleanProfile } = profileData
+        author = {
+          ...cleanProfile,
+          first_name: cleanProfile.first_name,
+          last_name: cleanProfile.last_name,
+          is_anonymous: isAnonymous
+        }
+      } else {
+        author = {
+          first_name: senderEmail,
+          last_name: null,
+          image: null,
+          is_anonymous: false
+        }
+      }
+
+      const currentCommentLikes = (commentLikes || []).filter(
+        (l: any) => l.target_id === comment.id.toString()
+      )
+
+      const reactionCounts = currentCommentLikes.reduce((acc: any, like: any) => {
+        const type = like.reaction_type || 'like'
+        acc[type] = (acc[type] || 0) + 1
+        return acc
+      }, {})
+
+      const userReactions = currentCommentLikes
+        .filter((l: any) => l.user_id === currentUserUuid || l.user_uuid === currentUserUuid)
+        .map((l: any) => l.reaction_type)
+
+      const seenUsers = new Set<string>()
+      const reactionUsers = currentCommentLikes
+        .filter((l: any) => {
+          const userId = l?.user_id
+          if (userId === null || userId === undefined) return false
+          const normalizedUserId = String(userId)
+          if (seenUsers.has(normalizedUserId)) return false
+          seenUsers.add(normalizedUserId)
+          return true
+        })
+        .map((l: any) => ({
+          user_id: String(l.user_id),
+          reaction_type: l.reaction_type || 'like'
+        }))
+
+      const { sender, ...commentWithoutSender } = comment
+      return {
+        ...commentWithoutSender,
+        attachments: normalizeAttachments(comment.attachments),
+        author,
+        likes_count: currentCommentLikes.length,
+        reaction_users: reactionUsers,
+        reaction_counts: reactionCounts,
+        user_reactions: userReactions,
+        user_reaction: userReactions[0] || null,
+        is_liked: userReactions.length > 0
+      }
+    })
+
+    const senderEmail = post.sender
+    const profileData = usersByEmail.get(senderEmail?.toLowerCase())
+    let postAuthor
+
+    if (profileData) {
+      const isAnonymous = profileData.is_anonymous === true
+      const { _internal_email_lookup, ...cleanProfile } = profileData
+      postAuthor = {
+        ...cleanProfile,
+        first_name: cleanProfile.first_name,
+        last_name: cleanProfile.last_name,
+        is_anonymous: isAnonymous
+      }
+    } else {
+      postAuthor = {
+        first_name: senderEmail,
+        last_name: null,
+        image: null,
+        is_anonymous: false
+      }
+    }
+
+    const reactionCounts = (postLikes || []).reduce((acc: any, like: any) => {
+      const type = like.reaction_type || 'like'
+      acc[type] = (acc[type] || 0) + 1
+      return acc
+    }, {})
+
+    const userReactions = (postLikes || [])
+      .filter((l: any) => l.user_id === currentUserUuid || l.user_uuid === currentUserUuid)
+      .map((l: any) => l.reaction_type)
+
+    const seenPostUsers = new Set<string>()
+    const reactionUsers = (postLikes || [])
+      .filter((l: any) => {
+        const userId = l?.user_id
+        if (userId === null || userId === undefined) return false
+        const normalizedUserId = String(userId)
+        if (seenPostUsers.has(normalizedUserId)) return false
+        seenPostUsers.add(normalizedUserId)
+        return true
+      })
+      .map((l: any) => ({
+        user_id: String(l.user_id),
+        reaction_type: l.reaction_type || 'like'
+      }))
+
+    const { sender, ...postWithoutSender } = post
+
+    return c.json({
+      success: true,
+      data: {
+        ...postWithoutSender,
+        attachments: normalizeAttachments(post.attachments),
+        author: postAuthor,
+        comments: commentsEnriched,
+        likes_count: (postLikes || []).length,
+        reaction_users: reactionUsers,
+        reaction_counts: reactionCounts,
+        user_reactions: userReactions,
+        user_reaction: userReactions[0] || null,
+        is_liked: userReactions.length > 0,
+        is_saved: !!savedRow,
+        saved_id: savedRow?.id ?? null
+      }
+    })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 app.post('/', async (c) => {
   try {
     const supabase = c.get('supabase')
