@@ -180,67 +180,67 @@ app.post('/feed', async (c) => {
   try {
     const user = c.get('user')
     const supabase = c.get('supabase')
-
     if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+    // שליפת הרול של המשתמש הנוכחי מהטוקן
+    const viewerBusinessRole = user.app_metadata?.role
 
     const body = await c.req.json().catch(() => ({}))
     const emails = Array.isArray(body?.emails)
-      ? body.emails.filter((e: unknown) => typeof e === 'string' && e.trim())
+      ? body.emails.filter((e: any) => typeof e === 'string' && e.trim())
       : []
-
-    console.log('[/feed] Received request for', emails.length, 'emails')
 
     if (emails.length === 0) return c.json([])
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-    
-    if (!supabaseUrl || !supabaseKey) {
-      console.error('[/feed] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
-      return c.json({ error: 'Server configuration error' }, 500)
-    }
-
     const supabaseAdmin = createClient(supabaseUrl, supabaseKey)
 
+    // הוספת שדות ה-Privacy לשליפה
     const { data, error } = await supabaseAdmin
       .from('users')
-      .select('uuid, email, first_name, last_name, headline, cover_image_url, image, is_anonymous')
+      .select('uuid, email, first_name, last_name, headline, cover_image_url, image, is_anonymous, privacy_lastname, privacy_picture')
       .in('email', emails)
 
-    if (error) {
-      console.error('[/feed] Error fetching users:', error)
-      return c.json({ error: error.message }, 500)
+    if (error) return c.json({ error: error.message }, 500)
+
+    // פונקציית עזר לבדיקת הרשאות (כמו בשאר הקוד שלך)
+    const hasAccess = (privacyArray: any) => {
+      if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
+      return privacyArray.includes(viewerBusinessRole)
     }
 
-    console.log('[/feed] Fetched', data?.length || 0, 'users')
-
-    const usersMap = new Map();
-    (data || []).forEach((u) => {
-      if (u.email) usersMap.set(u.email.toLowerCase(), u)
-    })
-
-    const enrichedUsers = []
-    for (const u of usersMap.values()) {
-      const isAnonymous = u.is_anonymous === true
+    const enrichedUsers = (data || []).map((u) => {
       const isOwner = u.uuid === user.id
-      const originalEmail = u.email
+      const isAnonymous = u.is_anonymous === true
       
-      enrichedUsers.push({
+      // לוגיקת פרטיות משולבת:
+      // 1. אם אנונימי ולא בעלים -> הכל מוסתר
+      // 2. אם לא אנונימי -> בודקים רול לפי המערכים (privacy)
+      
+      const canSeeGeneralInfo = !isAnonymous || isOwner
+      const canSeeLastName = isOwner || hasAccess(u.privacy_lastname)
+      const canSeePicture = isOwner || hasAccess(u.privacy_picture)
+
+      return {
         uuid: u.uuid,
-        email: (isAnonymous && !isOwner) ? null : u.email,
-        first_name: (isAnonymous && !isOwner) ? null : u.first_name,
-        last_name: (isAnonymous && !isOwner) ? null : u.last_name,
-        headline: (isAnonymous && !isOwner) ? null : u.headline,
-        cover_image_url: (isAnonymous && !isOwner) ? null : u.cover_image_url,
-        image: (isAnonymous && !isOwner) ? null : (u.image ? true : null),
         is_anonymous: isAnonymous,
-        _internal_email_lookup: originalEmail?.toLowerCase()
-      })
-    }
+        // אימייל ופרטים כלליים מוסתרים רק אם אנונימי
+        email: canSeeGeneralInfo ? u.email : null,
+        first_name: canSeeGeneralInfo ? u.first_name : (isAnonymous ? 'Anonymous' : null),
+        headline: canSeeGeneralInfo ? u.headline : null,
+        
+        // שם משפחה ותמונה תלויים במערכי ה-Privacy (גם אם לא אנונימי!)
+        last_name: (canSeeGeneralInfo && canSeeLastName) ? u.last_name : null,
+        image: (canSeeGeneralInfo && canSeePicture) ? (u.image ? true : null) : null,
+        
+        cover_image_url: canSeeGeneralInfo ? u.cover_image_url : null,
+        _internal_email_lookup: u.email?.toLowerCase()
+      }
+    })
 
     return c.json(enrichedUsers)
   } catch (err: any) {
-    console.error('[/feed] Unexpected error:', err)
     return c.json({ error: err.message }, 500)
   }
 })
