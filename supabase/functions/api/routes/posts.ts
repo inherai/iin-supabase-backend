@@ -827,7 +827,62 @@ app.post('/', async (c) => {
       if (error) throw error;
       updatePostVector(data.id);
 
-      return c.json({ success: true, data, mode: "app" });
+      // Enrich the post with author data (same as GET endpoint)
+      const PROJECT_URL = Deno.env.get('SUPABASE_URL')
+      const PROFILE_API_URL = `${PROJECT_URL}/functions/v1/api/profile/feed`
+
+      const profileRes = await fetch(PROFILE_API_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': c.req.header('Authorization') || '',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ emails: [user.email] })
+      })
+
+      let postAuthor
+      if (profileRes.ok) {
+        const enrichedUsers = await profileRes.json()
+        const profileData = enrichedUsers[0]
+        if (profileData) {
+          const isAnonymous = profileData.is_anonymous === true
+          const { _internal_email_lookup, ...cleanProfile } = profileData
+          postAuthor = {
+            ...cleanProfile,
+            first_name: cleanProfile.first_name,
+            last_name: cleanProfile.last_name,
+            is_anonymous: isAnonymous
+          }
+        }
+      }
+
+      if (!postAuthor) {
+        postAuthor = {
+          first_name: user.email,
+          last_name: null,
+          image: null,
+          is_anonymous: false
+        }
+      }
+
+      const { sender, ...postWithoutSender } = data
+
+      const enrichedPost = {
+        ...postWithoutSender,
+        attachments: normalizeAttachments(data.attachments),
+        author: postAuthor,
+        comments: [],
+        likes_count: 0,
+        reaction_users: [],
+        reaction_counts: {},
+        user_reactions: [],
+        user_reaction: null,
+        is_liked: false,
+        is_saved: false,
+        saved_id: null
+      }
+
+      return c.json({ success: true, data: enrichedPost, mode: "app" });
     }
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
