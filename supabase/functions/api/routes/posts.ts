@@ -827,7 +827,17 @@ app.post('/', async (c) => {
       if (error) throw error;
       updatePostVector(data.id);
 
-      return c.json({ success: true, data, mode: "app" });
+      // enrichment: שליפת הפוסט כמו GET /:id
+      const { data: enriched, error: enrichError } = await supabase
+        .from('posts')
+        .select('*')
+        .eq('id', data.id)
+        .single();
+      if (enrichError) throw enrichError;
+
+      // אפשר להוסיף כאן enrichment נוסף (תגובות, לייקים וכו') אם צריך
+
+      return c.json({ success: true, data: enriched, mode: "app" });
     }
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
