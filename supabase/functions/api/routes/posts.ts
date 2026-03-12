@@ -820,7 +820,7 @@ app.post('/', async (c) => {
         message: message,
         attachments: normalizedAttachments,
         sent_at: new Date().toISOString(),
-        post_type: post_type || null,
+        post_type: post_type || 'discussion',
         community_members_only
       }).select().single();
 
@@ -834,8 +834,6 @@ app.post('/', async (c) => {
         .eq('id', data.id)
         .single();
       if (enrichError) throw enrichError;
-
-      // אפשר להוסיף כאן enrichment נוסף (תגובות, לייקים וכו') אם צריך
 
       return c.json({ success: true, data: enriched, mode: "app" });
     }
