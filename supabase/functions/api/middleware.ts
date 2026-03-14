@@ -57,8 +57,10 @@ export const authMiddleware = async (c: Context, next: Next) => {
 
   // חסימת feed_participant מרואוטים מסוימים
   const role = data.user?.app_metadata?.role;
+  const path = c.req.path;
+  const method = c.req.method;
+
   if (role === 'feed_participant') {
-    const path = c.req.path;
     const allowed = [
       '/api/me',
       '/api/posts',
@@ -83,6 +85,11 @@ export const authMiddleware = async (c: Context, next: Next) => {
     if (!allowed.some(p => path === p || path.startsWith(p + '/'))) {
       return c.json({ error: 'Access denied for anonymous users' }, 403);
     }
+  }
+
+  // חסימת recruiters מעדכון הגדרות פרטיות
+  if (role === 'recruiters' && path.startsWith('/api/profile/privacy') && method === 'PUT') {
+    return c.json({ error: 'Recruiters cannot update privacy settings' }, 403);
   }
 
   await next();
