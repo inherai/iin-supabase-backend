@@ -56,9 +56,6 @@ app.get('/', async (c) => {
 
         result = data ? { ...data, is_saved: isSaved } : null;
         totalCount = data ? 1 : 0;
-
-      result = data
-      totalCount = data ? 1 : 0
     } else {
       const to = from + limit - 1
       const textSearch = rawTextSearch.replace(/[%_(),]/g, ' ').trim()
@@ -66,7 +63,8 @@ app.get('/', async (c) => {
 
       let query = supabaseClient
         .from('open_position')
-        .select('*', { count: 'exact' })
+        .select('*, companies:company_id(id, name, logo, website, linkedin_url)', { count: 'exact' })
+
         .not('job_description_html', 'is', null)
         .order('created_at', { ascending: false })
 
