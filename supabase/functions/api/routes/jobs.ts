@@ -34,7 +34,7 @@ app.get('/', async (c) => {
         // --- תרחיש א': שליפת משרה בודדת ---
         const { data, error } = await supabaseClient
             .from('open_position')
-            .select('*')
+            .select('*, companies:company_id(id, name, logo, website, linkedin_url)')
             .eq('job_id', id)
             .single();
         
