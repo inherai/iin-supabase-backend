@@ -28,6 +28,10 @@ app.get('/', async (c) => {
   }
 
   const companies = data || []
+  const companyIds = companies
+    .map((company: any) => company.id)
+    .filter((id: any) => typeof id === 'number' || typeof id === 'string')
+
   const allEmployeeIds = [...new Set(
     companies
       .flatMap((company: any) => (Array.isArray(company.employees) ? company.employees : []))
@@ -55,14 +59,37 @@ app.get('/', async (c) => {
     usersById = new Map(enrichedUsers.map((u: any) => [u.uuid, u]))
   }
 
+  let openPositionsByCompany = new Map<any, number>()
+
+  if (companyIds.length > 0) {
+    const { data: openPositions, error: openPositionsError } = await supabase
+      .from('open_position')
+      .select('company_id')
+      .in('company_id', companyIds)
+
+    if (openPositionsError) {
+      return c.json({ error: openPositionsError.message }, 400)
+    }
+
+    openPositionsByCompany = new Map()
+    for (const row of openPositions || []) {
+      const key = row.company_id
+      if (key === null || key === undefined) continue
+      openPositionsByCompany.set(key, (openPositionsByCompany.get(key) || 0) + 1)
+    }
+  }
+
   const processedData = companies.map((company: any) => {
-    const employeesDetails = (Array.isArray(company.employees) ? company.employees : [])
+    const employeeIds = Array.isArray(company.employees) ? company.employees : []
+    const employeesDetails = employeeIds
       .map((employeeId: string) => usersById.get(employeeId))
       .filter(Boolean)
 
     const nextCompany = {
       ...company,
-      employees: employeesDetails
+      employees: employeesDetails,
+      employees_count: employeeIds.filter((id: any) => id !== null && id !== undefined).length,
+      open_positions_count: openPositionsByCompany.get(company.id) || 0
     }
 
     if (!Array.isArray(company.locations) || company.locations.length === 0) {
@@ -92,11 +119,12 @@ app.get('/', async (c) => {
 app.get('/:id', async (c) => {
   const supabase = c.get('supabase')
   const companyId = c.req.param('id')
+  const companyIdValue = /^\d+$/.test(companyId) ? parseInt(companyId, 10) : companyId
 
   const { data: company, error } = await supabase
     .from('companies')
     .select('*')
-    .eq('id', companyId)
+    .eq('id', companyIdValue)
     .single()
 
   if (error) {
@@ -110,6 +138,7 @@ app.get('/:id', async (c) => {
   // שליפת פרטי העובדים
   const employeeIds = Array.isArray(company.employees) ? company.employees : []
   let employeesDetails = []
+  const employeesCount = employeeIds.filter((id: any) => id !== null && id !== undefined).length
 
   if (employeeIds.length > 0) {
     const { data: users, error: usersError } = await supabase
@@ -126,6 +155,16 @@ app.get('/:id', async (c) => {
     }
   }
 
+  let openPositionsCount = 0
+  const { count: positionsCount, error: positionsError } = await supabase
+    .from('open_position')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyIdValue)
+
+  if (!positionsError && typeof positionsCount === 'number') {
+    openPositionsCount = positionsCount
+  }
+
   // סינון locations לישראל
   let locations = company.locations || []
   if (Array.isArray(locations) && locations.length > 0) {
@@ -136,7 +175,9 @@ app.get('/:id', async (c) => {
   return c.json({
     ...company,
     employees: employeesDetails,
-    locations
+    locations,
+    employees_count: employeesCount,
+    open_positions_count: openPositionsCount
   })
 })
 
