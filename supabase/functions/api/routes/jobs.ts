@@ -68,7 +68,10 @@ app.get('/', async (c) => {
         .order('created_at', { ascending: false })
 
       if (textSearch) {
-        query = query.or(`job_title.ilike.%${textSearch}%,company_name.ilike.%${textSearch}%`)
+        query = query.textSearch('fts_tokens', textSearch, {
+          config: 'simple',
+          type: 'websearch'
+        })
       }
 
       if (category) {
