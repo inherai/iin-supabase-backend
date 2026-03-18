@@ -219,14 +219,14 @@ app.put('/image', async (c) => {
 
   // בדיקת תקינות הקישור
   const SUPABASE_URL_PREFIX = 'https://csfyofqntrfxsystdzca.supabase.co/storage/v1/object/public/profile-images/profile-images-folder/';  
-  if (typeof newImageUrl !== 'string' || !newImageUrl.startsWith(SUPABASE_URL_PREFIX)) {
+  if (newImageUrl !== null && (typeof newImageUrl !== 'string' || !newImageUrl.startsWith(SUPABASE_URL_PREFIX))) {
     return c.json({ error: 'Invalid image URL format or missing image' }, 400)
   }
 
   // ביצוע העדכון - רק לשדה image
   const { data, error } = await supabase
     .from('users')
-    .update({ image: newImageUrl })
+    .update({ image: newImageUrl ?? null })
     .eq('uuid', user.id)
     .select('image') 
     .single()
