@@ -52,8 +52,20 @@ RESPONSE GUIDELINES
 ━━━━━━━━━━━━━━━━━━━━━━
 * Construct a helpful, detailed response.
 * If you find lists of resources (links, guides) in the sources, mention them in detail.
-* The "answer" field must be clean text (no [1] inside).
+* The "answer" field must be clean text only.
+* Never mention source numbers or citations inside "answer".
+* Do not write phrases like "מקור 5", "source 5", "[1]", or "(1)" inside "answer".
 `;
+
+function stripInlineCitations(answer: string): string {
+  return answer
+    .replace(/\s*[\(\[]?\s*(?:מקור(?:ות)?|source(?:s)?)\s+\d+(?:\s*,\s*(?:(?:מקור(?:ות)?|source(?:s)?)\s+)?\d+)*\s*[\)\]]?/gi, '')
+    .replace(/\s*\[\s*\d+(?:\s*,\s*\d+)*\s*\]/g, '')
+    .replace(/\s*\(\s*\d+(?:\s*,\s*\d+)*\s*\)/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\(\s*\)/g, '')
+    .trim();
+}
 
 // POST /api/searchAI
 app.post('/', async (c) => {
@@ -265,7 +277,9 @@ app.post('/', async (c) => {
     // =================================================================
     // שלב 6: עיבוד סופי - החזרת אובייקטים מלאים למשתמש
     // =================================================================
-    const cleanAnswer = parsedResult.answer || "לא נמצא מידע רלוונטי.";
+    const cleanAnswer = stripInlineCitations(
+      parsedResult.answer || "לא נמצא מידע רלוונטי."
+    );
     const indices: number[] = Array.isArray(parsedResult.source_indices) ? parsedResult.source_indices : [];
     const usedIndicesSet = new Set<number>(indices.map((i: number) => i - 1));
     
