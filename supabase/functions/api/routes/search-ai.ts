@@ -173,12 +173,16 @@ app.post('/', async (c) => {
              if (p.sender) emailsToFetch.add(p.sender);
         });
 
-        // 2. שולפים תגובות דרך המשתמש
-        const { data: comments, error: commentsError } = await supabaseUser
-          .from('comments')
-          .select('*')
-          .in('post_id', postIds)
-          .order('created_at', { ascending: true });
+        // 2. שולפים post_type ותגובות במקביל
+        const [{ data: postTypes }, { data: comments, error: commentsError }] = await Promise.all([
+          supabaseUser.from('posts').select('id, post_type').in('id', postIds),
+          supabaseUser.from('comments').select('*').in('post_id', postIds).order('created_at', { ascending: true }),
+        ]);
+
+        const postTypeMap = (postTypes || []).reduce((acc: any, p: any) => {
+          acc[p.id] = p.post_type;
+          return acc;
+        }, {} as Record<string, string>);
 
         if (commentsError) throw commentsError;
 
@@ -202,7 +206,6 @@ app.post('/', async (c) => {
         // 4. יוצרים מפה של משתמשים
         const usersMap = users?.reduce((acc: any, user: any) => {
             if (user.email) {
-                // בונים את השם המלא!
                 const displayName = user.first_name
                   ? (user.last_name ? `${user.first_name} ${user.last_name}` : user.first_name)
                   : (user.email || 'Anonymous User');
@@ -221,8 +224,8 @@ app.post('/', async (c) => {
             return acc;
         }, {} as Record<string, any>);
 
-        const getAuthor = (email: string) => usersMap?.[email] || { 
-            uuid: null, email: email, name: email || 'Unknown', first_name: email || 'Unknown', last_name: null, image: null, role: 'unknown' 
+        const getAuthor = (email: string) => usersMap?.[email] || {
+            uuid: null, email: email, name: email || 'Unknown', first_name: email || 'Unknown', last_name: null, image: null, role: 'unknown'
         };
 
         // 5. מחברים משתמשים לתגובות ומסדרים לפי פוסט
@@ -242,7 +245,8 @@ app.post('/', async (c) => {
 
             return {
                 ...restOfPost,
-                author: getAuthor(post.sender), 
+                post_type: postTypeMap[post.id] || null,
+                author: getAuthor(post.sender),
                 comments: commentsByPostId?.[post.id] || []
             };
         });
