@@ -269,6 +269,7 @@ app.get('/', async (c) => {
     const session_start = c.req.query('session_start') || new Date().toISOString()
 
     const targetUserId = c.req.query('userid') // ה-ID שקיבלנו ב-Query
+    const excludeEmail = c.req.query('exclude_email') === 'true'
     let filterEmail = null
 
 if (targetUserId) {
@@ -300,7 +301,20 @@ if (targetUserId) {
 
     if (visiblePosts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
 
-    const postIds = visiblePosts.map((p: any) => p.id)
+    const sourcePosts = (excludeEmail && !targetUserId)
+      ? visiblePosts.filter((p: any) => p.post_type !== null && p.post_type !== 'email')
+      : visiblePosts
+
+    const lastPost = visiblePosts[visiblePosts.length - 1]
+    const cursorForPagination = lastPost ? {
+      last_effective_date: lastPost.effective_sort_date,
+      last_id: lastPost.id,
+      session_start: session_start
+    } : null
+
+    if (sourcePosts.length === 0) return c.json({ data: [], meta: { next_cursor: cursorForPagination } })
+
+    const postIds = sourcePosts.map((p: any) => p.id)
 
     const { data: allPostLikes } = await supabase
       .from('likes')
@@ -308,7 +322,7 @@ if (targetUserId) {
       .in('target_id', postIds)
 
     const emailsToFetch = new Set<string>()
-    visiblePosts.forEach((p: any) => {
+    sourcePosts.forEach((p: any) => {
       if (p.sender) emailsToFetch.add(p.sender)
     })
 
@@ -433,7 +447,7 @@ if (targetUserId) {
       return acc
     }, {})
 
-    const enrichedPosts = visiblePosts.map((post: any) => {
+    const enrichedPosts = sourcePosts.map((post: any) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
       const senderEmail = post.sender
       const profileData = usersByEmail.get(senderEmail?.toLowerCase());
@@ -500,14 +514,7 @@ if (targetUserId) {
       }
     })
 
-    const lastPost = visiblePosts[visiblePosts.length - 1]
-    const nextCursor = lastPost ? {
-      last_effective_date: lastPost.effective_sort_date,
-      last_id: lastPost.id,
-      session_start: session_start
-    } : null
-
-    return c.json({ data: enrichedPosts, meta: { next_cursor: nextCursor, count: enrichedPosts.length } })
+    return c.json({ data: enrichedPosts, meta: { next_cursor: cursorForPagination, count: enrichedPosts.length } })
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
