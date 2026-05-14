@@ -197,6 +197,13 @@ app.put("/:id", async (c) => {
   if (error) return c.json({ error: error.message }, 400);
   if (!data) return c.json({ error: "Not found or unauthorized" }, 404);
 
+  await supabase
+    .from("notifications")
+    .delete()
+    .eq("type", "CONN_REQ")
+    .eq("actor_id", data.requester_id)
+    .eq("user_id", user.id);
+
   return c.json(data);
 });
 
