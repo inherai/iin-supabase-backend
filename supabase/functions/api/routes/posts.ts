@@ -301,16 +301,53 @@ if (targetUserId) {
 
     if (visiblePosts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
 
-    const sourcePosts = (excludeEmail && !targetUserId)
+    let sourcePosts = (excludeEmail && !targetUserId)
       ? visiblePosts.filter((p: any) => p.post_type !== null && p.post_type !== 'email')
       : visiblePosts
 
-    const lastPost = visiblePosts[visiblePosts.length - 1]
-    const cursorForPagination = lastPost ? {
-      last_effective_date: lastPost.effective_sort_date,
-      last_id: lastPost.id,
+    let lastBatchTail = visiblePosts[visiblePosts.length - 1]
+    let cursorForPagination = lastBatchTail ? {
+      last_effective_date: lastBatchTail.effective_sort_date,
+      last_id: lastBatchTail.id,
       session_start: session_start
     } : null
+
+    // When filtering emails, cascade through extra DB pages until we have enough
+    // platform posts or exhaust the feed — prevents trickle-loading 1-2 posts at a time.
+    if (excludeEmail && !targetUserId) {
+      const TARGET = 25
+      const MAX_EXTRA = 10
+      let extraFetches = 0
+
+      while (sourcePosts.length < TARGET && cursorForPagination && extraFetches < MAX_EXTRA) {
+        extraFetches++
+        const { data: morePosts } = await supabase.rpc('get_stabilized_feed', {
+          p_session_start: session_start,
+          p_last_effective_date: cursorForPagination.last_effective_date,
+          p_last_id: cursorForPagination.last_id,
+          p_limit: 25,
+          p_filter_email: filterEmail
+        })
+
+        if (!morePosts || morePosts.length === 0) { cursorForPagination = null; break }
+
+        const moreVisible = viewerIsRecruiter
+          ? morePosts.filter((p: any) => p.community_members_only !== true)
+          : morePosts
+
+        sourcePosts = [
+          ...sourcePosts,
+          ...moreVisible.filter((p: any) => p.post_type !== null && p.post_type !== 'email')
+        ]
+
+        const tail = moreVisible[moreVisible.length - 1]
+        cursorForPagination = tail ? {
+          last_effective_date: tail.effective_sort_date,
+          last_id: tail.id,
+          session_start: session_start
+        } : null
+      }
+    }
 
     if (sourcePosts.length === 0) return c.json({ data: [], meta: { next_cursor: cursorForPagination } })
 
