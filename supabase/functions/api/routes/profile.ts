@@ -377,7 +377,7 @@ app.get('/', async (c) => {
 
       const { data: aiMatches, error: aiError } = await supabase.rpc('match_users', {
         p_user_id: user.id,
-        p_threshold: 0.3,
+        p_threshold: 0,
         p_match_count: limit,
         p_offset: offset
       })
