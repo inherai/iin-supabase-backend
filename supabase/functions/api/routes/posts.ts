@@ -349,7 +349,8 @@ if (targetUserId) {
       }
     }
 
-    if (sourcePosts.length === 0) return c.json({ data: [], meta: { next_cursor: cursorForPagination } })
+    // If cascade found nothing, there are no more platform posts — signal end of feed.
+    if (sourcePosts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
 
     const postIds = sourcePosts.map((p: any) => p.id)
 
