@@ -421,20 +421,20 @@ if (targetUserId) {
       let author
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
-        const { _internal_email_lookup, ...cleanProfile } = profileData
-        
-        author = { 
+        const { _internal_email_lookup, email: _commentAuthorEmail, ...cleanProfile } = profileData
+
+        author = {
           ...cleanProfile,
           first_name: cleanProfile.first_name,
           last_name: cleanProfile.last_name,
           is_anonymous: isAnonymous
         }
       } else {
-        author = { 
-          first_name: senderEmail, 
-          last_name: null, 
-          image: null, 
-          is_anonymous: false 
+        author = {
+          first_name: senderEmail,
+          last_name: null,
+          image: null,
+          is_anonymous: false
         }
       }
 
@@ -493,7 +493,7 @@ if (targetUserId) {
       let postAuthor
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
-        const { _internal_email_lookup, ...cleanProfile } = profileData
+        const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData
         
         postAuthor = { 
           ...cleanProfile,
@@ -654,7 +654,7 @@ app.get('/:id', async (c) => {
       let author
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
-        const { _internal_email_lookup, ...cleanProfile } = profileData
+        const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData
         author = {
           ...cleanProfile,
           first_name: cleanProfile.first_name,
@@ -719,7 +719,7 @@ app.get('/:id', async (c) => {
 
     if (profileData) {
       const isAnonymous = profileData.is_anonymous === true
-      const { _internal_email_lookup, ...cleanProfile } = profileData
+      const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData
       postAuthor = {
         ...cleanProfile,
         first_name: cleanProfile.first_name,
@@ -951,7 +951,7 @@ app.post('/', async (c) => {
         let author;
         if (profileData) {
           const isAnonymous = profileData.is_anonymous === true;
-          const { _internal_email_lookup, ...cleanProfile } = profileData;
+          const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData;
           author = {
             ...cleanProfile,
             first_name: cleanProfile.first_name,
@@ -1010,7 +1010,7 @@ app.post('/', async (c) => {
       let postAuthor;
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true;
-        const { _internal_email_lookup, ...cleanProfile } = profileData;
+        const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData;
         postAuthor = {
           ...cleanProfile,
           first_name: cleanProfile.first_name,
