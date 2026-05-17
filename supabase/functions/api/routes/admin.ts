@@ -49,6 +49,10 @@ app.get("/users", async (c) => {
   const page = parseInt(c.req.query("page") || "1");
   const limit = parseInt(c.req.query("limit") || "20");
   const search = c.req.query("search") || "";
+  const status = c.req.query("status") || "";
+  const role = c.req.query("role") || "";
+  const sortBy = c.req.query("sortBy") || "created_at";
+  const sortDir = c.req.query("sortDir") === "asc";
   const offset = (page - 1) * limit;
 
   let query = db.from("users").select("*", { count: "exact" });
@@ -58,9 +62,14 @@ app.get("/users", async (c) => {
       `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`
     );
   }
+  if (status) query = query.eq("status", status);
+  if (role) query = query.eq("role", role);
+
+  const sortableColumns = ["created_at", "first_name", "last_name", "email"];
+  const safeSort = sortableColumns.includes(sortBy) ? sortBy : "created_at";
 
   const { data: users, error, count } = await query
-    .order("created_at", { ascending: false })
+    .order(safeSort, { ascending: sortDir })
     .range(offset, offset + limit - 1);
 
   if (error) return c.json({ error: error.message }, 500);
@@ -177,16 +186,21 @@ app.get("/invitations", async (c) => {
   const page = parseInt(c.req.query("page") || "1");
   const limit = parseInt(c.req.query("limit") || "20");
   const search = c.req.query("search") || "";
+  const status = c.req.query("status") || "";
+  const sortBy = c.req.query("sortBy") || "created_at";
+  const sortDir = c.req.query("sortDir") === "asc";
   const offset = (page - 1) * limit;
 
   let query = db.from("invites").select("*", { count: "exact" });
 
-  if (search) {
-    query = query.ilike("recipient_email", `%${search}%`);
-  }
+  if (search) query = query.ilike("recipient_email", `%${search}%`);
+  if (status) query = query.eq("status", status);
+
+  const sortableColumns = ["created_at", "expires_at", "views_count", "recipient_email"];
+  const safeSort = sortableColumns.includes(sortBy) ? sortBy : "created_at";
 
   const { data: invites, error, count } = await query
-    .order("created_at", { ascending: false })
+    .order(safeSort, { ascending: sortDir })
     .range(offset, offset + limit - 1);
 
   if (error) return c.json({ error: error.message }, 500);
@@ -318,18 +332,24 @@ app.get("/companies", async (c) => {
   const page = parseInt(c.req.query("page") || "1");
   const limit = parseInt(c.req.query("limit") || "20");
   const search = c.req.query("search") || "";
+  const active = c.req.query("active");
+  const sortBy = c.req.query("sortBy") || "name";
+  const sortDir = c.req.query("sortDir") === "desc";
   const offset = (page - 1) * limit;
 
   let query = db
     .from("companies")
     .select("id,name,active,description,universal_name,website,phone,logo,tagline,locations,industries,specialities,employee_count_range,founded_on,created_at,employees", { count: "exact" });
 
-  if (search) {
-    query = query.ilike("name", `%${search}%`);
-  }
+  if (search) query = query.ilike("name", `%${search}%`);
+  if (active === "true") query = query.eq("active", true);
+  if (active === "false") query = query.eq("active", false);
+
+  const sortableColumns = ["name", "created_at"];
+  const safeSort = sortableColumns.includes(sortBy) ? sortBy : "name";
 
   const { data: companies, error, count } = await query
-    .order("name", { ascending: true })
+    .order(safeSort, { ascending: !sortDir })
     .range(offset, offset + limit - 1);
 
   if (error) return c.json({ error: error.message }, 500);
