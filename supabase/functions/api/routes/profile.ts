@@ -199,7 +199,7 @@ app.post('/feed', async (c) => {
     // הוספת שדות ה-Privacy לשליפה
     const { data, error } = await supabaseAdmin
       .from('users')
-      .select('uuid, email, first_name, last_name, headline, cover_image_url, image, is_anonymous, privacy_lastname, privacy_picture')
+      .select('uuid, email, first_name, last_name, headline, cover_image_url, image, is_anonymous, privacy_lastname, privacy_picture, privacy_contact_details')
       .in('email', emails)
 
     if (error) return c.json({ error: error.message }, 500)
@@ -221,12 +221,12 @@ app.post('/feed', async (c) => {
       const canSeeGeneralInfo = !isAnonymous || isOwner
       const canSeeLastName = isOwner || hasAccess(u.privacy_lastname)
       const canSeePicture = isOwner || hasAccess(u.privacy_picture)
+      const canSeeContact = isOwner || !u.privacy_contact_details || hasAccess(u.privacy_contact_details)
 
       return {
         uuid: u.uuid,
         is_anonymous: isAnonymous,
-        // אימייל ופרטים כלליים מוסתרים רק אם אנונימי
-        email: canSeeGeneralInfo ? u.email : null,
+        email: (canSeeGeneralInfo && canSeeContact) ? u.email : null,
         first_name: canSeeGeneralInfo ? u.first_name : (isAnonymous ? 'Anonymous' : null),
         headline: canSeeGeneralInfo ? u.headline : null,
         
@@ -265,23 +265,28 @@ app.post('/', async (c) => {
 
     const { data, error } = await supabase
       .from('public_users_view')
-      .select('uuid, email, first_name, last_name, headline, role, image, cover_image_url')
+      .select('uuid, email, first_name, last_name, headline, role, image, cover_image_url, privacy_contact_details')
       .in('uuid', ids)
 
     if (error) return c.json({ error: error.message }, 500)
 
+    const viewerBusinessRole = user.app_metadata?.role
     const profiles = (data || []).map((profile: any) => {
       const resolvedName = [profile.first_name, profile.last_name].filter(Boolean).join(' ')
 
-      // The user's snippet uses 'image_url', which likely corresponds to 'cover_image_url' in the DB
       const image =
         (typeof profile.cover_image_url === 'string' && profile.cover_image_url) ||
         (typeof profile.image === 'string' && profile.image) ||
         undefined
 
+      const isOwner = profile.uuid === user.id
+      const canSeeContact = isOwner ||
+        !profile.privacy_contact_details ||
+        (Array.isArray(profile.privacy_contact_details) && profile.privacy_contact_details.includes(viewerBusinessRole))
+
       return {
         id: profile.uuid || undefined,
-        email: profile.email || undefined,
+        email: canSeeContact ? (profile.email || undefined) : undefined,
         name: resolvedName || undefined,
         headline: profile.headline || '',
         role: profile.role || undefined,
@@ -342,27 +347,34 @@ app.get('/', async (c) => {
           return rest
         })
 
-        const enrichedUsers = cleanResults.map((u: any) => ({
-          uuid: u.uuid,
-          first_name: u.first_name,
-          last_name: u.last_name,
-          headline: u.headline,
-          cover_image_url: u.cover_image_url ?? null,
-          location: u.location,
-          about: u.about,
-          interests: u.interests,
-          languages: u.languages,
-          work_preferences: u.work_preferences,
-          experience: u.experience,
-          education: u.education,
-          certifications: u.certifications,
-          skills: u.skills,
-          image: u.image === 'true' ? true : null,
-          contact_details: (u.email || u.phone) ? {
-            email: u.email,
-            phone: u.phone
-          } : null
-        }))
+        const viewerBusinessRole = user.app_metadata?.role
+        const enrichedUsers = cleanResults.map((u: any) => {
+          const isOwner = u.uuid === user.id
+          const canSeeContact = isOwner ||
+            !u.privacy_contact_details ||
+            (Array.isArray(u.privacy_contact_details) && u.privacy_contact_details.includes(viewerBusinessRole))
+          return {
+            uuid: u.uuid,
+            first_name: u.first_name,
+            last_name: u.last_name,
+            headline: u.headline,
+            cover_image_url: u.cover_image_url ?? null,
+            location: u.location,
+            about: u.about,
+            interests: u.interests,
+            languages: u.languages,
+            work_preferences: u.work_preferences,
+            experience: u.experience,
+            education: u.education,
+            certifications: u.certifications,
+            skills: u.skills,
+            image: u.image === 'true' ? true : null,
+            contact_details: canSeeContact && (u.email || u.phone) ? {
+              email: u.email,
+              phone: u.phone
+            } : null
+          }
+        })
 
         return c.json({
           users: enrichedUsers,
@@ -405,7 +417,12 @@ app.get('/', async (c) => {
         .map((id: string) => fetchedUsers?.find((u: any) => u.uuid === id))
         .filter(Boolean)
 
+      const viewerBusinessRole = user.app_metadata?.role
       const enrichedUsers = usersData.map((u: any) => {
+        const isOwner = u.uuid === user.id
+        const canSeeContact = isOwner ||
+          !u.privacy_contact_details ||
+          (Array.isArray(u.privacy_contact_details) && u.privacy_contact_details.includes(viewerBusinessRole))
         return {
           uuid: u.uuid,
           first_name: u.first_name,
@@ -422,7 +439,7 @@ app.get('/', async (c) => {
           certifications: u.certifications,
           skills: u.skills,
           image: u.image === 'true' ? true : null,
-          contact_details: (u.email || u.phone) ? {
+          contact_details: canSeeContact && (u.email || u.phone) ? {
             email: u.email,
             phone: u.phone
           } : null
@@ -457,6 +474,12 @@ app.get('/', async (c) => {
     // העשרת experience עם נתוני חברות
     const enrichedExperience = await enrichExperience(targetUser.experience, supabase);
 
+    const isOwner = targetUser.uuid === user.id
+    const canSeeContact = isOwner ||
+      !targetUser.privacy_contact_details ||
+      (Array.isArray(targetUser.privacy_contact_details) &&
+        targetUser.privacy_contact_details.includes(viewerBusinessRole))
+
     const publicProfile = {
       uuid: targetUser.uuid,
       first_name: targetUser.first_name,
@@ -473,7 +496,7 @@ app.get('/', async (c) => {
       skills: targetUser.skills,
       image: targetUser.image === 'true' ? true : null,
       cover_image_url: targetUser.cover_image_url ?? null,
-      contact_details: (targetUser.email || targetUser.phone) ? {
+      contact_details: canSeeContact && (targetUser.email || targetUser.phone) ? {
         email: targetUser.email,
         phone: targetUser.phone
       } : null
