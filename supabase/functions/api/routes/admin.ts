@@ -65,7 +65,7 @@ app.get("/users", async (c) => {
   if (status) query = query.eq("status", status);
   if (role) query = query.eq("role", role);
 
-  const sortableColumns = ["created_at", "first_name", "last_name", "email"];
+  const sortableColumns = ["created_at", "first_name", "last_name", "email", "status", "role", "company"];
   const safeSort = sortableColumns.includes(sortBy) ? sortBy : "created_at";
 
   const { data: users, error, count } = await query
@@ -196,7 +196,7 @@ app.get("/invitations", async (c) => {
   if (search) query = query.ilike("recipient_email", `%${search}%`);
   if (status) query = query.eq("status", status);
 
-  const sortableColumns = ["created_at", "expires_at", "views_count", "recipient_email"];
+  const sortableColumns = ["created_at", "expires_at", "views_count", "recipient_email", "status"];
   const safeSort = sortableColumns.includes(sortBy) ? sortBy : "created_at";
 
   const { data: invites, error, count } = await query
@@ -345,7 +345,7 @@ app.get("/companies", async (c) => {
   if (active === "true") query = query.eq("active", true);
   if (active === "false") query = query.eq("active", false);
 
-  const sortableColumns = ["name", "created_at"];
+  const sortableColumns = ["name", "created_at", "active", "website"];
   const safeSort = sortableColumns.includes(sortBy) ? sortBy : "name";
 
   const { data: companies, error, count } = await query
