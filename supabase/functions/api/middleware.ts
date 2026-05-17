@@ -55,6 +55,11 @@ export const authMiddleware = async (c: Context, next: Next) => {
   c.set('supabase', supabaseClient);
   c.set('user', data.user);
 
+  // אדמינים עוקפים את כל בדיקות הרול
+  if (data.user?.app_metadata?.is_admin === true) {
+    return await next();
+  }
+
   // חסימת feed_participant מרואוטים מסוימים
   const role = data.user?.app_metadata?.role;
   const path = c.req.path;
