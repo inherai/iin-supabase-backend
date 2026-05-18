@@ -263,19 +263,31 @@ function extractMentionedUserIds(message: string): string[] {
 }
 
 async function insertMentionNotifications(
-  supabase: any,
+  _supabase: any,
   message: string,
   actorId: string,
   targetId: string,
 ) {
   const mentionedIds = extractMentionedUserIds(message);
+  if (mentionedIds.length === 0) return;
+
+  // Must use service-role client — the caller's JWT only permits
+  // inserting rows where user_id = auth.uid(), but here we need to
+  // insert notifications for the *mentioned* user (a different uid).
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+  );
+
   for (const mentionedId of mentionedIds) {
     if (mentionedId === actorId) continue;
-    const { error } = await supabase.from('notifications').insert({
+    const { error } = await supabaseAdmin.from('notifications').insert({
       user_id: mentionedId,
       actor_id: actorId,
       target_id: targetId,
       type: 'MENTION',
+      count: 1,
+      is_read: false,
     });
     if (error) console.error('[mention] failed to insert notification:', error.message, { mentionedId, actorId, targetId });
   }
