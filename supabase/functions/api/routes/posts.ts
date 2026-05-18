@@ -253,6 +253,34 @@ function toStoragePath(v: any): string | null {
 }
 //support all types of attachment.
 
+function extractMentionedUserIds(message: string): string[] {
+  const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+  // Plain text format: @[Name](uuid)
+  const plainMatches = [...message.matchAll(new RegExp(`@\\[[^\\]]+\\]\\((${uuidPattern})\\)`, 'gi'))].map(m => m[1]);
+  // HTML format: data-user-id="uuid"
+  const htmlMatches = [...message.matchAll(new RegExp(`data-user-id="(${uuidPattern})"`, 'gi'))].map(m => m[1]);
+  return [...new Set([...plainMatches, ...htmlMatches])];
+}
+
+async function insertMentionNotifications(
+  supabase: any,
+  message: string,
+  actorId: string,
+  targetId: string,
+) {
+  const mentionedIds = extractMentionedUserIds(message);
+  for (const mentionedId of mentionedIds) {
+    if (mentionedId === actorId) continue;
+    const { error } = await supabase.from('notifications').insert({
+      user_id: mentionedId,
+      actor_id: actorId,
+      target_id: targetId,
+      type: 'MENTION',
+    });
+    if (error) console.error('[mention] failed to insert notification:', error.message, { mentionedId, actorId, targetId });
+  }
+}
+
 // ====================================================================
 // 2. נתיבי API
 // ====================================================================
@@ -872,6 +900,8 @@ app.post('/', async (c) => {
       if (error) throw error;
       updatePostVector(data.id);
 
+      await insertMentionNotifications(supabase, message, user.id, data.id);
+
       // enrichment: שליפת הפוסט כמו GET /:id
       // נשתמש בלוגיקה של GET /:id כדי להחזיר פוסט מועשר
       // (העתקה מה-handler של GET /:id)
@@ -1286,6 +1316,8 @@ app.post('/comments', async (c) => {
       .single()
 
     if (commentError) throw commentError
+
+    await insertMentionNotifications(supabase, message, user.id, postId)
 
     // 2. שליפת ה-uuid וה-first_name, last_name מטבלת public_users_view לפי המייל
     const { data: userData, error: userError } = await supabase
