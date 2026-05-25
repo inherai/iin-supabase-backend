@@ -430,4 +430,62 @@ app.delete("/companies/:id", async (c) => {
   return c.json({ success: true });
 });
 
+// ==================== JOBS ====================
+
+app.get("/jobs", async (c) => {
+  const db = getAdminClient();
+  const page = parseInt(c.req.query("page") || "1");
+  const limit = parseInt(c.req.query("limit") || "20");
+  const search = c.req.query("search") || "";
+  const noCompany = c.req.query("no_company") === "true";
+  const sortBy = c.req.query("sortBy") || "created_at";
+  const sortDir = c.req.query("sortDir") === "asc";
+  const offset = (page - 1) * limit;
+
+  let query = db
+    .from("open_position")
+    .select("job_id,job_title,company_name,company_id,location,time_posted,employment_type,created_at,companies:company_id(id,name,logo)", { count: "exact" });
+
+  if (search) {
+    query = query.or(`job_title.ilike.%${search}%,company_name.ilike.%${search}%`);
+  }
+  if (noCompany) {
+    query = query.is("company_id", null);
+  }
+
+  const sortableColumns = ["created_at", "job_title", "company_name", "time_posted"];
+  const safeSort = sortableColumns.includes(sortBy) ? sortBy : "created_at";
+
+  const { data: jobs, error, count } = await query
+    .order(safeSort, { ascending: sortDir })
+    .range(offset, offset + limit - 1);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  return c.json({
+    jobs: jobs || [],
+    pagination: { page, limit, total: count || 0, totalPages: Math.ceil((count || 0) / limit) },
+  });
+});
+
+app.put("/jobs/:id", async (c) => {
+  const db = getAdminClient();
+  const jobId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+
+  const updates: Record<string, any> = {};
+  if (body.company_id !== undefined) updates.company_id = body.company_id === null ? null : parseInt(body.company_id);
+
+  const { data, error } = await db
+    .from("open_position")
+    .update(updates)
+    .eq("job_id", jobId)
+    .select("job_id,job_title,company_name,company_id,location,time_posted,employment_type,created_at,companies:company_id(id,name,logo)")
+    .single();
+
+  if (error) return c.json({ error: error.message }, 400);
+
+  return c.json(data);
+});
+
 export default app;
