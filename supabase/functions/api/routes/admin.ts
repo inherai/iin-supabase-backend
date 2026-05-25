@@ -474,7 +474,17 @@ app.put("/jobs/:id", async (c) => {
   const body = await c.req.json().catch(() => ({}));
 
   const updates: Record<string, any> = {};
-  if (body.company_id !== undefined) updates.company_id = body.company_id === null ? null : parseInt(body.company_id);
+  if (body.company_id !== undefined) {
+    const companyId = body.company_id === null ? null : parseInt(body.company_id);
+    updates.company_id = companyId;
+
+    if (companyId !== null) {
+      const { data: company } = await db.from("companies").select("name").eq("id", companyId).maybeSingle();
+      if (company?.name) updates.company_name = company.name;
+    } else {
+      updates.company_name = null;
+    }
+  }
 
   const { data, error } = await db
     .from("open_position")
