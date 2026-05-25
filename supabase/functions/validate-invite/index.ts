@@ -68,6 +68,12 @@ Deno.serve(async (req) => {
     }
 
     if (isInviteExpired(invite.expires_at)) {
+      await supabase
+        .from("invites")
+        .update({ status: "expired" })
+        .eq("token", token)
+        .eq("status", "pending");
+
       return new Response(JSON.stringify({ error: "Invite has expired" }), {
         status: 410,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
