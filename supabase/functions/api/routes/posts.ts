@@ -293,6 +293,23 @@ async function insertMentionNotifications(
   }
 }
 
+async function insertReplyNotification(actorId: string, parentCommentAuthorId: string, postId: string) {
+  if (actorId === parentCommentAuthorId) return;
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+  );
+  const { error } = await supabaseAdmin.from('notifications').insert({
+    user_id: parentCommentAuthorId,
+    actor_id: actorId,
+    target_id: postId,
+    type: 'REPLY',
+    count: 1,
+    is_read: false,
+  });
+  if (error) console.error('[reply] failed to insert notification:', error.message, { parentCommentAuthorId, actorId, postId });
+}
+
 // ====================================================================
 // 2. נתיבי API
 // ====================================================================
@@ -454,15 +471,14 @@ if (targetUserId) {
       if (u.uuid) usersByUuid.set(u.uuid, u)
     })
 
-    const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
+    const enrichedCommentsList = visibleComments.map((comment: any) => {
       const senderEmail = comment.sender
       const profileData = usersByEmail.get(senderEmail?.toLowerCase());
-      
+
       let author
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
         const { _internal_email_lookup, email: _commentAuthorEmail, ...cleanProfile } = profileData
-
         author = {
           ...cleanProfile,
           first_name: cleanProfile.first_name,
@@ -470,30 +486,18 @@ if (targetUserId) {
           is_anonymous: isAnonymous
         }
       } else {
-        author = {
-          first_name: senderEmail,
-          last_name: null,
-          image: null,
-          is_anonymous: false
-        }
+        author = { first_name: senderEmail, last_name: null, image: null, is_anonymous: false }
       }
 
-      const commentLikes = allCommentLikes?.filter(
-        (l: any) => l.target_id === comment.id.toString()
-      ) || []
-
-      // ספירת ריאקציות לפי סוג
+      const commentLikes = allCommentLikes?.filter((l: any) => l.target_id === comment.id.toString()) || []
       const reactionCounts = commentLikes.reduce((acc: any, like: any) => {
         const type = like.reaction_type || 'like'
         acc[type] = (acc[type] || 0) + 1
         return acc
       }, {})
-
-      // הריאקציות של המשתמש הנוכחי (מערך)
       const userReactions = commentLikes
         .filter((l: any) => l.user_id === current_user_uuid || l.user_uuid === current_user_uuid)
         .map((l: any) => l.reaction_type)
-
       const seenCommentReactionUsers = new Set<string>()
       const reactionUsers = commentLikes
         .filter((l: any) => {
@@ -504,14 +508,10 @@ if (targetUserId) {
           seenCommentReactionUsers.add(normalizedUserId)
           return true
         })
-        .map((l: any) => ({
-          user_id: String(l.user_id),
-          reaction_type: l.reaction_type || 'like'
-        }))
+        .map((l: any) => ({ user_id: String(l.user_id), reaction_type: l.reaction_type || 'like' }))
 
-      if (!acc[comment.post_id]) acc[comment.post_id] = []
       const { sender, ...commentWithoutSender } = comment
-      acc[comment.post_id].push({
+      return {
         ...commentWithoutSender,
         attachments: normalizeAttachments(comment.attachments),
         author,
@@ -519,11 +519,31 @@ if (targetUserId) {
         reaction_users: reactionUsers,
         reaction_counts: reactionCounts,
         user_reactions: userReactions,
-        user_reaction: userReactions[0] || null, // backward compatibility
-        is_liked: userReactions.length > 0 // backward compatibility
-      })
-      return acc
-    }, {})
+        user_reaction: userReactions[0] || null,
+        is_liked: userReactions.length > 0
+      }
+    })
+
+    // קינון: תגובות-על מתחת לתגובות ראשיות
+    const topLevelByPostId: any = {}
+    const repliesByParentId: any = {}
+    for (const c of enrichedCommentsList) {
+      if (c.parent_comment_id) {
+        const pid = String(c.parent_comment_id)
+        if (!repliesByParentId[pid]) repliesByParentId[pid] = []
+        repliesByParentId[pid].push(c)
+      } else {
+        if (!topLevelByPostId[c.post_id]) topLevelByPostId[c.post_id] = []
+        topLevelByPostId[c.post_id].push(c)
+      }
+    }
+    const commentsByPostId: any = {}
+    for (const postId of Object.keys(topLevelByPostId)) {
+      commentsByPostId[postId] = topLevelByPostId[postId].map((c: any) => ({
+        ...c,
+        replies: repliesByParentId[String(c.id)] || []
+      }))
+    }
 
     const enrichedPosts = sourcePosts.map((post: any) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
@@ -687,7 +707,7 @@ app.get('/:id', async (c) => {
       if (u._internal_email_lookup) usersByEmail.set(u._internal_email_lookup, u)
     })
 
-    const commentsEnriched = comments.map((comment: any) => {
+    const allEnrichedComments = comments.map((comment: any) => {
       const senderEmail = comment.sender
       const profileData = usersByEmail.get(senderEmail?.toLowerCase())
 
@@ -695,35 +715,20 @@ app.get('/:id', async (c) => {
       if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
         const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData
-        author = {
-          ...cleanProfile,
-          first_name: cleanProfile.first_name,
-          last_name: cleanProfile.last_name,
-          is_anonymous: isAnonymous
-        }
+        author = { ...cleanProfile, first_name: cleanProfile.first_name, last_name: cleanProfile.last_name, is_anonymous: isAnonymous }
       } else {
-        author = {
-          first_name: senderEmail,
-          last_name: null,
-          image: null,
-          is_anonymous: false
-        }
+        author = { first_name: senderEmail, last_name: null, image: null, is_anonymous: false }
       }
 
-      const currentCommentLikes = (commentLikes || []).filter(
-        (l: any) => l.target_id === comment.id.toString()
-      )
-
+      const currentCommentLikes = (commentLikes || []).filter((l: any) => l.target_id === comment.id.toString())
       const reactionCounts = currentCommentLikes.reduce((acc: any, like: any) => {
         const type = like.reaction_type || 'like'
         acc[type] = (acc[type] || 0) + 1
         return acc
       }, {})
-
       const userReactions = currentCommentLikes
         .filter((l: any) => l.user_id === currentUserUuid || l.user_uuid === currentUserUuid)
         .map((l: any) => l.reaction_type)
-
       const seenUsers = new Set<string>()
       const reactionUsers = currentCommentLikes
         .filter((l: any) => {
@@ -734,10 +739,7 @@ app.get('/:id', async (c) => {
           seenUsers.add(normalizedUserId)
           return true
         })
-        .map((l: any) => ({
-          user_id: String(l.user_id),
-          reaction_type: l.reaction_type || 'like'
-        }))
+        .map((l: any) => ({ user_id: String(l.user_id), reaction_type: l.reaction_type || 'like' }))
 
       const { sender, ...commentWithoutSender } = comment
       return {
@@ -752,6 +754,23 @@ app.get('/:id', async (c) => {
         is_liked: userReactions.length > 0
       }
     })
+
+    // קינון: תגובות-על מתחת לתגובות ראשיות
+    const repliesByParentId: any = {}
+    const topLevelComments: any[] = []
+    for (const c of allEnrichedComments) {
+      if (c.parent_comment_id) {
+        const pid = String(c.parent_comment_id)
+        if (!repliesByParentId[pid]) repliesByParentId[pid] = []
+        repliesByParentId[pid].push(c)
+      } else {
+        topLevelComments.push(c)
+      }
+    }
+    const commentsEnriched = topLevelComments.map((c: any) => ({
+      ...c,
+      replies: repliesByParentId[String(c.id)] || []
+    }))
 
     const senderEmail = post.sender
     const profileData = usersByEmail.get(senderEmail?.toLowerCase())
@@ -1299,7 +1318,7 @@ app.post('/comments', async (c) => {
     const supabase = c.get('supabase')
     const user = c.get('user')
     const postId = c.req.query('id')
-    const { message, attachments, community_members_only, communityMembersOnly } = await c.req.json()
+    const { message, attachments, community_members_only, communityMembersOnly, parent_comment_id } = await c.req.json()
     const communityMembersOnlyInput =
     communityMembersOnly !== undefined ? communityMembersOnly : community_members_only
 
@@ -1310,7 +1329,31 @@ app.post('/comments', async (c) => {
       return c.json({ error: "community_members_only must be boolean" }, 400)
     }
 
-    const resolvedCommunityMembersOnly = communityMembersOnlyInput === true
+    let resolvedCommunityMembersOnly = communityMembersOnlyInput === true
+    let parentCommentAuthorId: string | null = null
+
+    // אם זו תגובה לתגובה — מאמתים ויורשים community_members_only מהתגובה הראשית
+    if (parent_comment_id) {
+      const { data: parentComment, error: parentError } = await supabase
+        .from('comments')
+        .select('id, parent_comment_id, community_members_only, sender')
+        .eq('id', parent_comment_id)
+        .single()
+
+      if (parentError || !parentComment) return c.json({ error: "Parent comment not found" }, 404)
+      if (parentComment.parent_comment_id) return c.json({ error: "Cannot reply to a reply" }, 400)
+
+      resolvedCommunityMembersOnly = parentComment.community_members_only === true
+
+      // שליפת ה-uuid של כותב התגובה הראשית לצורך נוטיפיקציה
+      const { data: parentAuthorData } = await supabase
+        .from('public_users_view')
+        .select('uuid')
+        .eq('email', parentComment.sender)
+        .single()
+      if (parentAuthorData?.uuid) parentCommentAuthorId = parentAuthorData.uuid
+    }
+
     const normalizedAttachments = normalizeAttachments(attachments)
 
     // 1. הכנסת התגובה לטבלת comments
@@ -1322,6 +1365,7 @@ app.post('/comments', async (c) => {
         message: message,
         attachments: normalizedAttachments,
         community_members_only: resolvedCommunityMembersOnly,
+        parent_comment_id: parent_comment_id || null,
         created_at: new Date().toISOString()
       })
       .select()
@@ -1330,6 +1374,10 @@ app.post('/comments', async (c) => {
     if (commentError) throw commentError
 
     await insertMentionNotifications(supabase, message, user.id, postId)
+
+    if (parentCommentAuthorId) {
+      await insertReplyNotification(user.id, parentCommentAuthorId, postId)
+    }
 
     // 2. שליפת ה-uuid וה-first_name, last_name מטבלת public_users_view לפי המייל
     const { data: userData, error: userError } = await supabase
@@ -1340,13 +1388,14 @@ app.post('/comments', async (c) => {
 
     if (userError) throw userError
 
-    if (isQualityPost(message)) {
+    // עדכון וקטור רק לתגובות ראשיות (לא לתגובות על תגובות)
+    if (!parent_comment_id && isQualityPost(message)) {
       updatePostVector(postId)
     }
 
     // 3. החזרת האובייקט המבוקש עם id ושם
-    return c.json({ 
-      success: true, 
+    return c.json({
+      success: true,
       data: {
         ...commentData,
         author: {
@@ -1354,7 +1403,7 @@ app.post('/comments', async (c) => {
           first_name: userData.first_name,
           last_name: userData.last_name
         }
-      } 
+      }
     })
 
   } catch (err: any) {
