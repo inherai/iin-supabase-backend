@@ -226,14 +226,15 @@ app.post('/feed', async (c) => {
       return {
         uuid: u.uuid,
         is_anonymous: isAnonymous,
+        role: u.role || undefined,
         email: (canSeeGeneralInfo && canSeeContact) ? u.email : null,
         first_name: canSeeGeneralInfo ? u.first_name : (isAnonymous ? 'Anonymous' : null),
         headline: canSeeGeneralInfo ? u.headline : null,
-        
+
         // שם משפחה ותמונה תלויים במערכי ה-Privacy (גם אם לא אנונימי!)
         last_name: (canSeeGeneralInfo && canSeeLastName) ? u.last_name : null,
         image: (canSeeGeneralInfo && canSeePicture) ? (u.image ? true : null) : null,
-        
+
         cover_image_url: canSeeGeneralInfo ? u.cover_image_url : null,
         _internal_email_lookup: u.email?.toLowerCase()
       }
