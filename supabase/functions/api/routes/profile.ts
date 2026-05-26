@@ -485,6 +485,7 @@ app.get('/', async (c) => {
       first_name: targetUser.first_name,
       last_name: targetUser.last_name,
       headline: targetUser.headline,
+      role: targetUser.role || undefined,
       location: targetUser.location,
       about: targetUser.about,
       interests: targetUser.interests,
