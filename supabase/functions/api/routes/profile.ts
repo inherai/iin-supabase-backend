@@ -552,7 +552,10 @@ app.put('/privacy', async (c) => {
     // שואלים פעם אחת, ומכינים את כל הנתונים
     if (typeof is_anonymous === 'boolean') {
       updates.is_anonymous = is_anonymous
-      updates.role = is_anonymous ? 'feed_participant' : 'community'
+      // recruiters keep their role regardless of privacy settings
+      if (user.app_metadata?.role !== 'recruiters') {
+        updates.role = is_anonymous ? 'feed_participant' : 'community'
+      }
     }
 
     if (Object.keys(updates).length === 0) {
