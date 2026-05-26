@@ -199,7 +199,7 @@ app.post('/feed', async (c) => {
     // הוספת שדות ה-Privacy לשליפה
     const { data, error } = await supabaseAdmin
       .from('users')
-      .select('uuid, email, first_name, last_name, headline, cover_image_url, image, is_anonymous, privacy_lastname, privacy_picture, privacy_contact_details')
+      .select('uuid, email, first_name, last_name, headline, cover_image_url, image, is_anonymous, role, privacy_lastname, privacy_picture, privacy_contact_details')
       .in('email', emails)
 
     if (error) return c.json({ error: error.message }, 500)
