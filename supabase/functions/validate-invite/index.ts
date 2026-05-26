@@ -42,7 +42,7 @@ Deno.serve(async (req) => {
 
     const { data: invite, error: inviteError } = await supabase
       .from("invites")
-      .select("inviter_id, status, expires_at")
+      .select("inviter_id, status, expires_at, role")
       .eq("token", token)
       .maybeSingle();
 
@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
       .trim();
 
     return new Response(
-      JSON.stringify({ inviter_full_name: inviterFullName || null }),
+      JSON.stringify({ inviter_full_name: inviterFullName || null, role: invite.role || "community" }),
       {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },

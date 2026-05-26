@@ -49,6 +49,7 @@ app.post("/", async (c) => {
       recipient_email: normalizedRecipientEmail,
       personal_note: personalNote || null,
       status: "pending",
+      role: "community",
       views_count: 0,
       last_viewed_at: null,
       created_at: createdAt.toISOString(),

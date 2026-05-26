@@ -241,6 +241,8 @@ app.post("/invitations", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const recipientEmail = body?.recipient_email?.trim();
   const personalNote = body?.personal_note?.trim();
+  const allowedRoles = ["community", "recruiters"];
+  const role = allowedRoles.includes(body?.role) ? body.role : "community";
 
   if (!recipientEmail) return c.json({ error: "recipient_email is required" }, 400);
 
@@ -270,6 +272,7 @@ app.post("/invitations", async (c) => {
       recipient_email: normalizedEmail,
       personal_note: personalNote || null,
       status: "pending",
+      role,
       views_count: 0,
       last_viewed_at: null,
       created_at: createdAt.toISOString(),

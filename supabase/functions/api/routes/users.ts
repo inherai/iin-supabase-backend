@@ -35,9 +35,23 @@ app.post("/", async (c) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     );
 
+    const { data: existingUser, error: existingUserError } = await supabaseAdmin
+      .from("users")
+      .select("uuid")
+      .eq("uuid", user.id)
+      .maybeSingle();
+
+    if (existingUserError) {
+      return c.json({ error: existingUserError.message }, 500);
+    }
+
+    if (existingUser) {
+      return c.json({ error: "User is already registered" }, 409);
+    }
+
     const { data: invite, error: inviteError } = await supabaseAdmin
       .from("invites")
-      .select("id, recipient_email, status, expires_at")
+      .select("id, recipient_email, status, expires_at, role")
       .eq("token", inviteToken)
       .maybeSingle();
 
@@ -61,19 +75,34 @@ app.post("/", async (c) => {
       return c.json({ error: "Invite has expired" }, 410);
     }
 
+    const inviteRole: string = invite.role || "community";
+    const isRecruiter = inviteRole === "recruiters";
+
+    const userInsert: Record<string, any> = {
+      uuid: user.id,
+      email: normalizedUserEmail,
+      status: "onboarding",
+      role: inviteRole,
+    };
+
+    if (isRecruiter) {
+      userInsert.is_anonymous = false;
+      userInsert.privacy_picture = ["community", "recruiters"];
+      userInsert.privacy_lastname = ["community", "recruiters"];
+      userInsert.privacy_contact_details = ["community", "recruiters"];
+    }
+
     const { error: insertUserError } = await supabaseAdmin
       .from("users")
-      .insert([
-        {
-          uuid: user.id,
-          email: normalizedUserEmail,
-          status: "onboarding",
-        },
-      ]);
+      .insert([userInsert]);
 
     if (insertUserError) {
       return c.json({ error: insertUserError.message }, 500);
     }
+
+    await supabaseAdmin.auth.admin.updateUserById(user.id, {
+      app_metadata: { role: inviteRole },
+    });
 
     const { data: acceptedInvite, error: updateError } = await supabaseAdmin
       .from("invites")
@@ -98,6 +127,7 @@ app.post("/", async (c) => {
           uuid: user.id,
           email: normalizedUserEmail,
           status: "onboarding",
+          role: inviteRole,
         },
       },
       200,

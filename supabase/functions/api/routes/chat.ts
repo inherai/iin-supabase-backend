@@ -82,7 +82,9 @@ app.post("/", async (c) => {
     .eq("user2_id", u2)
     .maybeSingle();
 
-  if (existing) return c.json(existing);
+  // At this point we've already verified there's an accepted connection,
+  // so always return is_connection_active: true.
+  if (existing) return c.json({ ...existing, is_connection_active: true });
 
   const { data: newConv, error: createError } = await supabase
     .from("conversations")
@@ -91,7 +93,7 @@ app.post("/", async (c) => {
     .single();
 
   if (createError) return c.json({ error: createError.message }, 400);
-  return c.json(newConv, 201);
+  return c.json({ ...newConv, is_connection_active: true }, 201);
 });
 
 // GET /api/chat/:id/messages
