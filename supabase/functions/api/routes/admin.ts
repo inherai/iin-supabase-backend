@@ -245,7 +245,9 @@ app.delete("/users/:id", async (c) => {
   }
 
   // 6. Anonymize user row — keep it so posts resolve to "duallin Member [deleted]"
-  await db.from("users").update({
+  //    NOTE: is_anonymous intentionally omitted — setting it triggers handle_anonymous_transition()
+  //    which can roll back the entire update if it errors internally.
+  const { error: updateErr } = await db.from("users").update({
     first_name: "duallin Member",
     last_name: "[deleted]",
     email: deletedEmail,
@@ -263,12 +265,15 @@ app.delete("/users/:id", async (c) => {
     experience: null,
     education: null,
     certifications: null,
-    is_anonymous: true,
   }).eq("uuid", userId);
+  if (updateErr) return c.json({ error: updateErr.message }, 500);
 
-  // 7. Delete auth user LAST — no FK/CASCADE to users table (verified)
+  // 7. Delete auth user LAST — no FK/CASCADE to users table (verified via pg_constraint)
+  //    Note: if auth user was already deleted (e.g. retry), skip gracefully
   const { error: authErr } = await db.auth.admin.deleteUser(userId);
-  if (authErr) return c.json({ error: authErr.message }, 500);
+  if (authErr && !authErr.message.toLowerCase().includes("not found")) {
+    return c.json({ error: authErr.message }, 500);
+  }
 
   return c.json({ success: true });
 });

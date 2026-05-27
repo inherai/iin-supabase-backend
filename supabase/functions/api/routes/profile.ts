@@ -664,11 +664,21 @@ app.put('/privacy', async (c) => {
     if (privacy_picture) updates.privacy_picture = privacy_picture
     if (privacy_contact_details) updates.privacy_contact_details = privacy_contact_details
     
-    // שואלים פעם אחת, ומכינים את כל הנתונים
     if (typeof is_anonymous === 'boolean') {
       updates.is_anonymous = is_anonymous
-      // recruiters keep their role regardless of privacy settings
-      if (user.app_metadata?.role !== 'recruiters') {
+
+      // Read role from DB — JWT may be stale right after invite registration
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL') ?? '',
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      )
+      const { data: currentUser } = await supabaseAdmin
+        .from('users')
+        .select('role')
+        .eq('uuid', user.id)
+        .maybeSingle()
+
+      if (currentUser?.role !== 'recruiters') {
         updates.role = is_anonymous ? 'feed_participant' : 'community'
       }
     }
