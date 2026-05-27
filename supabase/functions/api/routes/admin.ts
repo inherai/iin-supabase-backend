@@ -55,7 +55,8 @@ app.get("/users", async (c) => {
   const sortDir = c.req.query("sortDir") === "asc";
   const offset = (page - 1) * limit;
 
-  let query = db.from("users").select("*", { count: "exact" });
+  let query = db.from("users").select("*", { count: "exact" })
+    .not("email", "like", "deleted_%@deleted.local");
 
   if (search) {
     query = query.or(
@@ -183,14 +184,27 @@ app.delete("/users/:id", async (c) => {
   const db = getAdminClient();
   const userId = c.req.param("id");
 
-  // 1. Fetch user — need email (posts/comments keyed by email), image + cover_image_url (storage paths)
+  // 1. Fetch user — need full details for log + email/image for downstream ops
   const { data: user, error: fetchErr } = await db
-    .from("users").select("uuid,email,image,cover_image_url").eq("uuid", userId).maybeSingle();
+    .from("users").select("uuid,email,image,cover_image_url,first_name,last_name,role,status,created_at").eq("uuid", userId).maybeSingle();
   if (fetchErr) return c.json({ error: fetchErr.message }, 500);
   if (!user) return c.json({ error: "User not found" }, 404);
 
   const oldEmail = user.email;
   const deletedEmail = `deleted_${userId}@deleted.local`;
+
+  // 1b. Log deletion before touching any data
+  const admin = c.get("user");
+  await db.from("deleted_users_log").insert({
+    deleted_by_admin_uuid: admin.id,
+    user_uuid: user.uuid,
+    email: user.email,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    role: user.role,
+    status: user.status,
+    joined_at: user.created_at,
+  });
 
   // 2. Re-key posts/comments FIRST — before users.email changes
   if (oldEmail) {
@@ -283,6 +297,28 @@ app.delete("/users/:id", async (c) => {
   }
 
   return c.json({ success: true });
+});
+
+// ==================== DELETED USERS LOG ====================
+
+app.get("/deleted-users", async (c) => {
+  const db = getAdminClient();
+  const page = parseInt(c.req.query("page") || "1");
+  const limit = parseInt(c.req.query("limit") || "20");
+  const offset = (page - 1) * limit;
+
+  const { data, error, count } = await db
+    .from("deleted_users_log")
+    .select("*", { count: "exact" })
+    .order("deleted_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  return c.json({
+    deleted_users: data || [],
+    pagination: { page, limit, total: count || 0, totalPages: Math.ceil((count || 0) / limit) },
+  });
 });
 
 // ==================== INVITATIONS ====================
