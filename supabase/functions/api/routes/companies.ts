@@ -16,6 +16,7 @@ app.get('/', async (c) => {
     .from('companies_ranked')
     .select('*', { count: 'exact' })
     .order('activity_score', { ascending: false })
+    .order('id', { ascending: true })
 
   if (search) {
     query = query.ilike('name', `%${search}%`)
