@@ -465,11 +465,34 @@ if (targetUserId) {
     // יצירת מפה כפולה: לפי email ולפי uuid
     const usersByEmail = new Map()
     const usersByUuid = new Map()
-    
+
     enrichedUsers.forEach((u: any) => {
       if (u._internal_email_lookup) usersByEmail.set(u._internal_email_lookup, u)
       if (u.uuid) usersByUuid.set(u.uuid, u)
     })
+
+    // Fetch impression counts only for posts authored by the current viewer
+    const viewerProfile = current_user_uuid ? usersByUuid.get(current_user_uuid) : null
+    const viewerEmail: string | null = viewerProfile?._internal_email_lookup?.toLowerCase() ?? null
+
+    const authoredPostIds = viewerEmail
+      ? sourcePosts
+          .filter((p: any) => (p.sender || '').toLowerCase() === viewerEmail)
+          .map((p: any) => String(p.id))
+      : []
+
+    const impressionCountMap = new Map<string, number>()
+    if (authoredPostIds.length > 0) {
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      )
+      const { data: impData } = await supabaseAdmin
+        .rpc('get_impression_counts', { p_post_ids: authoredPostIds })
+      ;(impData || []).forEach((row: any) =>
+        impressionCountMap.set(String(row.post_id), Number(row.impression_count))
+      )
+    }
 
     const enrichedCommentsList = visibleComments.map((comment: any) => {
       const senderEmail = comment.sender
@@ -607,8 +630,11 @@ if (targetUserId) {
         reaction_users: reactionUsers,
         reaction_counts: reactionCounts,
         user_reactions: userReactions,
-        user_reaction: userReactions[0] || null, // backward compatibility
-        is_liked: userReactions.length > 0 // backward compatibility
+        user_reaction: userReactions[0] || null,
+        is_liked: userReactions.length > 0,
+        impressions_count: impressionCountMap.has(String(post.id))
+          ? impressionCountMap.get(String(post.id))
+          : undefined,
       }
     })
 
@@ -1600,5 +1626,45 @@ app.delete('/:postId/comments/:commentId', async (c) => {
 })
 
 
+
+// ====================================================================
+// Record a post impression (fire-and-forget)
+// POST /posts/:id/impression
+// ====================================================================
+app.post('/:id/impression', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ ok: true })
+
+    const postId = String(c.req.param('id'))
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    )
+
+    const { data: post } = await supabaseAdmin
+      .from('posts')
+      .select('sender')
+      .eq('id', postId)
+      .maybeSingle()
+
+    // Self-view guard
+    if (post?.sender && user.email?.toLowerCase() === post.sender.toLowerCase()) {
+      return c.json({ ok: true })
+    }
+
+    const today = new Date().toISOString().slice(0, 10)
+    await supabaseAdmin
+      .from('post_impressions')
+      .upsert(
+        { post_id: postId, user_id: user.id, impression_date: today },
+        { onConflict: 'post_id,user_id,impression_date', ignoreDuplicates: true }
+      )
+
+    return c.json({ ok: true })
+  } catch {
+    return c.json({ ok: true })
+  }
+})
 
 export default app

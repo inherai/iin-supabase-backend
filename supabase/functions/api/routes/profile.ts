@@ -90,6 +90,64 @@ app.get('/views/chart', async (c) => {
     return c.json({ error: err.message }, 500)
   }
 })
+app.get('/post-impressions/chart', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+    const period = c.req.query('period') ?? '30d'
+    const days = period === '7d' ? 7 : period === '90d' ? 90 : 30
+
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    // Resolve viewer email from UUID
+    const { data: emailData } = await supabaseAdmin
+      .rpc('get_user_email_by_uuid', { p_uuid: user.id })
+    if (!emailData) return c.json({ current_period_total: 0, previous_period_total: 0, data: [] })
+
+    const senderEmail = String(emailData)
+
+    const today = new Date()
+    const currentEnd = today.toISOString().slice(0, 10)
+    const currentStart = new Date(today.getTime() - days * 24 * 60 * 60 * 1000)
+      .toISOString().slice(0, 10)
+    const prevEnd = new Date(currentStart)
+    prevEnd.setDate(prevEnd.getDate() - 1)
+    const prevStart = new Date(prevEnd.getTime() - (days - 1) * 24 * 60 * 60 * 1000)
+      .toISOString().slice(0, 10)
+
+    const [{ data: currentData }, { data: prevData }] = await Promise.all([
+      supabaseAdmin.rpc('get_post_impressions_chart', {
+        p_sender_email: senderEmail,
+        p_start_date: currentStart,
+        p_end_date: currentEnd,
+      }),
+      supabaseAdmin.rpc('get_post_impressions_chart', {
+        p_sender_email: senderEmail,
+        p_start_date: prevStart,
+        p_end_date: prevEnd,
+      }),
+    ])
+
+    const chartData = (currentData || []).map((row: any) => ({
+      date: row.impression_date,
+      count: Number(row.daily_count),
+    }))
+
+    const current_period_total = chartData.reduce((s: number, r: any) => s + r.count, 0)
+    const previous_period_total = (prevData || []).reduce(
+      (s: number, r: any) => s + Number(r.daily_count), 0
+    )
+
+    return c.json({ current_period_total, previous_period_total, data: chartData })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 app.get('/posts/count', async (c) => {
   try {
     const user = c.get('user')
