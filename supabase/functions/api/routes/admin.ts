@@ -253,7 +253,6 @@ app.delete("/users/:id", async (c) => {
     email: deletedEmail,
     headline: null,
     about: null,
-    company: null,
     location: null,
     phone: null,
     image: null,
