@@ -13,8 +13,9 @@ app.get('/', async (c) => {
   const offset = (page - 1) * pageSize
 
   let query = supabase
-    .from('companies')
+    .from('companies_ranked')
     .select('*', { count: 'exact' })
+    .order('activity_score', { ascending: false })
 
   if (search) {
     query = query.ilike('name', `%${search}%`)
@@ -28,9 +29,6 @@ app.get('/', async (c) => {
   }
 
   const companies = data || []
-  const companyIds = companies
-    .map((company: any) => company.id)
-    .filter((id: any) => typeof id === 'number' || typeof id === 'string')
 
   const allEmployeeIds = [...new Set(
     companies
@@ -59,26 +57,6 @@ app.get('/', async (c) => {
     usersById = new Map(enrichedUsers.map((u: any) => [u.uuid, u]))
   }
 
-  let openPositionsByCompany = new Map<any, number>()
-
-  if (companyIds.length > 0) {
-    const { data: openPositions, error: openPositionsError } = await supabase
-      .from('open_position')
-      .select('company_id')
-      .in('company_id', companyIds)
-
-    if (openPositionsError) {
-      return c.json({ error: openPositionsError.message }, 400)
-    }
-
-    openPositionsByCompany = new Map()
-    for (const row of openPositions || []) {
-      const key = row.company_id
-      if (key === null || key === undefined) continue
-      openPositionsByCompany.set(key, (openPositionsByCompany.get(key) || 0) + 1)
-    }
-  }
-
   const processedData = companies.map((company: any) => {
     const employeeIds = Array.isArray(company.employees) ? company.employees : []
     const employeesDetails = employeeIds
@@ -89,7 +67,7 @@ app.get('/', async (c) => {
       ...company,
       employees: employeesDetails,
       employees_count: employeeIds.filter((id: any) => id !== null && id !== undefined).length,
-      open_positions_count: openPositionsByCompany.get(company.id) || 0
+      open_positions_count: company.open_positions_count ?? 0,
     }
 
     if (!Array.isArray(company.locations) || company.locations.length === 0) {
