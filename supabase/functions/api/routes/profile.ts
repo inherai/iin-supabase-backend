@@ -13,6 +13,8 @@ app.get('/views/count', async (c) => {
     }
 
     const targetUserId = c.req.query('id') || user.id
+    const end   = c.req.query('end')   ?? new Date().toISOString()
+    const start = c.req.query('start') ?? new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
 
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -23,12 +25,67 @@ app.get('/views/count', async (c) => {
       .from('profile_views')
       .select('id', { count: 'exact', head: true })
       .eq('viewed_id', targetUserId)
+      .gte('viewed_at', start)
+      .lte('viewed_at', end)
 
     if (error) {
       return c.json({ error: error.message }, 500)
     }
 
     return c.json({ count: count ?? 0 })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.get('/views/chart', async (c) => {
+  try {
+    const user = c.get('user')
+
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
+    const targetUserId = c.req.query('id') || user.id
+    const period  = c.req.query('period')  ?? '30d'
+    const groupBy = c.req.query('groupBy') ?? 'day'
+
+    const days = period === '7d' ? 7 : period === '90d' ? 90 : 30
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    const { data, error } = await supabaseAdmin
+      .from('profile_views')
+      .select('viewed_at')
+      .eq('viewed_id', targetUserId)
+      .gte('viewed_at', since)
+      .order('viewed_at', { ascending: true })
+
+    if (error) {
+      return c.json({ error: error.message }, 500)
+    }
+
+    const buckets: Record<string, number> = {}
+    for (const row of data ?? []) {
+      const d = new Date(row.viewed_at)
+      let key: string
+      if (groupBy === 'week') {
+        const dow = d.getDay() || 7
+        const monday = new Date(d)
+        monday.setDate(d.getDate() - (dow - 1))
+        key = monday.toISOString().slice(0, 10)
+      } else {
+        key = d.toISOString().slice(0, 10)
+      }
+      buckets[key] = (buckets[key] ?? 0) + 1
+    }
+
+    const result = Object.entries(buckets).map(([date, count]) => ({ date, count }))
+    return c.json({ data: result })
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
