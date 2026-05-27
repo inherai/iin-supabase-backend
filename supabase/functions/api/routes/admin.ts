@@ -179,6 +179,100 @@ app.get("/users/:id", async (c) => {
   });
 });
 
+app.delete("/users/:id", async (c) => {
+  const db = getAdminClient();
+  const userId = c.req.param("id");
+
+  // 1. Fetch user — need email (posts/comments keyed by email), image + cover_image_url (storage paths)
+  const { data: user, error: fetchErr } = await db
+    .from("users").select("uuid,email,image,cover_image_url").eq("uuid", userId).maybeSingle();
+  if (fetchErr) return c.json({ error: fetchErr.message }, 500);
+  if (!user) return c.json({ error: "User not found" }, 404);
+
+  const oldEmail = user.email;
+  const deletedEmail = `deleted_${userId}@deleted.local`;
+
+  // 2. Re-key posts/comments FIRST — before users.email changes
+  if (oldEmail) {
+    await db.from("posts").update({ sender: deletedEmail }).eq("sender", oldEmail);
+    await db.from("comments").update({ sender: deletedEmail }).eq("sender", oldEmail);
+  }
+
+  // 3. Storage cleanup (best-effort, non-fatal)
+  const getStoragePath = (fullUrl: string | null, bucketName: string): string | null => {
+    if (!fullUrl) return null;
+    const marker = `/${bucketName}/`;
+    const idx = fullUrl.indexOf(marker);
+    if (idx === -1) return null;
+    return decodeURIComponent(fullUrl.slice(idx + marker.length));
+  };
+  const imagePath = getStoragePath(user.image, "profile-images");
+  const coverPath = getStoragePath(user.cover_image_url, "profile-headers");
+
+  await Promise.allSettled([
+    imagePath ? db.storage.from("profile-images").remove([imagePath]) : Promise.resolve(),
+    coverPath ? db.storage.from("profile-headers").remove([coverPath]) : Promise.resolve(),
+    db.storage.from("attachments").list(userId).then(({ data: files }) => {
+      if (files?.length) {
+        const paths = files.map((f: any) => `${userId}/${f.name}`);
+        return db.storage.from("attachments").remove(paths);
+      }
+    }),
+  ]);
+
+  // 4. Hard delete activity/relationship data (parallel — users row still exists, no FK issues)
+  //    messages + conversations intentionally kept (other user's chat history stays)
+  await Promise.all([
+    db.from("post_impressions").delete().eq("user_id", userId),
+    db.from("saved_resources").delete().eq("user_id", userId),
+    db.from("profile_views").delete().or(`viewer_id.eq.${userId},viewed_id.eq.${userId}`),
+    db.from("likes").delete().eq("user_id", userId),
+    db.from("connections").delete().or(`requester_id.eq.${userId},receiver_id.eq.${userId}`),
+    db.from("notifications").delete().or(`user_id.eq.${userId},actor_id.eq.${userId}`),
+    db.from("invites").delete().eq("inviter_id", userId),
+    db.from("users_vectors").delete().eq("user_id", userId),
+  ]);
+
+  // 5. Remove from companies.employees array
+  const { data: companiesWithUser } = await db
+    .from("companies").select("id,employees").contains("employees", [userId]);
+  if (companiesWithUser?.length) {
+    await Promise.all(companiesWithUser.map((co: any) =>
+      db.from("companies").update({
+        employees: co.employees.filter((e: string) => e !== userId),
+      }).eq("id", co.id)
+    ));
+  }
+
+  // 6. Anonymize user row — keep it so posts resolve to "duallin Member [deleted]"
+  await db.from("users").update({
+    first_name: "duallin Member",
+    last_name: "[deleted]",
+    email: deletedEmail,
+    headline: null,
+    about: null,
+    company: null,
+    location: null,
+    phone: null,
+    image: null,
+    cover_image_url: null,
+    skills: null,
+    interests: null,
+    languages: null,
+    work_preferences: null,
+    experience: null,
+    education: null,
+    certifications: null,
+    is_anonymous: true,
+  }).eq("uuid", userId);
+
+  // 7. Delete auth user LAST — no FK/CASCADE to users table (verified)
+  const { error: authErr } = await db.auth.admin.deleteUser(userId);
+  if (authErr) return c.json({ error: authErr.message }, 500);
+
+  return c.json({ success: true });
+});
+
 // ==================== INVITATIONS ====================
 
 app.get("/invitations", async (c) => {
