@@ -248,22 +248,30 @@ app.delete("/users/:id", async (c) => {
   //    NOTE: is_anonymous intentionally omitted — setting it triggers handle_anonymous_transition()
   //    which can roll back the entire update if it errors internally.
   const { error: updateErr } = await db.from("users").update({
+    // identity
     first_name: "duallin Member",
     last_name: "[deleted]",
+    name: null,
     email: deletedEmail,
+    // nullable text fields → null
     headline: null,
     about: null,
     location: null,
     phone: null,
     image: null,
     cover_image_url: null,
+    // nullable arrays → null
     skills: null,
     interests: null,
-    languages: null,
     work_preferences: null,
-    experience: null,
-    education: null,
-    certifications: null,
+    privacy_picture: null,
+    privacy_lastname: null,
+    privacy_contact_details: null,
+    // NOT NULL jsonb fields → empty array (cannot be null)
+    languages: [],
+    experience: [],
+    education: [],
+    certifications: [],
   }).eq("uuid", userId);
   if (updateErr) return c.json({ error: updateErr.message }, 500);
 
