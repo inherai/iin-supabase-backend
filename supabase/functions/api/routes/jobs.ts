@@ -4,6 +4,14 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 const app = new Hono()
 const allowedCategories = new Set(['Development', 'QA', 'Data', 'Management', 'Product'])
 
+const SENIORITY_LEVEL_MAP: Record<string, string[]> = {
+  Internship: ['Internship'],
+  Junior: ['Junior', 'Entry level', '0+ years', '1+ years', '2+ years', 'Associate'],
+  Mid: ['Mid', 'Associate', 'Mid-Senior level', '2+ years', '3+ years', '4+ years'],
+  Senior: ['Senior', 'Mid-Senior level', '5+ years', '6+ years', '7+ years', '8+ years'],
+  Management: ['Management', 'Director', 'Executive'],
+}
+
 app.get('/', async (c) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -21,6 +29,7 @@ app.get('/', async (c) => {
 
     const rawTextSearch = (c.req.query('query') ?? c.req.query('search') ?? '').trim()
     const rawCategory = (c.req.query('category') ?? c.req.query('categories') ?? '').trim()
+    const rawSeniorityLevels = (c.req.query('seniority_levels') ?? '').split(',').map((s: string) => s.trim()).filter(Boolean)
     const id = c.req.query('id')
     const companyId = c.req.query('company_id')
 
@@ -63,7 +72,7 @@ app.get('/', async (c) => {
 
       let query = supabaseClient
         .from('open_position')
-        .select('job_id, job_title, company_name, company_id, location, time_posted, employment_type, companies(id, name, logo)', { count: 'exact' })
+        .select('job_id, job_title, company_name, company_id, location, time_posted, employment_type, seniority_level, companies(id, name, logo)', { count: 'exact' })
         .not('job_description_html', 'is', null)
         .order('created_at', { ascending: false })
 
@@ -86,6 +95,15 @@ app.get('/', async (c) => {
         }
 
         query = query.contains('categories', [category])
+      }
+
+      if (rawSeniorityLevels.length) {
+        const dbValues = rawSeniorityLevels.flatMap((level: string) => {
+          const mapped = SENIORITY_LEVEL_MAP[level]
+          if (!mapped) throw new Error(`Invalid seniority_level: ${level}`)
+          return mapped
+        })
+        query = query.in('seniority_level', [...new Set(dbValues)])
       }
 
       if (companyId) {
