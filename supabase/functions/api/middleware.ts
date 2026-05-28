@@ -85,7 +85,8 @@ export const authMiddleware = async (c: Context, next: Next) => {
       '/api/fields-of-study',
       '/api/activity',     
       '/api/avatar',       
-      '/api/saved-resources' 
+      '/api/saved-resources',
+      '/api/company-insights'
     ];
     if (!allowed.some(p => path === p || path.startsWith(p + '/'))) {
       return c.json({ error: 'Access denied for anonymous users' }, 403);

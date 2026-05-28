@@ -27,6 +27,7 @@ import savedResourcesRoute from './routes/saved_resources.ts'
 import avatarRoute from './routes/avatar.ts'
 import inviteRoute from './routes/invite.ts'
 import adminRoute from './routes/admin.ts'
+import companyInsightsRoute from './routes/company-insights.ts'
 
 //const app = new Hono()
 // מגדירים שהכל יושב תחת /api
@@ -75,6 +76,7 @@ app.route('/avatar', avatarRoute)
 app.route('/saved-resources', savedResourcesRoute)
 app.route('/invite', inviteRoute)
 app.route('/admin', adminRoute)
+app.route('/company-insights', companyInsightsRoute)
 // בדיקה שהכל חי
 app.get('/', (c) => c.text('Inerai API is running 🚀'))
 
