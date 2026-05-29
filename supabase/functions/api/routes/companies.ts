@@ -75,7 +75,7 @@ app.get('/', async (c) => {
       return nextCompany
     }
 
-    const israelLocations = company.locations.filter((loc: any) => loc.country === 'IL')
+    const israelLocations = company.locations.filter((loc: any) => loc?.country === 'IL')
 
     return {
       ...nextCompany,
@@ -147,7 +147,7 @@ app.get('/:id', async (c) => {
   // סינון locations לישראל
   let locations = company.locations || []
   if (Array.isArray(locations) && locations.length > 0) {
-    const israelLocations = locations.filter((loc: any) => loc.country === 'IL')
+    const israelLocations = locations.filter((loc: any) => loc?.country === 'IL')
     locations = israelLocations.length > 0 ? israelLocations : [locations[0]]
   }
 
