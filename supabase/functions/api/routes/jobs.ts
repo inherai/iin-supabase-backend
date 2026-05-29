@@ -72,7 +72,7 @@ app.get('/', async (c) => {
 
       let query = supabaseClient
         .from('open_position')
-        .select('job_id, job_title, company_name, company_id, location, time_posted, employment_type, seniority_level, companies(id, name, logo)', { count: 'exact' })
+        .select('job_id, job_title, company_name, company_id, location, time_posted, created_at, employment_type, seniority_level, companies(id, name, logo)', { count: 'exact' })
         .not('job_description_html', 'is', null)
         .order('created_at', { ascending: false })
 
