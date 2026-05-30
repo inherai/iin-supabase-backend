@@ -323,7 +323,7 @@ app.get('/strength', async (c) => {
 
   const { data: userData, error: userError } = await supabase
     .from('users')
-    .select('headline, about, skills, experience, education, work_preferences, image')
+    .select('headline, about, skills, experience, education, certifications, location, image')
     .eq('uuid', user.id)
     .single()
 
@@ -355,14 +355,28 @@ app.get('/strength', async (c) => {
   }
 
   const hasPhoto = !!(userData.image && userData.image !== 'null' && userData.image !== 'false')
+
   const aboutText = userData.about?.trim() ?? ''
-  const aboutScore = aboutText.length === 0 ? 0 : aboutText.length < 80 ? 0.5 : 1
+  const aboutScore = aboutText.length === 0 ? 0 : aboutText.length < 200 ? 0.5 : 1
+
+  const experienceList: any[] = userData.experience ?? []
+  const hasExperienceWithDescription = experienceList.some(
+    (e) => (e?.description ?? e?.summary ?? '').trim().length >= 30
+  )
+  const experienceScore =
+    experienceList.length === 0 ? 0 :
+    hasExperienceWithDescription ? 1 : 0.5
+
+  const skillsCount = userData.skills?.length ?? 0
+  const skillsScore = skillsCount >= 6 ? 1 : skillsCount >= 3 ? 0.5 : 0
+
   const connections = connectionsCount ?? 0
   const connectionsScore =
     connections >= 30 ? 1 :
     connections >= 15 ? 0.75 :
     connections >= 5  ? 0.5 :
     connections >= 1  ? 0.25 : 0
+
   const recentPosts = postsCount ?? 0
   const postsScore =
     recentPosts >= 10 ? 1 :
@@ -372,45 +386,47 @@ app.get('/strength', async (c) => {
 
   const items = [
     {
+      key: 'experience',
+      label: experienceScore === 0.5 ? 'Add descriptions to your experience' : 'Work experience',
+      tip: experienceScore === 0
+        ? 'The first thing recruiters look for when filtering candidates'
+        : 'Add a description to your roles — recruiters want to know what you actually did',
+      score: experienceScore,
+      weight: 0.18,
+    },
+    {
       key: 'headline',
       label: 'Professional headline',
       tip: 'Your headline is the first thing recruiters see in search',
       score: userData.headline?.trim() ? 1 : 0,
-      weight: 0.18,
-    },
-    {
-      key: 'experience',
-      label: 'Work experience',
-      tip: 'The first thing recruiters look for when filtering candidates',
-      score: (userData.experience?.length ?? 0) >= 1 ? 1 : 0,
-      weight: 0.18,
+      weight: 0.15,
     },
     {
       key: 'photo',
       label: 'Profile photo',
       tip: 'Profiles with a photo get 40% more recruiter outreach',
       score: hasPhoto ? 1 : 0,
-      weight: 0.13,
+      weight: 0.12,
     },
     {
       key: 'skills',
-      label: 'At least 3 skills',
+      label: skillsScore === 0.5 ? 'Add more skills (aim for 6+)' : 'Skills',
       tip: 'Recruiters search by skills — the more you add, the better',
-      score: (userData.skills?.length ?? 0) >= 3 ? 1 : 0,
-      weight: 0.13,
+      score: skillsScore,
+      weight: 0.12,
     },
     {
       key: 'education',
       label: 'Education',
       tip: 'Shows your academic background and qualifications to recruiters',
       score: (userData.education?.length ?? 0) >= 1 ? 1 : 0,
-      weight: 0.13,
+      weight: 0.10,
     },
     {
       key: 'about',
       label: aboutScore === 0.5 ? 'Expand your About section' : 'About section',
       tip: aboutScore === 0.5
-        ? 'Your bio is a bit short — aim for 80+ characters to make a real impression'
+        ? 'Your bio is a bit short — aim for 200+ characters to make a real impression'
         : 'A personal story increases the chance of direct outreach',
       score: aboutScore,
       weight: 0.10,
@@ -423,6 +439,7 @@ app.get('/strength', async (c) => {
         : 'Keep connecting — aim for 30+ connections for full credit',
       score: connectionsScore,
       weight: 0.08,
+      activity: true,
     },
     {
       key: 'posts',
@@ -432,19 +449,29 @@ app.get('/strength', async (c) => {
         : 'Keep posting — aim for 10+ posts this month for full credit',
       score: postsScore,
       weight: 0.06,
+      activity: true,
     },
     {
-      key: 'preferences',
-      label: 'Work preferences',
-      tip: 'Enables precise matching between your needs and open roles',
-      score: (userData.work_preferences?.length ?? 0) >= 1 ? 1 : 0,
-      weight: 0.01,
+      key: 'certifications',
+      label: 'Certifications',
+      tip: 'Certifications validate your expertise and appear in recruiter searches',
+      score: (userData.certifications?.length ?? 0) >= 1 ? 1 : 0,
+      weight: 0.05,
+    },
+    {
+      key: 'location',
+      label: 'Location',
+      tip: 'Recruiters filter by location — add yours to appear in local searches',
+      score: userData.location?.trim() ? 1 : 0,
+      weight: 0.04,
     },
   ]
 
   const totalScore = items.reduce((sum, i) => sum + i.score * i.weight, 0)
   const percentage = Math.round(totalScore * 100)
-  const nextItem = items.find((i) => i.score < 1) ?? null
+  const nextItem = items
+    .filter((i) => i.score < 1)
+    .sort((a, b) => b.weight - a.weight)[0] ?? null
   const tier =
     percentage >= 95 ? 'Elite' :
     percentage >= 85 ? 'Expert' :

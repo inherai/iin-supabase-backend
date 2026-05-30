@@ -46,6 +46,30 @@ async function singleAuthor(admin: any, userId: string, isAnonymous: boolean) {
   return u ?? null
 }
 
+// ─── My Contributions ────────────────────────────────────────────────────────
+
+app.get('/mine', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ company_ids: [] })
+
+  const supabase = c.get('supabase')
+  const [reviews, fit, salaries, interviews] = await Promise.all([
+    supabase.from('company_reviews').select('company_id').eq('user_id', user.id),
+    supabase.from('company_fit').select('company_id').eq('user_id', user.id),
+    supabase.from('company_salaries').select('company_id').eq('user_id', user.id),
+    supabase.from('company_interviews').select('company_id').eq('user_id', user.id),
+  ])
+
+  const all = [
+    ...(reviews.data ?? []),
+    ...(fit.data ?? []),
+    ...(salaries.data ?? []),
+    ...(interviews.data ?? []),
+  ]
+  const company_ids = [...new Set(all.map((r: any) => r.company_id))]
+  return c.json({ company_ids })
+})
+
 // ─── Reviews ────────────────────────────────────────────────────────────────
 
 app.get('/:companyId/reviews', async (c) => {
