@@ -127,5 +127,65 @@ app.get("/:id/messages", async (c) => {
   return c.json(data ?? []);
 });
 
+// DELETE /api/chat/:conversationId/messages/:messageId
+app.delete("/:conversationId/messages/:messageId", async (c) => {
+  const supabase = c.get("supabase");
+  const user = c.get("user");
+  const conversationId = c.req.param("conversationId");
+  const messageId = c.req.param("messageId");
+
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  // Verify the message belongs to this user and conversation
+  const { data: message, error: fetchError } = await supabase
+    .from("messages")
+    .select("id, sender_id, conversation_id")
+    .eq("id", messageId)
+    .eq("conversation_id", conversationId)
+    .single();
+
+  if (fetchError || !message) return c.json({ error: "Message not found" }, 404);
+  if (message.sender_id !== user.id) return c.json({ error: "Forbidden" }, 403);
+
+  const { error } = await supabase.from("messages").delete().eq("id", messageId);
+  if (error) return c.json({ error: error.message }, 400);
+
+  return c.json({ success: true });
+});
+
+// PATCH /api/chat/:conversationId/messages/:messageId
+app.patch("/:conversationId/messages/:messageId", async (c) => {
+  const supabase = c.get("supabase");
+  const user = c.get("user");
+  const conversationId = c.req.param("conversationId");
+  const messageId = c.req.param("messageId");
+
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  const body = await c.req.json().catch(() => null);
+  const content = body?.content?.trim();
+  if (!content) return c.json({ error: "content is required" }, 400);
+
+  const { data: message, error: fetchError } = await supabase
+    .from("messages")
+    .select("id, sender_id, conversation_id")
+    .eq("id", messageId)
+    .eq("conversation_id", conversationId)
+    .single();
+
+  if (fetchError || !message) return c.json({ error: "Message not found" }, 404);
+  if (message.sender_id !== user.id) return c.json({ error: "Forbidden" }, 403);
+
+  const { data: updated, error } = await supabase
+    .from("messages")
+    .update({ content, is_edited: true })
+    .eq("id", messageId)
+    .select("*")
+    .single();
+
+  if (error) return c.json({ error: error.message }, 400);
+  return c.json(updated);
+});
+
 export default app;
 
