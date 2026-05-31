@@ -43,7 +43,7 @@ app.use('*', async (c, next) => {
 app.use('/*', cors({
     origin: '*',
     allowHeaders: ['authorization', 'x-client-info', 'content-type'],
-    allowMethods: ['POST', 'GET', 'OPTIONS', 'PUT', 'DELETE'],
+    allowMethods: ['POST', 'GET', 'OPTIONS', 'PUT', 'DELETE', 'PATCH'],
     exposeHeaders: ['Content-Length', 'X-Kuma-Revision'],
     maxAge: 600,
     credentials: true,
