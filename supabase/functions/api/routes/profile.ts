@@ -681,6 +681,46 @@ app.put('/privacy', async (c) => {
       if (currentUser?.role !== 'recruiters') {
         updates.role = is_anonymous ? 'feed_participant' : 'community'
       }
+
+      // When going anonymous — delete all conversations, messages and storage files
+      if (is_anonymous) {
+        const { data: conversations } = await supabaseAdmin
+          .from('conversations')
+          .select('id')
+          .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
+
+        const conversationIds = (conversations ?? []).map((c: any) => c.id)
+
+        if (conversationIds.length > 0) {
+          // Collect attachment paths to delete from storage
+          const { data: msgsWithAttachments } = await supabaseAdmin
+            .from('messages')
+            .select('attachments')
+            .in('conversation_id', conversationIds)
+            .not('attachments', 'is', null)
+
+          const paths: string[] = []
+          for (const msg of msgsWithAttachments ?? []) {
+            for (const att of (msg.attachments ?? []) as any[]) {
+              const path = att.localPath || att.url || ''
+              if (path && !path.startsWith('http')) paths.push(path)
+            }
+          }
+          if (paths.length > 0) {
+            await supabaseAdmin.storage.from('chat-attachments').remove(paths)
+          }
+
+          // Delete messages then conversations
+          await supabaseAdmin.from('messages').delete().in('conversation_id', conversationIds)
+          await supabaseAdmin.from('conversations').delete().in('id', conversationIds)
+        }
+
+        // Delete all connections (both as requester and receiver)
+        await supabaseAdmin
+          .from('connections')
+          .delete()
+          .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+      }
     }
 
     if (Object.keys(updates).length === 0) {
