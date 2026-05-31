@@ -643,4 +643,54 @@ app.put("/jobs/:id", async (c) => {
   return c.json(data);
 });
 
+// ==================== CONTENT REPORTS ====================
+
+app.get("/reports", async (c) => {
+  const db = getAdminClient();
+  const page = parseInt(c.req.query("page") || "1");
+  const limit = parseInt(c.req.query("limit") || "20");
+  const offset = (page - 1) * limit;
+
+  const { data: reports, error, count } = await db
+    .from("post_reports")
+    .select(`
+      id,
+      post_id,
+      reporter_id,
+      reason,
+      created_at,
+      posts!post_id ( subject, message, sender ),
+      users!reporter_id ( first_name, last_name, email )
+    `, { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const mapped = (reports || []).map((r: any) => ({
+    id: r.id,
+    post_id: r.post_id,
+    reporter_id: r.reporter_id,
+    reason: r.reason,
+    created_at: r.created_at,
+    post_subject: r.posts?.subject ?? null,
+    post_message: r.posts?.message ?? null,
+    post_sender: r.posts?.sender ?? null,
+    reporter_name: r.users
+      ? [r.users.first_name, r.users.last_name].filter(Boolean).join(' ') || null
+      : null,
+    reporter_email: r.users?.email ?? null,
+  }));
+
+  return c.json({
+    reports: mapped,
+    pagination: {
+      page,
+      limit,
+      total: count || 0,
+      totalPages: Math.ceil((count || 0) / limit),
+    },
+  });
+});
+
 export default app;

@@ -1667,4 +1667,34 @@ app.post('/:id/impression', async (c) => {
   }
 })
 
+// ====================================================================
+// REPORT POST
+// ====================================================================
+
+app.post('/:id/report', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const postId = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}))
+  const reason = (body.reason || '').trim()
+
+  if (!reason) return c.json({ error: 'reason is required' }, 400)
+
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  )
+
+  const { error } = await supabaseAdmin.from('post_reports').insert({
+    post_id: postId,
+    reporter_id: user.id,
+    reason,
+  })
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  return c.json({ success: true })
+})
+
 export default app
