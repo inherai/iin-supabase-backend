@@ -208,7 +208,6 @@ app.delete("/:conversationId/messages/:messageId", async (c) => {
 
 // PATCH /api/chat/:conversationId/messages/:messageId
 app.patch("/:conversationId/messages/:messageId", async (c) => {
-  const supabase = c.get("supabase");
   const user = c.get("user");
   const conversationId = c.req.param("conversationId");
   const messageId = c.req.param("messageId");
@@ -219,18 +218,26 @@ app.patch("/:conversationId/messages/:messageId", async (c) => {
   const content = body?.content?.trim();
   if (!content) return c.json({ error: "content is required" }, 400);
 
-  // Use anon+JWT client — RLS allows users to update their own messages
-  const { data: updated, error } = await supabase
+  const admin = getAdminClient();
+
+  const { data: message, error: fetchError } = await admin
+    .from("messages")
+    .select("id, sender_id, conversation_id")
+    .eq("id", messageId)
+    .eq("conversation_id", conversationId)
+    .single();
+
+  if (fetchError || !message) return c.json({ error: "Message not found" }, 404);
+  if (message.sender_id !== user.id) return c.json({ error: "Forbidden" }, 403);
+
+  const { data: updated, error } = await admin
     .from("messages")
     .update({ content, is_edited: true })
     .eq("id", messageId)
-    .eq("conversation_id", conversationId)
-    .eq("sender_id", user.id)
     .select("*")
     .single();
 
   if (error) return c.json({ error: error.message }, 400);
-  if (!updated) return c.json({ error: "Message not found or forbidden" }, 404);
   return c.json(updated);
 });
 
