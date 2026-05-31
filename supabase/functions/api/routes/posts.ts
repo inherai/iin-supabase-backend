@@ -344,19 +344,30 @@ if (targetUserId) {
 
     // ---- Activity filter path: posts user commented on / reacted to ----
     if (activityFilter && targetUserId && filterEmail) {
+      console.log(`[activity_filter] filter=${activityFilter} userId=${targetUserId} email=${filterEmail}`)
       const LIMIT = 20
       const activityMeta: Array<{ post_id: string; activity_date: string; reaction_type?: string }> = []
 
+      // Use service-role to bypass any RLS restrictions on activity queries
+      const supabaseAdminActivity = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      )
+
       if (activityFilter === 'commented_by') {
-        let q = supabase
+        let q = supabaseAdminActivity
           .from('comments')
           .select('post_id, created_at')
-          .eq('sender', filterEmail)
+          .ilike('sender', filterEmail) // case-insensitive match
           .order('created_at', { ascending: false })
           .limit(60) // fetch extra to handle dedup across repeated comments on same post
         if (last_effective_date) q = q.lt('created_at', last_effective_date)
         const { data: rows, error } = await q
-        if (error) throw error
+        if (error) {
+          console.error('[activity_filter] commented_by query error:', error.message)
+          throw error
+        }
+        console.log(`[activity_filter] commented_by rows found: ${rows?.length ?? 0}`)
         const seen = new Set<string>()
         for (const r of (rows || [])) {
           if (activityMeta.length >= LIMIT + 1) break
@@ -367,7 +378,7 @@ if (targetUserId) {
           }
         }
       } else if (activityFilter === 'reacted_by') {
-        let q = supabase
+        let q = supabaseAdminActivity
           .from('likes')
           .select('target_id, reaction_type, created_at')
           .eq('user_id', targetUserId)
@@ -376,13 +387,18 @@ if (targetUserId) {
           .limit(LIMIT + 1)
         if (last_effective_date) q = q.lt('created_at', last_effective_date)
         const { data: rows, error } = await q
-        if (error) throw error
+        if (error) {
+          console.error('[activity_filter] reacted_by query error:', error.message)
+          throw error
+        }
+        console.log(`[activity_filter] reacted_by rows found: ${rows?.length ?? 0}`)
         for (const r of (rows || [])) {
           if (activityMeta.length >= LIMIT + 1) break
           activityMeta.push({ post_id: String(r.target_id), activity_date: r.created_at, reaction_type: r.reaction_type })
         }
       }
 
+      console.log(`[activity_filter] activityMeta count: ${activityMeta.length}`)
       if (activityMeta.length === 0) {
         return c.json({ data: [], meta: { next_cursor: null } })
       }
@@ -398,12 +414,15 @@ if (targetUserId) {
       const reactionTypeMap = new Map(pageActivity.map(a => [a.post_id, a.reaction_type]))
       const activityPostIdList = pageActivity.map(a => a.post_id)
 
-      const { data: rawActivityPosts, error: rawActivityError } = await supabase
+      const { data: rawActivityPosts, error: rawActivityError } = await supabaseAdminActivity
         .from('posts')
         .select('*')
         .in('id', activityPostIdList)
-        .is('deleted_at', null)
-      if (rawActivityError) throw rawActivityError
+      if (rawActivityError) {
+        console.error('[activity_filter] failed to fetch posts:', rawActivityError.message, { activityPostIdList })
+        throw rawActivityError
+      }
+      console.log(`[activity_filter] posts fetched: ${rawActivityPosts?.length ?? 0} for IDs: ${activityPostIdList.join(',')}`)
 
       const activitySourcePosts = (rawActivityPosts || []).filter((p: any) =>
         viewerIsRecruiter ? p.community_members_only !== true : true
