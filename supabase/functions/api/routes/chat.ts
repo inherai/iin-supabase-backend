@@ -189,6 +189,17 @@ app.delete("/:conversationId/messages/:messageId", async (c) => {
   if (fetchError || !message) return c.json({ error: "Message not found" }, 404);
   if (message.sender_id !== user.id) return c.json({ error: "Forbidden" }, 403);
 
+  // Delete storage files if any
+  const attachments: any[] = message.attachments ?? [];
+  if (attachments.length > 0) {
+    const paths = attachments
+      .map((a: any) => a.localPath || a.url || '')
+      .filter((p: string) => p && !p.startsWith('http'));
+    if (paths.length > 0) {
+      await admin.storage.from('chat-attachments').remove(paths);
+    }
+  }
+
   const { error } = await admin.from("messages").delete().eq("id", messageId);
   if (error) return c.json({ error: error.message }, 400);
 
