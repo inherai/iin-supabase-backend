@@ -649,9 +649,10 @@ app.get("/reports", async (c) => {
   const db = getAdminClient();
   const page = parseInt(c.req.query("page") || "1");
   const limit = parseInt(c.req.query("limit") || "20");
+  const status = c.req.query("status") || "all"; // "all" | "unresolved" | "resolved"
   const offset = (page - 1) * limit;
 
-  const { data: reports, error, count } = await db
+  let query = db
     .from("post_reports")
     .select(`
       id,
@@ -659,11 +660,20 @@ app.get("/reports", async (c) => {
       reporter_id,
       reason,
       created_at,
+      is_resolved,
+      resolved_at,
+      resolved_by,
+      resolution_note,
       posts!post_id ( subject, message, sender ),
-      users!reporter_id ( first_name, last_name, email )
+      reporter:users!reporter_id ( first_name, last_name, email ),
+      resolver:users!resolved_by ( first_name, last_name, email )
     `, { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(offset, offset + limit - 1);
+    .order("created_at", { ascending: false });
+
+  if (status === "resolved") query = query.eq("is_resolved", true);
+  if (status === "unresolved") query = query.eq("is_resolved", false);
+
+  const { data: reports, error, count } = await query.range(offset, offset + limit - 1);
 
   if (error) return c.json({ error: error.message }, 500);
 
@@ -673,13 +683,21 @@ app.get("/reports", async (c) => {
     reporter_id: r.reporter_id,
     reason: r.reason,
     created_at: r.created_at,
+    is_resolved: r.is_resolved ?? false,
+    resolved_at: r.resolved_at ?? null,
+    resolved_by: r.resolved_by ?? null,
+    resolution_note: r.resolution_note ?? null,
     post_subject: r.posts?.subject ?? null,
     post_message: r.posts?.message ?? null,
     post_sender: r.posts?.sender ?? null,
-    reporter_name: r.users
-      ? [r.users.first_name, r.users.last_name].filter(Boolean).join(' ') || null
+    reporter_name: r.reporter
+      ? [r.reporter.first_name, r.reporter.last_name].filter(Boolean).join(' ') || null
       : null,
-    reporter_email: r.users?.email ?? null,
+    reporter_email: r.reporter?.email ?? null,
+    resolver_name: r.resolver
+      ? [r.resolver.first_name, r.resolver.last_name].filter(Boolean).join(' ') || null
+      : null,
+    resolver_email: r.resolver?.email ?? null,
   }));
 
   return c.json({
@@ -690,6 +708,68 @@ app.get("/reports", async (c) => {
       total: count || 0,
       totalPages: Math.ceil((count || 0) / limit),
     },
+  });
+});
+
+app.patch("/reports/:id", async (c) => {
+  const db = getAdminClient();
+  const adminUser = c.get("user");
+  const id = parseInt(c.req.param("id"));
+  const body = await c.req.json().catch(() => ({}));
+
+  const { is_resolved, resolution_note } = body;
+
+  const updates: Record<string, any> = {
+    is_resolved: !!is_resolved,
+    resolution_note: resolution_note?.trim() || null,
+    resolved_by: is_resolved ? adminUser.id : null,
+    resolved_at: is_resolved ? new Date().toISOString() : null,
+  };
+
+  const { data, error } = await db
+    .from("post_reports")
+    .update(updates)
+    .eq("id", id)
+    .select(`
+      id,
+      post_id,
+      reporter_id,
+      reason,
+      created_at,
+      is_resolved,
+      resolved_at,
+      resolved_by,
+      resolution_note,
+      posts!post_id ( subject, message, sender ),
+      reporter:users!reporter_id ( first_name, last_name, email ),
+      resolver:users!resolved_by ( first_name, last_name, email )
+    `)
+    .single();
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const r = data as any;
+  return c.json({
+    id: r.id,
+    post_id: r.post_id,
+    reporter_id: r.reporter_id,
+    reason: r.reason,
+    created_at: r.created_at,
+    is_resolved: r.is_resolved ?? false,
+    resolved_at: r.resolved_at ?? null,
+    resolved_by: r.resolved_by ?? null,
+    resolution_note: r.resolution_note ?? null,
+    post_subject: r.posts?.subject ?? null,
+    post_message: r.posts?.message ?? null,
+    post_sender: r.posts?.sender ?? null,
+    reporter_name: r.reporter
+      ? [r.reporter.first_name, r.reporter.last_name].filter(Boolean).join(' ') || null
+      : null,
+    reporter_email: r.reporter?.email ?? null,
+    resolver_name: r.resolver
+      ? [r.resolver.first_name, r.resolver.last_name].filter(Boolean).join(' ') || null
+      : null,
+    resolver_email: r.resolver?.email ?? null,
   });
 });
 
