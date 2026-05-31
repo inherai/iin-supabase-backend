@@ -424,9 +424,14 @@ if (targetUserId) {
       }
       console.log(`[activity_filter] posts fetched: ${rawActivityPosts?.length ?? 0} for IDs: ${activityPostIdList.join(',')}`)
 
-      const activitySourcePosts = (rawActivityPosts || []).filter((p: any) =>
-        viewerIsRecruiter ? p.community_members_only !== true : true
-      )
+      const activitySourcePosts = (rawActivityPosts || []).filter((p: any) => {
+        // Exclude posts authored by the user themselves (same logic as LinkedIn —
+        // own posts already appear in the "Posts" tab)
+        const postSender = (p.sender || '').toLowerCase()
+        if (postSender === filterEmail.toLowerCase()) return false
+        if (viewerIsRecruiter && p.community_members_only === true) return false
+        return true
+      })
       if (activitySourcePosts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
 
       // Enrichment pipeline for activity posts
