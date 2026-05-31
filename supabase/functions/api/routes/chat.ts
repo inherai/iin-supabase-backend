@@ -37,17 +37,34 @@ app.get("/", async (c) => {
 
   if (connError) return c.json({ error: connError.message }, 400);
 
-  // 3. הצלבת הנתונים בקוד
+  // 3. שליפת ההודעה האחרונה לכל שיחה
+  const conversationIds = convs.map(c => c.id);
+  const admin = getAdminClient();
+  const { data: lastMessages } = await admin
+    .from("messages")
+    .select("conversation_id, content, created_at")
+    .in("conversation_id", conversationIds)
+    .order("created_at", { ascending: false });
+
+  const lastMessageMap: Record<string, { content: string; created_at: string }> = {};
+  for (const msg of lastMessages ?? []) {
+    if (!lastMessageMap[msg.conversation_id]) {
+      lastMessageMap[msg.conversation_id] = msg;
+    }
+  }
+
+  // 4. הצלבת הנתונים בקוד
   const enhancedData = convs.map(conv => {
     const partnerId = conv.user1_id === user.id ? conv.user2_id : conv.user1_id;
-    
-    // בדיקה האם קיים קשר מאושר עם הפרטנר של השיחה הזו
-    const hasActiveConn = conns.some(conn => 
+    const hasActiveConn = conns.some(conn =>
       (conn.requester_id === partnerId || conn.receiver_id === partnerId)
     );
+    const lastMsg = lastMessageMap[conv.id];
 
     return {
       ...conv,
+      last_message: lastMsg?.content ?? conv.last_message ?? null,
+      last_message_at: lastMsg?.created_at ?? conv.last_message_at ?? conv.updated_at,
       is_connection_active: hasActiveConn
     };
   });
@@ -136,15 +153,15 @@ app.get("/:id/messages", async (c) => {
 
 // DELETE /api/chat/:conversationId/messages/:messageId
 app.delete("/:conversationId/messages/:messageId", async (c) => {
-  const supabase = c.get("supabase");
   const user = c.get("user");
   const conversationId = c.req.param("conversationId");
   const messageId = c.req.param("messageId");
 
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-  // Verify the message belongs to this user and conversation
-  const { data: message, error: fetchError } = await supabase
+  const admin = getAdminClient();
+
+  const { data: message, error: fetchError } = await admin
     .from("messages")
     .select("id, sender_id, conversation_id")
     .eq("id", messageId)
@@ -154,7 +171,6 @@ app.delete("/:conversationId/messages/:messageId", async (c) => {
   if (fetchError || !message) return c.json({ error: "Message not found" }, 404);
   if (message.sender_id !== user.id) return c.json({ error: "Forbidden" }, 403);
 
-  const admin = getAdminClient();
   const { error } = await admin.from("messages").delete().eq("id", messageId);
   if (error) return c.json({ error: error.message }, 400);
 
@@ -174,25 +190,18 @@ app.patch("/:conversationId/messages/:messageId", async (c) => {
   const content = body?.content?.trim();
   if (!content) return c.json({ error: "content is required" }, 400);
 
-  const { data: message, error: fetchError } = await supabase
-    .from("messages")
-    .select("id, sender_id, conversation_id")
-    .eq("id", messageId)
-    .eq("conversation_id", conversationId)
-    .single();
-
-  if (fetchError || !message) return c.json({ error: "Message not found" }, 404);
-  if (message.sender_id !== user.id) return c.json({ error: "Forbidden" }, 403);
-
-  const admin = getAdminClient();
-  const { data: updated, error } = await admin
+  // Use anon+JWT client — RLS allows users to update their own messages
+  const { data: updated, error } = await supabase
     .from("messages")
     .update({ content, is_edited: true })
     .eq("id", messageId)
+    .eq("conversation_id", conversationId)
+    .eq("sender_id", user.id)
     .select("*")
     .single();
 
   if (error) return c.json({ error: error.message }, 400);
+  if (!updated) return c.json({ error: "Message not found or forbidden" }, 404);
   return c.json(updated);
 });
 
