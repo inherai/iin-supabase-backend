@@ -327,6 +327,7 @@ app.get('/', async (c) => {
 
     const targetUserId = c.req.query('userid') // ה-ID שקיבלנו ב-Query
     const excludeEmail = c.req.query('exclude_email') === 'true'
+    const activityFilter = c.req.query('activity_filter') // 'commented_by' | 'reacted_by'
     let filterEmail = null
 
 if (targetUserId) {
@@ -340,6 +341,188 @@ if (targetUserId) {
       }
       filterEmail = email
     }
+
+    // ---- Activity filter path: posts user commented on / reacted to ----
+    if (activityFilter && targetUserId && filterEmail) {
+      const LIMIT = 20
+      const activityMeta: Array<{ post_id: string; activity_date: string; reaction_type?: string }> = []
+
+      if (activityFilter === 'commented_by') {
+        let q = supabase
+          .from('comments')
+          .select('post_id, created_at')
+          .eq('sender', filterEmail)
+          .order('created_at', { ascending: false })
+          .limit(60) // fetch extra to handle dedup across repeated comments on same post
+        if (last_effective_date) q = q.lt('created_at', last_effective_date)
+        const { data: rows, error } = await q
+        if (error) throw error
+        const seen = new Set<string>()
+        for (const r of (rows || [])) {
+          if (activityMeta.length >= LIMIT + 1) break
+          const pid = String(r.post_id)
+          if (!seen.has(pid)) {
+            seen.add(pid)
+            activityMeta.push({ post_id: pid, activity_date: r.created_at })
+          }
+        }
+      } else if (activityFilter === 'reacted_by') {
+        let q = supabase
+          .from('likes')
+          .select('target_id, reaction_type, created_at')
+          .eq('user_id', targetUserId)
+          .eq('target_type', 'post')
+          .order('created_at', { ascending: false })
+          .limit(LIMIT + 1)
+        if (last_effective_date) q = q.lt('created_at', last_effective_date)
+        const { data: rows, error } = await q
+        if (error) throw error
+        for (const r of (rows || [])) {
+          if (activityMeta.length >= LIMIT + 1) break
+          activityMeta.push({ post_id: String(r.target_id), activity_date: r.created_at, reaction_type: r.reaction_type })
+        }
+      }
+
+      if (activityMeta.length === 0) {
+        return c.json({ data: [], meta: { next_cursor: null } })
+      }
+
+      const hasMoreActivity = activityMeta.length > LIMIT
+      const pageActivity = hasMoreActivity ? activityMeta.slice(0, LIMIT) : activityMeta
+      const lastActivityItem = pageActivity[pageActivity.length - 1]
+      const activityNextCursor = hasMoreActivity && lastActivityItem
+        ? { last_effective_date: lastActivityItem.activity_date, last_id: lastActivityItem.post_id }
+        : null
+
+      const activityDateMap = new Map(pageActivity.map(a => [a.post_id, a.activity_date]))
+      const reactionTypeMap = new Map(pageActivity.map(a => [a.post_id, a.reaction_type]))
+      const activityPostIdList = pageActivity.map(a => a.post_id)
+
+      const { data: rawActivityPosts, error: rawActivityError } = await supabase
+        .from('posts')
+        .select('*')
+        .in('id', activityPostIdList)
+        .is('deleted_at', null)
+      if (rawActivityError) throw rawActivityError
+
+      const activitySourcePosts = (rawActivityPosts || []).filter((p: any) =>
+        viewerIsRecruiter ? p.community_members_only !== true : true
+      )
+      if (activitySourcePosts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
+
+      // Enrichment pipeline for activity posts
+      const apIds = activitySourcePosts.map((p: any) => p.id)
+      const { data: apPostLikes } = await supabase
+        .from('likes').select('target_id, user_id, reaction_type').in('target_id', apIds)
+
+      const apEmailsToFetch = new Set<string>()
+      activitySourcePosts.forEach((p: any) => { if (p.sender) apEmailsToFetch.add(p.sender) })
+
+      const { data: apComments } = await supabase
+        .from('comments').select('*').in('post_id', apIds)
+        .lte('created_at', session_start).order('created_at', { ascending: true })
+
+      const apVisibleComments = viewerIsRecruiter
+        ? (apComments || []).filter((cm: any) => cm.community_members_only !== true)
+        : (apComments || [])
+
+      const apCommentIds = apVisibleComments.map((cm: any) => cm.id.toString())
+      const { data: apCommentLikes } = await supabase
+        .from('likes').select('target_id, user_id, reaction_type').in('target_id', apCommentIds)
+
+      apVisibleComments.forEach((cm: any) => apEmailsToFetch.add(cm.sender))
+
+      const apUniqueEmails = Array.from(apEmailsToFetch)
+      const AP_PROJECT_URL = Deno.env.get('SUPABASE_URL')
+      const AP_PROFILE_URL = `${AP_PROJECT_URL}/functions/v1/api/profile/feed`
+      const apProfileRes = await fetch(AP_PROFILE_URL, {
+        method: 'POST',
+        headers: { 'Authorization': c.req.header('Authorization') || '', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emails: apUniqueEmails }),
+      })
+      if (!apProfileRes.ok) throw new Error('Failed to fetch user profiles for activity')
+      const apEnrichedUsers = await apProfileRes.json()
+      const apByEmail = new Map()
+      const apByUuid = new Map()
+      apEnrichedUsers.forEach((u: any) => {
+        if (u._internal_email_lookup) apByEmail.set(u._internal_email_lookup, u)
+        if (u.uuid) apByUuid.set(u.uuid, u)
+      })
+
+      const apEnrichedComments = apVisibleComments.map((comment: any) => {
+        const pd = apByEmail.get(comment.sender?.toLowerCase())
+        let author
+        if (pd) {
+          const { _internal_email_lookup: _e1, email: _e2, ...cp } = pd
+          author = { ...cp, is_anonymous: pd.is_anonymous === true }
+        } else {
+          author = { first_name: comment.sender, last_name: null, image: null, is_anonymous: false }
+        }
+        const cLikes = (apCommentLikes || []).filter((l: any) => l.target_id === comment.id.toString())
+        const cReactionCounts = cLikes.reduce((acc: any, l: any) => { const t = l.reaction_type || 'like'; acc[t] = (acc[t] || 0) + 1; return acc }, {})
+        const cUserReactions = cLikes.filter((l: any) => l.user_id === current_user_uuid).map((l: any) => l.reaction_type)
+        const cSeen = new Set<string>()
+        const cReactionUsers = cLikes.filter((l: any) => { const uid = String(l.user_id); if (cSeen.has(uid)) return false; cSeen.add(uid); return true }).map((l: any) => ({ user_id: String(l.user_id), reaction_type: l.reaction_type || 'like' }))
+        const { sender: _cs, ...commentRest } = comment
+        return { ...commentRest, attachments: normalizeAttachments(comment.attachments), author, likes_count: cLikes.length, reaction_users: cReactionUsers, reaction_counts: cReactionCounts, user_reactions: cUserReactions, user_reaction: cUserReactions[0] || null, is_liked: cUserReactions.length > 0 }
+      })
+
+      const apTopLevel: any = {}
+      const apReplies: any = {}
+      for (const cm of apEnrichedComments) {
+        if (cm.parent_comment_id) {
+          const pid = String(cm.parent_comment_id)
+          if (!apReplies[pid]) apReplies[pid] = []
+          apReplies[pid].push(cm)
+        } else {
+          if (!apTopLevel[cm.post_id]) apTopLevel[cm.post_id] = []
+          apTopLevel[cm.post_id].push(cm)
+        }
+      }
+      const apCommentsByPostId: any = {}
+      for (const pid of Object.keys(apTopLevel)) {
+        apCommentsByPostId[pid] = apTopLevel[pid].map((cm: any) => ({ ...cm, replies: apReplies[String(cm.id)] || [] }))
+      }
+
+      const apEnrichedPosts = activitySourcePosts.map((post: any) => {
+        const pLikes = (apPostLikes || []).filter((l: any) => l.target_id === post.id)
+        const pd = apByEmail.get(post.sender?.toLowerCase())
+        let postAuthor
+        if (pd) {
+          const { _internal_email_lookup: _e1, email: _e2, ...cp } = pd
+          postAuthor = { ...cp, is_anonymous: pd.is_anonymous === true }
+        } else {
+          postAuthor = { first_name: post.sender, last_name: null, image: null, is_anonymous: false }
+        }
+        const pReactionCounts = pLikes.reduce((acc: any, l: any) => { const t = l.reaction_type || 'like'; acc[t] = (acc[t] || 0) + 1; return acc }, {})
+        const pUserReactions = pLikes.filter((l: any) => l.user_id === current_user_uuid).map((l: any) => l.reaction_type)
+        const pSeen = new Set<string>()
+        const pReactionUsers = pLikes.filter((l: any) => { const uid = String(l.user_id); if (pSeen.has(uid)) return false; pSeen.add(uid); return true }).map((l: any) => ({ user_id: String(l.user_id), reaction_type: l.reaction_type || 'like' }))
+        const { sender: _ps, ...postRest } = post
+        return {
+          ...postRest,
+          attachments: normalizeAttachments(post.attachments),
+          author: postAuthor,
+          comments: apCommentsByPostId?.[post.id] || [],
+          likes_count: pLikes.length,
+          reaction_users: pReactionUsers,
+          reaction_counts: pReactionCounts,
+          user_reactions: pUserReactions,
+          user_reaction: pUserReactions[0] || null,
+          is_liked: pUserReactions.length > 0,
+          activity_type: activityFilter === 'commented_by' ? 'comment' : 'reaction',
+          activity_date: activityDateMap.get(String(post.id)),
+          ...(activityFilter === 'reacted_by' ? { user_activity_reaction_type: reactionTypeMap.get(String(post.id)) } : {}),
+        }
+      })
+
+      apEnrichedPosts.sort((a: any, b: any) =>
+        new Date(b.activity_date ?? 0).getTime() - new Date(a.activity_date ?? 0).getTime()
+      )
+
+      return c.json({ data: apEnrichedPosts, meta: { next_cursor: activityNextCursor } })
+    }
+    // ---- End activity filter path ----
 
     const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
       p_session_start: session_start,
