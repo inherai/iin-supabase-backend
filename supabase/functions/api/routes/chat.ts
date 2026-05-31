@@ -120,8 +120,8 @@ app.post("/", async (c) => {
   return c.json({ ...newConv, is_connection_active: true }, 201);
 });
 
-// GET /api/chat/:id/messages
-// Fetch messages for a conversation and mark them as read
+// GET /api/chat/:id/messages?limit=50&before=<ISO_timestamp>
+// Fetch messages for a conversation with cursor-based pagination
 app.get("/:id/messages", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
@@ -129,13 +129,27 @@ app.get("/:id/messages", async (c) => {
 
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-  const { data, error: fetchError } = await supabase
+  const limitParam = c.req.query('limit');
+  const before = c.req.query('before');
+  const limit = Math.min(parseInt(limitParam ?? '50', 10) || 50, 100);
+
+  let query = supabase
     .from("messages")
     .select("*")
     .eq("conversation_id", conversationId)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false })
+    .limit(limit + 1);
+
+  if (before) {
+    query = query.lt("created_at", before);
+  }
+
+  const { data, error: fetchError } = await query;
 
   if (fetchError) return c.json({ error: fetchError.message }, 400);
+
+  const hasMore = (data ?? []).length > limit;
+  const pageData = (data ?? []).slice(0, limit).reverse();
 
   const { error: updateError } = await supabase
     .from("messages")
@@ -150,7 +164,7 @@ app.get("/:id/messages", async (c) => {
   // Generate signed URLs for attachments
   const admin = getAdminClient();
   const messages = await Promise.all(
-    (data ?? []).map(async (msg) => {
+    pageData.map(async (msg) => {
       if (!msg.attachments || msg.attachments.length === 0) return msg;
       const attachmentsWithUrls = await Promise.all(
         msg.attachments.map(async (attachment: any) => {
@@ -166,7 +180,7 @@ app.get("/:id/messages", async (c) => {
     })
   );
 
-  return c.json(messages);
+  return c.json({ messages, hasMore });
 });
 
 // DELETE /api/chat/:conversationId/messages/:messageId
