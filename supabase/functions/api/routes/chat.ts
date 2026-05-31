@@ -144,11 +144,29 @@ app.get("/:id/messages", async (c) => {
     .neq("sender_id", user.id);
 
   if (updateError) {
-    // Do not block message fetch if marking as read fails.
     console.error("Error marking messages as read:", updateError.message);
   }
 
-  return c.json(data ?? []);
+  // Generate signed URLs for attachments
+  const admin = getAdminClient();
+  const messages = await Promise.all(
+    (data ?? []).map(async (msg) => {
+      if (!msg.attachments || msg.attachments.length === 0) return msg;
+      const attachmentsWithUrls = await Promise.all(
+        msg.attachments.map(async (attachment: any) => {
+          const path = attachment.localPath || attachment.url || '';
+          if (!path || path.startsWith('http')) return attachment;
+          const { data: signed } = await admin.storage
+            .from('chat-attachments')
+            .createSignedUrl(path, 3600);
+          return { ...attachment, url: signed?.signedUrl || '' };
+        })
+      );
+      return { ...msg, attachments: attachmentsWithUrls };
+    })
+  );
+
+  return c.json(messages);
 });
 
 // DELETE /api/chat/:conversationId/messages/:messageId
