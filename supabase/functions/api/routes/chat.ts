@@ -1,6 +1,13 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const app = new Hono();
+
+const getAdminClient = () =>
+  createClient(
+    Deno.env.get("SUPABASE_URL") ?? "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+  );
 
 app.get("/", async (c) => {
   const supabase = c.get("supabase");
@@ -147,7 +154,8 @@ app.delete("/:conversationId/messages/:messageId", async (c) => {
   if (fetchError || !message) return c.json({ error: "Message not found" }, 404);
   if (message.sender_id !== user.id) return c.json({ error: "Forbidden" }, 403);
 
-  const { error } = await supabase.from("messages").delete().eq("id", messageId);
+  const admin = getAdminClient();
+  const { error } = await admin.from("messages").delete().eq("id", messageId);
   if (error) return c.json({ error: error.message }, 400);
 
   return c.json({ success: true });
@@ -176,7 +184,8 @@ app.patch("/:conversationId/messages/:messageId", async (c) => {
   if (fetchError || !message) return c.json({ error: "Message not found" }, 404);
   if (message.sender_id !== user.id) return c.json({ error: "Forbidden" }, 403);
 
-  const { data: updated, error } = await supabase
+  const admin = getAdminClient();
+  const { data: updated, error } = await admin
     .from("messages")
     .update({ content, is_edited: true })
     .eq("id", messageId)
