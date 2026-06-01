@@ -286,6 +286,54 @@ app.post('/', async (c) => {
 })
 
 // ====================================================================
+// Match Explanations
+// ====================================================================
+
+app.post('/explanations', async (c) => {
+  const user = c.get('user')
+  if (!user || !checkAccess(user)) return c.json({ error: 'Access denied' }, 403)
+
+  const { candidates, jd_context } = await c.req.json()
+  if (!Array.isArray(candidates) || !candidates.length || !jd_context?.trim()) {
+    return c.json({ explanations: {} })
+  }
+
+  const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
+
+  const candidateList = candidates.slice(0, 25).map((cand: any) => ({
+    uuid: cand.uuid,
+    headline: cand.headline ?? null,
+    skills: (cand.skills ?? []).join(', ') || null,
+    experience_years: cand.experience_years ?? null,
+    matched: (cand.matched_skills ?? []).join(', ') || null,
+    missing: (cand.missing_skills ?? []).join(', ') || null,
+  }))
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a recruiting assistant. For each candidate write one concise sentence (max 20 words) explaining the fit with the job. Be specific — mention skills or experience. Return JSON: {"explanations": {"<uuid>": "<sentence>", ...}}',
+        },
+        {
+          role: 'user',
+          content: `Job: ${jd_context.slice(0, 500)}\n\nCandidates:\n${JSON.stringify(candidateList)}`,
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+    })
+    const parsed = JSON.parse(res.choices[0].message.content ?? '{}')
+    return c.json({ explanations: parsed.explanations ?? {} })
+  } catch {
+    return c.json({ explanations: {} })
+  }
+})
+
+// ====================================================================
 // Saved Searches sub-routes
 // ====================================================================
 
