@@ -113,7 +113,7 @@ app.post('/', async (c) => {
   let query = supabaseAdmin
     .from('talent_search_view')
     .select(
-      'uuid, first_name, last_name, headline, location, skills, work_preferences, languages, experience, education, image, status, job_seeking_status, experience_years, privacy_lastname, privacy_picture, privacy_contact_details',
+      'uuid, first_name, last_name, headline, about, location, skills, work_preferences, languages, experience, education, image, status, job_seeking_status, experience_years, privacy_lastname, privacy_picture, privacy_contact_details',
       { count: 'exact' }
     )
     .neq('role', 'feed_participant')
@@ -261,6 +261,7 @@ app.post('/', async (c) => {
       first_name: u.first_name,
       last_name: canSeeName ? u.last_name : null,
       headline: u.headline,
+      about: u.about ?? null,
       location: u.location,
       skills: u.skills,
       work_preferences: u.work_preferences,
