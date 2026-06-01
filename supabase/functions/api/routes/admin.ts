@@ -447,6 +447,8 @@ app.put("/invitations/:id", async (c) => {
   if (body.status !== undefined) updates.status = body.status;
   if (body.recipient_email !== undefined) updates.recipient_email = body.recipient_email.toLowerCase().trim();
   if (body.personal_note !== undefined) updates.personal_note = body.personal_note;
+  const allowedRoles = ["community", "recruiters"];
+  if (body.role !== undefined && allowedRoles.includes(body.role)) updates.role = body.role;
 
   const { data, error } = await db
     .from("invites")
