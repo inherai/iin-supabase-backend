@@ -118,6 +118,7 @@ app.post('/', async (c) => {
     )
     .neq('role', 'feed_participant')
     .eq('status', 'Active')
+    .not('raw_email', 'ilike', '%@deleted.local')
 
   if (selectedLocation) query = query.ilike('location', `%${selectedLocation}%`)
   if (selectedSkills.length) query = query.overlaps('skills', selectedSkills)
