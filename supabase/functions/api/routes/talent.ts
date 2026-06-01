@@ -47,20 +47,22 @@ async function extractSkillsFromJd(jdText: string): Promise<string[]> {
 
 function computeMatchScore(rawSimilarity: number, userSkills: string[], jdSkills: string[]) {
   const userLower = (userSkills ?? []).map(s => s.toLowerCase())
-  const matched_skills = jdSkills.filter(s => userLower.includes(s.toLowerCase()))
-  const missing_skills = jdSkills.filter(s => !userLower.includes(s.toLowerCase()))
+  // Cap at 8 skills so a long JD doesn't dilute every candidate's score
+  const effectiveJd = jdSkills.slice(0, 8)
+  const matched_skills = effectiveJd.filter(s => userLower.includes(s.toLowerCase()))
+  const missing_skills = effectiveJd.filter(s => !userLower.includes(s.toLowerCase()))
 
-  // Calibrate raw cosine similarity to 0–1.
-  // text-embedding-3-small typical range: 0.15 (threshold) → 0.45 (excellent match).
+  // Calibrate cosine similarity: 0.15 (threshold) → 0, 0.45 (excellent) → 1
   const semScore = Math.min(Math.max((rawSimilarity - 0.15) / 0.30, 0), 1)
 
-  // Skill overlap: hard fraction of JD skills found in the candidate's profile.
-  const skillScore = jdSkills.length > 0 ? matched_skills.length / jdSkills.length : semScore
-
-  // Skills dominate (60 %) so missing skills genuinely drag the score down.
-  const match_score = jdSkills.length > 0
-    ? Math.round((semScore * 0.40 + skillScore * 0.60) * 100)
-    : Math.round(semScore * 100)
+  let match_score: number
+  if (effectiveJd.length === 0) {
+    match_score = Math.round(semScore * 100)
+  } else {
+    // 70 pts max from skills + 30 pts max from semantics → honest spread, missing skills hurt
+    const pointsPerSkill = 70 / effectiveJd.length
+    match_score = Math.min(Math.round(matched_skills.length * pointsPerSkill + semScore * 30), 98)
+  }
 
   return { match_score, matched_skills, missing_skills }
 }
@@ -96,7 +98,7 @@ app.post('/', async (c) => {
     selectedDegree,
     selectedFieldOfStudy,
     currentlyEmployed = false,
-    jobSeekingStatus,
+    jobSeekingStatuses = [],
     jdMode = 'none',
     selectedJobId,
     jdText = '',
@@ -126,7 +128,7 @@ app.post('/', async (c) => {
   if (selectedDegree) query = query.filter('education', 'cs', JSON.stringify([{ degree: selectedDegree }]))
   if (selectedFieldOfStudy) query = query.filter('education', 'cs', JSON.stringify([{ field: selectedFieldOfStudy }]))
   if (currentlyEmployed) query = query.filter('experience', 'cs', '[{"current":true}]')
-  if (jobSeekingStatus) query = query.eq('job_seeking_status', jobSeekingStatus)
+  if (jobSeekingStatuses.length > 0) query = query.in('job_seeking_status', jobSeekingStatuses)
   if (minYears != null) query = query.gte('experience_years', minYears)
   if (maxYears != null) query = query.lte('experience_years', maxYears)
 
@@ -179,7 +181,7 @@ app.post('/', async (c) => {
       const { data: matches } = await supabaseAdmin.rpc('match_users_by_embedding', {
         query_embedding: queryEmbedding,
         similarity_threshold: 0.15,
-        match_count: 200,
+        match_count: 50,
       })
       const vectorMatches = matches ?? []
 
@@ -201,7 +203,7 @@ app.post('/', async (c) => {
   let total = 0
 
   if (!isSemanticMode && !isJdMode) {
-    const { data, count, error } = await query.order('created_at', { ascending: false }).range(offset, offset + limit - 1)
+    const { data, count, error } = await query.order('created_at', { ascending: false }).limit(50).range(offset, offset + limit - 1)
     if (error) return c.json({ error: error.message }, 500)
     results = data ?? []
     total = count ?? 0
@@ -250,6 +252,8 @@ app.post('/', async (c) => {
 
     const matchData = isJdMode
       ? computeMatchScore(rawSim, u.skills ?? [], jdSkills)
+      : isSemanticMode
+      ? { match_score: Math.min(Math.round(calibratedSim * 100), 98) }
       : null
 
     return {
@@ -269,7 +273,6 @@ app.post('/', async (c) => {
       access_status: approvedFields ? 'approved' : pendingSet.has(u.uuid) ? 'pending' : 'none',
       job_seeking_status: u.job_seeking_status,
       experience_years: u.experience_years ?? null,
-      ...(isSemanticMode ? { similarity: calibratedSim } : {}),
       ...(matchData ?? {}),
     }
   })
@@ -277,8 +280,8 @@ app.post('/', async (c) => {
   // ---- In-memory sort + paginate (semantic/JD only) ----
   if (isSemanticMode || isJdMode) {
     mappedResults = mappedResults.sort((a, b) =>
-      (b.match_score ?? b.similarity ?? similarityMap[b.uuid] ?? 0) -
-      (a.match_score ?? a.similarity ?? similarityMap[a.uuid] ?? 0)
+      (b.match_score ?? similarityMap[b.uuid] ?? 0) -
+      (a.match_score ?? similarityMap[a.uuid] ?? 0)
     )
     total = mappedResults.length
     mappedResults = mappedResults.slice(offset, offset + limit)
