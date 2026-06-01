@@ -235,8 +235,9 @@ app.delete("/users/:id", async (c) => {
   ]);
 
   // 4. Hard delete activity/relationship data (parallel — users row still exists, no FK issues)
-  //    messages + conversations intentionally kept (other user's chat history stays)
+  //    messages kept for chat history but sender_id nullified (FK to auth.users is NO ACTION)
   await Promise.all([
+    db.from("messages").update({ sender_id: null }).eq("sender_id", userId),
     db.from("post_impressions").delete().eq("user_id", userId),
     db.from("saved_resources").delete().eq("user_id", userId),
     db.from("profile_views").delete().or(`viewer_id.eq.${userId},viewed_id.eq.${userId}`),
