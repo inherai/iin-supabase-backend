@@ -27,18 +27,31 @@ app.get('/', async (c) => {
     const viewerRole = user.app_metadata.role || 'guest';
     const myUserId = user.id;
 
-    // 3. בדיקת הרשאות (RPC)
+    // 3. בדיקת הרשאות (RPC + grant check for recruiters)
     let isAllowed = false;
     if (myUserId === targetUserId) {
       isAllowed = true;
     } else {
       const { data: rpcResult, error: rpcError } = await supabaseAdmin
-        .rpc('can_view_profile_picture', { 
-          target_user_id: targetUserId, 
-          viewer_role: viewerRole 
+        .rpc('can_view_profile_picture', {
+          target_user_id: targetUserId,
+          viewer_role: viewerRole
         });
-      
+
       if (!rpcError && rpcResult === true) isAllowed = true;
+
+      // Check if recruiter has an approved grant for 'picture' field
+      if (!isAllowed && (viewerRole === 'recruiters' || user.app_metadata?.is_admin === true)) {
+        const { data: grant } = await supabaseAdmin
+          .from('profile_access_requests')
+          .select('approved_fields')
+          .eq('recruiter_id', myUserId)
+          .eq('candidate_id', targetUserId)
+          .in('status', ['approved', 'partial'])
+          .gte('expires_at', new Date().toISOString())
+          .single();
+        if (grant?.approved_fields?.includes('picture')) isAllowed = true;
+      }
     }
 
     if (!isAllowed) {

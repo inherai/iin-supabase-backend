@@ -1,11 +1,11 @@
 // supabase/functions/api/routes/saved.ts
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const app = new Hono()
 
 // ====================================================================
 // GET /api/saved-resources?type=post&page=1&limit=10
-// שליפת כל השמירות של המשתמש עם התוכן המלא (באמצעות RPC)
 // ====================================================================
 app.get('/', async (c) => {
   try {
@@ -16,12 +16,52 @@ app.get('/', async (c) => {
       return c.json({ error: 'Unauthorized' }, 401)
     }
 
-    const type = c.req.query('type') // 'post' או 'position' (אופציונלי)
+    const type = c.req.query('type')
     const page = parseInt(c.req.query('page') || '1')
     const limit = parseInt(c.req.query('limit') || '10')
     const offset = (page - 1) * limit
 
-    // קריאה ל-RPC function שמחזירה הכל בשאילתה אחת
+    // Candidate type requires a custom handler — RPC doesn't know how to resolve profiles
+    if (type === 'candidate') {
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      )
+
+      const { data: saved, error: savedError } = await supabaseAdmin
+        .from('saved_resources')
+        .select('id, saved_resource_id, created_at')
+        .eq('user_id', user.id)
+        .eq('saved_resource_type', 'candidate')
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1)
+
+      if (savedError) return c.json({ error: savedError.message }, 500)
+
+      const uuids = (saved ?? []).map((s: any) => s.saved_resource_id)
+
+      let profiles: any[] = []
+      if (uuids.length) {
+        const { data: profileData } = await supabaseAdmin
+          .from('talent_search_view')
+          .select('uuid, first_name, last_name, headline, location, skills, image, status, job_seeking_status, privacy_lastname, privacy_picture')
+          .in('uuid', uuids)
+          .eq('status', 'Active')
+          .neq('role', 'feed_participant')
+
+        const savedMap = Object.fromEntries((saved ?? []).map((s: any) => [s.saved_resource_id, s.id]))
+        profiles = (profileData ?? []).map(p => ({
+          ...p,
+          last_name: p.privacy_lastname ? null : p.last_name,
+          image_accessible: !p.privacy_picture,
+          saved_id: savedMap[p.uuid],
+        }))
+      }
+
+      return c.json({ saved: profiles, pagination: { page, limit } })
+    }
+
+    // Default: use existing RPC for post/position
     const { data: savedItems, error: fetchError } = await supabase
       .rpc('get_saved_resources_with_content', {
         p_user_id: user.id,
@@ -36,10 +76,7 @@ app.get('/', async (c) => {
 
     return c.json({
       saved: savedItems || [],
-      pagination: {
-        page,
-        limit
-      }
+      pagination: { page, limit }
     })
 
   } catch (err: any) {
@@ -112,9 +149,9 @@ app.post('/', async (c) => {
     }
 
     // בדיקה שה-type תקין
-    if (!['post', 'position'].includes(saved_resource_type)) {
-      return c.json({ 
-        error: 'saved_resource_type must be either "post" or "position"' 
+    if (!['post', 'position', 'candidate'].includes(saved_resource_type)) {
+      return c.json({
+        error: 'saved_resource_type must be "post", "position", or "candidate"'
       }, 400)
     }
 
