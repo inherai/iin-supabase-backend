@@ -119,25 +119,42 @@ Deno.serve(async (req) => {
 
     const inviteRole: string = (invite as any).role || "community";
 
-    const userInsert: Record<string, any> = {
-      uuid: currentUserId,
-      email: userEmailFromJwt,
-      status: "onboarding",
-      role: inviteRole,
-    };
-
-    if (inviteRole === "recruiters") {
-      userInsert.is_anonymous = false;
-      userInsert.privacy_picture = ["community", "recruiters"];
-      userInsert.privacy_lastname = ["community", "recruiters"];
-      userInsert.privacy_contact_details = ["community", "recruiters"];
-    }
-
+    // Step 1: upsert base user data without is_anonymous.
+    // is_anonymous is intentionally excluded here: setting it triggers the
+    // handle_anonymous_transition DB trigger which can roll back the entire
+    // transaction if it errors on a brand-new user with no prior data.
     const { error: insertError } = await supabaseAdmin
       .from("users")
-      .upsert(userInsert);
+      .upsert(
+        { uuid: currentUserId, email: userEmailFromJwt, status: "onboarding", role: inviteRole },
+        { onConflict: "uuid" }
+      );
 
     if (insertError) throw insertError;
+
+    // Step 2: force-set the role in a dedicated UPDATE so that any DB trigger
+    // that ran during the upsert (e.g. an auto-create hook that defaults to
+    // "community") cannot leave the user with the wrong role.
+    const { error: roleError } = await supabaseAdmin
+      .from("users")
+      .update({ role: inviteRole })
+      .eq("uuid", currentUserId);
+
+    if (roleError) throw roleError;
+
+    // Step 3: recruiter-specific privacy fields (separate update so a trigger
+    // error here does not revert the already-committed role above).
+    if (inviteRole === "recruiters") {
+      await supabaseAdmin
+        .from("users")
+        .update({
+          is_anonymous: false,
+          privacy_picture: ["community", "recruiters"],
+          privacy_lastname: ["community", "recruiters"],
+          privacy_contact_details: ["community", "recruiters"],
+        })
+        .eq("uuid", currentUserId);
+    }
 
     await supabaseAdmin.auth.admin.updateUserById(currentUserId, {
       app_metadata: { role: inviteRole },
