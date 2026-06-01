@@ -45,15 +45,12 @@ async function extractSkillsFromJd(jdText: string): Promise<string[]> {
   }
 }
 
-function computeMatchScore(rawSimilarity: number, userSkills: string[], jdSkills: string[]) {
-  if (!jdSkills.length) {
-    return { match_score: Math.round(rawSimilarity * 100), matched_skills: [], missing_skills: [] }
-  }
+function computeMatchScore(rawSimilarity: number, userSkills: string[], jdSkills: string[], normalizedSim: number) {
   const userLower = (userSkills ?? []).map(s => s.toLowerCase())
   const matched_skills = jdSkills.filter(s => userLower.includes(s.toLowerCase()))
   const missing_skills = jdSkills.filter(s => !userLower.includes(s.toLowerCase()))
-  const overlap = matched_skills.length / jdSkills.length
-  const match_score = Math.round((rawSimilarity * 0.80 + overlap * 0.20) * 100)
+  const overlap = jdSkills.length ? matched_skills.length / jdSkills.length : normalizedSim
+  const match_score = Math.round((normalizedSim * 0.80 + overlap * 0.20) * 100)
   return { match_score, matched_skills, missing_skills }
 }
 
@@ -230,14 +227,23 @@ app.post('/', async (c) => {
   )
   const pendingSet = new Set((pendingResult.data ?? []).map((p: any) => p.candidate_id))
 
+  // Normalize similarity scores within the current batch so the best match → ~100%
+  const simValues = results.map(u => similarityMap[u.uuid] ?? 0)
+  const simMax = simValues.length ? Math.max(...simValues) : 1
+  const simMin = simValues.length ? Math.min(...simValues) : 0
+  const simRange = simMax - simMin || 1
+
   let mappedResults = results.map(u => {
     const approvedFields: string[] | undefined = grantMap[u.uuid]
     const canSeeName = approvedFields?.includes('last_name') || hasPrivacyAccess(u.privacy_lastname, viewerRole)
     const canSeePicture = approvedFields?.includes('picture') || hasPrivacyAccess(u.privacy_picture, viewerRole)
     const hasHiddenDetails = !canSeeName || !canSeePicture
 
+    const rawSim = similarityMap[u.uuid] ?? 0
+    const normalizedSim = (rawSim - simMin) / simRange
+
     const matchData = isJdMode
-      ? computeMatchScore(similarityMap[u.uuid] ?? 0, u.skills ?? [], jdSkills)
+      ? computeMatchScore(rawSim, u.skills ?? [], jdSkills, normalizedSim)
       : null
 
     return {
@@ -256,7 +262,8 @@ app.post('/', async (c) => {
       has_hidden_details: hasHiddenDetails,
       access_status: approvedFields ? 'approved' : pendingSet.has(u.uuid) ? 'pending' : 'none',
       job_seeking_status: u.job_seeking_status,
-      ...(isSemanticMode ? { similarity: similarityMap[u.uuid] ?? 0 } : {}),
+      experience_years: u.experience_years ?? null,
+      ...(isSemanticMode ? { similarity: normalizedSim } : {}),
       ...(matchData ?? {}),
     }
   })

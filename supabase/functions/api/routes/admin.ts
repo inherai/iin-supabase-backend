@@ -244,7 +244,7 @@ app.delete("/users/:id", async (c) => {
     db.from("likes").delete().eq("user_id", userId),
     db.from("connections").delete().or(`requester_id.eq.${userId},receiver_id.eq.${userId}`),
     db.from("notifications").delete().or(`user_id.eq.${userId},actor_id.eq.${userId}`),
-    db.from("invites").delete().eq("inviter_id", userId),
+
     db.from("users_vectors").delete().eq("user_id", userId),
   ]);
 
