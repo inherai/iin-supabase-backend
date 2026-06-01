@@ -113,7 +113,7 @@ app.post('/', async (c) => {
   let query = supabaseAdmin
     .from('talent_search_view')
     .select(
-      'uuid, first_name, last_name, headline, about, location, skills, work_preferences, languages, experience, education, image, status, job_seeking_status, experience_years, privacy_contact_details',
+      'uuid, first_name, raw_last_name, headline, about, location, skills, work_preferences, languages, experience, education, has_image, status, job_seeking_status, experience_years, privacy_contact_details, user_privacy_lastname, user_privacy_picture, raw_email, raw_phone',
       { count: 'exact' }
     )
     .neq('role', 'feed_participant')
@@ -242,12 +242,18 @@ app.post('/', async (c) => {
 
   let mappedResults = results.map(u => {
     const approvedFields: string[] | undefined = grantMap[u.uuid]
-    // Contact details need explicit privacy check (stored as array of allowed roles)
+
+    // Privacy check: null means open/public (same logic as can_view_profile_picture RPC)
+    const canSeeName = approvedFields?.includes('last_name') ||
+      !u.user_privacy_lastname ||
+      hasPrivacyAccess(u.user_privacy_lastname, viewerRole)
+    const canSeePicture = approvedFields?.includes('picture') ||
+      !u.user_privacy_picture ||
+      hasPrivacyAccess(u.user_privacy_picture, viewerRole)
     const canSeeContact = approvedFields?.includes('contact_details') ||
       !u.privacy_contact_details ||
       hasPrivacyAccess(u.privacy_contact_details, viewerRole)
-    // Name and picture: view already applies whatever public_users_view exposes;
-    // the avatar endpoint has its own RPC-based auth gate
+
     const hasHiddenDetails = !canSeeContact
 
     const rawSim = similarityMap[u.uuid] ?? 0
@@ -263,7 +269,7 @@ app.post('/', async (c) => {
     return {
       uuid: u.uuid,
       first_name: u.first_name,
-      last_name: u.last_name,
+      last_name: canSeeName ? (u.raw_last_name ?? null) : null,
       headline: u.headline,
       about: u.about ?? null,
       location: u.location,
@@ -272,8 +278,11 @@ app.post('/', async (c) => {
       languages: u.languages,
       experience: u.experience,
       education: u.education,
-      image: u.image,
-      image_accessible: !!u.image,
+      image: u.has_image ? true : null,
+      image_accessible: canSeePicture && !!u.has_image,
+      contact_details: canSeeContact && (u.raw_email || u.raw_phone)
+        ? { email: u.raw_email ?? null, phone: u.raw_phone ?? null }
+        : null,
       has_hidden_details: hasHiddenDetails,
       access_status: approvedFields ? 'approved' : pendingSet.has(u.uuid) ? 'pending' : 'none',
       job_seeking_status: u.job_seeking_status,
