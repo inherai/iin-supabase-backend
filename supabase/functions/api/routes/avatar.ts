@@ -40,7 +40,19 @@ app.get('/', async (c) => {
 
       if (!rpcError && rpcResult === true) isAllowed = true;
 
-      // Check if recruiter has an approved grant for 'picture' field
+      // For recruiters: check privacy_picture setting (same source as profile route)
+      if (!isAllowed && viewerRole === 'recruiters') {
+        const { data: profile } = await supabaseAdmin
+          .from('public_users_view')
+          .select('privacy_picture')
+          .eq('uuid', targetUserId)
+          .single();
+        if (profile?.privacy_picture && Array.isArray(profile.privacy_picture) &&
+            profile.privacy_picture.includes('recruiters')) {
+          isAllowed = true;
+        }
+      }
+      // Fallback: check if recruiter has an explicit approved grant for 'picture'
       if (!isAllowed && (viewerRole === 'recruiters' || user.app_metadata?.is_admin === true)) {
         const { data: grant } = await supabaseAdmin
           .from('profile_access_requests')

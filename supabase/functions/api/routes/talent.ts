@@ -113,7 +113,7 @@ app.post('/', async (c) => {
   let query = supabaseAdmin
     .from('talent_search_view')
     .select(
-      'uuid, first_name, last_name, headline, about, location, skills, work_preferences, languages, experience, education, image, status, job_seeking_status, experience_years, privacy_lastname, privacy_picture, privacy_contact_details',
+      'uuid, first_name, last_name, headline, about, location, skills, work_preferences, languages, experience, education, image, status, job_seeking_status, experience_years, privacy_contact_details',
       { count: 'exact' }
     )
     .neq('role', 'feed_participant')
@@ -242,9 +242,13 @@ app.post('/', async (c) => {
 
   let mappedResults = results.map(u => {
     const approvedFields: string[] | undefined = grantMap[u.uuid]
-    const canSeeName = approvedFields?.includes('last_name') || hasPrivacyAccess(u.privacy_lastname, viewerRole)
-    const canSeePicture = approvedFields?.includes('picture') || hasPrivacyAccess(u.privacy_picture, viewerRole)
-    const hasHiddenDetails = !canSeeName || !canSeePicture
+    // Contact details need explicit privacy check (stored as array of allowed roles)
+    const canSeeContact = approvedFields?.includes('contact_details') ||
+      !u.privacy_contact_details ||
+      hasPrivacyAccess(u.privacy_contact_details, viewerRole)
+    // Name and picture: view already applies whatever public_users_view exposes;
+    // the avatar endpoint has its own RPC-based auth gate
+    const hasHiddenDetails = !canSeeContact
 
     const rawSim = similarityMap[u.uuid] ?? 0
     // Calibrated similarity for sorting in semantic mode (same scale as match_score)
@@ -259,7 +263,7 @@ app.post('/', async (c) => {
     return {
       uuid: u.uuid,
       first_name: u.first_name,
-      last_name: canSeeName ? u.last_name : null,
+      last_name: u.last_name,
       headline: u.headline,
       about: u.about ?? null,
       location: u.location,
@@ -269,7 +273,7 @@ app.post('/', async (c) => {
       experience: u.experience,
       education: u.education,
       image: u.image,
-      image_accessible: canSeePicture,
+      image_accessible: !!u.image,
       has_hidden_details: hasHiddenDetails,
       access_status: approvedFields ? 'approved' : pendingSet.has(u.uuid) ? 'pending' : 'none',
       job_seeking_status: u.job_seeking_status,
