@@ -45,12 +45,23 @@ async function extractSkillsFromJd(jdText: string): Promise<string[]> {
   }
 }
 
-function computeMatchScore(rawSimilarity: number, userSkills: string[], jdSkills: string[], normalizedSim: number) {
+function computeMatchScore(rawSimilarity: number, userSkills: string[], jdSkills: string[]) {
   const userLower = (userSkills ?? []).map(s => s.toLowerCase())
   const matched_skills = jdSkills.filter(s => userLower.includes(s.toLowerCase()))
   const missing_skills = jdSkills.filter(s => !userLower.includes(s.toLowerCase()))
-  const overlap = jdSkills.length ? matched_skills.length / jdSkills.length : normalizedSim
-  const match_score = Math.round((normalizedSim * 0.80 + overlap * 0.20) * 100)
+
+  // Calibrate raw cosine similarity to 0–1.
+  // text-embedding-3-small typical range: 0.15 (threshold) → 0.45 (excellent match).
+  const semScore = Math.min(Math.max((rawSimilarity - 0.15) / 0.30, 0), 1)
+
+  // Skill overlap: hard fraction of JD skills found in the candidate's profile.
+  const skillScore = jdSkills.length > 0 ? matched_skills.length / jdSkills.length : semScore
+
+  // Skills dominate (60 %) so missing skills genuinely drag the score down.
+  const match_score = jdSkills.length > 0
+    ? Math.round((semScore * 0.40 + skillScore * 0.60) * 100)
+    : Math.round(semScore * 100)
+
   return { match_score, matched_skills, missing_skills }
 }
 
@@ -227,12 +238,6 @@ app.post('/', async (c) => {
   )
   const pendingSet = new Set((pendingResult.data ?? []).map((p: any) => p.candidate_id))
 
-  // Normalize similarity scores within the current batch so the best match → ~100%
-  const simValues = results.map(u => similarityMap[u.uuid] ?? 0)
-  const simMax = simValues.length ? Math.max(...simValues) : 1
-  const simMin = simValues.length ? Math.min(...simValues) : 0
-  const simRange = simMax - simMin || 1
-
   let mappedResults = results.map(u => {
     const approvedFields: string[] | undefined = grantMap[u.uuid]
     const canSeeName = approvedFields?.includes('last_name') || hasPrivacyAccess(u.privacy_lastname, viewerRole)
@@ -240,10 +245,11 @@ app.post('/', async (c) => {
     const hasHiddenDetails = !canSeeName || !canSeePicture
 
     const rawSim = similarityMap[u.uuid] ?? 0
-    const normalizedSim = (rawSim - simMin) / simRange
+    // Calibrated similarity for sorting in semantic mode (same scale as match_score)
+    const calibratedSim = Math.min(Math.max((rawSim - 0.15) / 0.30, 0), 1)
 
     const matchData = isJdMode
-      ? computeMatchScore(rawSim, u.skills ?? [], jdSkills, normalizedSim)
+      ? computeMatchScore(rawSim, u.skills ?? [], jdSkills)
       : null
 
     return {
@@ -263,7 +269,7 @@ app.post('/', async (c) => {
       access_status: approvedFields ? 'approved' : pendingSet.has(u.uuid) ? 'pending' : 'none',
       job_seeking_status: u.job_seeking_status,
       experience_years: u.experience_years ?? null,
-      ...(isSemanticMode ? { similarity: normalizedSim } : {}),
+      ...(isSemanticMode ? { similarity: calibratedSim } : {}),
       ...(matchData ?? {}),
     }
   })
