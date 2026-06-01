@@ -57,12 +57,19 @@ function computeMatchScore(rawSimilarity: number, userSkills: string[], jdSkills
   return { match_score, matched_skills, missing_skills }
 }
 
+function hasPrivacyAccess(privacyArray: any, viewerRole: string): boolean {
+  if (!privacyArray || !Array.isArray(privacyArray)) return false
+  return privacyArray.includes(viewerRole)
+}
+
 // ====================================================================
 // POST /api/talent — main talent search
 // ====================================================================
 app.post('/', async (c) => {
   const user = c.get('user')
   if (!user || !checkAccess(user)) return c.json({ error: 'Access denied' }, 403)
+
+  const viewerRole: string = user.app_metadata?.role || (user.app_metadata?.is_admin === true ? 'admin' : 'guest')
 
   const supabaseAdmin = createClient(
     Deno.env.get('SUPABASE_URL')!,
@@ -207,7 +214,7 @@ app.post('/', async (c) => {
           .select('candidate_id, approved_fields')
           .eq('recruiter_id', user.id)
           .in('status', ['approved', 'partial'])
-          .gte('expires_at', new Date().toISOString())
+          .or(`expires_at.is.null,expires_at.gte.${new Date().toISOString()}`)
           .in('candidate_id', candidateUuids),
         supabaseAdmin
           .from('profile_access_requests')
@@ -225,8 +232,8 @@ app.post('/', async (c) => {
 
   let mappedResults = results.map(u => {
     const approvedFields: string[] | undefined = grantMap[u.uuid]
-    const canSeeName = approvedFields?.includes('last_name') || !u.privacy_lastname
-    const canSeePicture = approvedFields?.includes('picture') || !u.privacy_picture
+    const canSeeName = approvedFields?.includes('last_name') || hasPrivacyAccess(u.privacy_lastname, viewerRole)
+    const canSeePicture = approvedFields?.includes('picture') || hasPrivacyAccess(u.privacy_picture, viewerRole)
     const hasHiddenDetails = !canSeeName || !canSeePicture
 
     const matchData = isJdMode

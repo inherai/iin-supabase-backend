@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
 
     const { data: invite, error: inviteError } = await supabaseAdmin
       .from("invites")
-      .select("id, recipient_email, status, expires_at")
+      .select("id, recipient_email, status, expires_at, role")
       .eq("token", cleanToken)
       .maybeSingle();
 
@@ -117,15 +117,31 @@ Deno.serve(async (req) => {
       });
     }
 
+    const inviteRole: string = (invite as any).role || "community";
+
+    const userInsert: Record<string, any> = {
+      uuid: currentUserId,
+      email: userEmailFromJwt,
+      status: "onboarding",
+      role: inviteRole,
+    };
+
+    if (inviteRole === "recruiters") {
+      userInsert.is_anonymous = false;
+      userInsert.privacy_picture = ["community", "recruiters"];
+      userInsert.privacy_lastname = ["community", "recruiters"];
+      userInsert.privacy_contact_details = ["community", "recruiters"];
+    }
+
     const { error: insertError } = await supabaseAdmin
       .from("users")
-      .upsert({
-        uuid: currentUserId,
-        email: userEmailFromJwt,
-        status: "onboarding",
-      });
+      .upsert(userInsert);
 
     if (insertError) throw insertError;
+
+    await supabaseAdmin.auth.admin.updateUserById(currentUserId, {
+      app_metadata: { role: inviteRole },
+    });
 
     const { error: updateError } = await supabaseAdmin
       .from("invites")
@@ -135,7 +151,7 @@ Deno.serve(async (req) => {
     if (updateError) throw updateError;
 
     return new Response(
-      JSON.stringify({ message: "Registration completed", status: "onboarding" }),
+      JSON.stringify({ message: "Registration completed", status: "onboarding", role: inviteRole }),
       { status: 200, headers: jsonHeaders }
     );
 

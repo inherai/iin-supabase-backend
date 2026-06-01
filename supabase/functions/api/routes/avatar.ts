@@ -48,7 +48,7 @@ app.get('/', async (c) => {
           .eq('recruiter_id', myUserId)
           .eq('candidate_id', targetUserId)
           .in('status', ['approved', 'partial'])
-          .gte('expires_at', new Date().toISOString())
+          .or(`expires_at.is.null,expires_at.gte.${new Date().toISOString()}`)
           .single();
         if (grant?.approved_fields?.includes('picture')) isAllowed = true;
       }

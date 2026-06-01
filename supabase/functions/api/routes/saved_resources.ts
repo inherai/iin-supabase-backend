@@ -50,10 +50,12 @@ app.get('/', async (c) => {
           .neq('role', 'feed_participant')
 
         const savedMap = Object.fromEntries((saved ?? []).map((s: any) => [s.saved_resource_id, s.id]))
+        const viewerRole: string = user.app_metadata?.role || 'guest'
+        const hasPrivacyAccess = (arr: any) => Array.isArray(arr) && arr.includes(viewerRole)
         profiles = (profileData ?? []).map(p => ({
           ...p,
-          last_name: p.privacy_lastname ? null : p.last_name,
-          image_accessible: !p.privacy_picture,
+          last_name: hasPrivacyAccess(p.privacy_lastname) ? p.last_name : null,
+          image_accessible: hasPrivacyAccess(p.privacy_picture),
           saved_id: savedMap[p.uuid],
         }))
       }
