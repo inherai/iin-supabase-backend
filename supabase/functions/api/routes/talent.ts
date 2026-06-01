@@ -110,6 +110,25 @@ app.post('/', async (c) => {
   const isSemanticMode = jdMode === 'none' && !!searchQuery.trim()
   const isJdMode = jdMode === 'job' || jdMode === 'text'
 
+  // Guard: require at least one filter/query
+  const hasAnyFilter =
+    !!searchQuery.trim() ||
+    isJdMode ||
+    selectedSkills.length > 0 ||
+    !!selectedLocation.trim() ||
+    selectedWorkPreferences.length > 0 ||
+    selectedLanguages.length > 0 ||
+    minYears != null ||
+    maxYears != null ||
+    !!selectedDegree ||
+    !!selectedFieldOfStudy ||
+    currentlyEmployed ||
+    jobSeekingStatuses.length > 0
+
+  if (!hasAnyFilter) {
+    return c.json({ users: [], pagination: { page: 1, limit, total: 0, totalPages: 0 }, mode: 'filters' })
+  }
+
   let query = supabaseAdmin
     .from('talent_search_view')
     .select(
@@ -122,7 +141,15 @@ app.post('/', async (c) => {
 
   if (selectedLocation) query = query.ilike('location', `%${selectedLocation}%`)
   if (selectedSkills.length) query = query.overlaps('skills', selectedSkills)
-  if (selectedWorkPreferences.length) query = query.overlaps('work_preferences', selectedWorkPreferences)
+  if (selectedWorkPreferences.length) {
+    // Case-insensitive: include lowercase and title-case variants to handle DB inconsistency
+    const workPrefVariants = [...new Set([
+      ...selectedWorkPreferences,
+      ...selectedWorkPreferences.map((p: string) => p.toLowerCase()),
+      ...selectedWorkPreferences.map((p: string) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()),
+    ])]
+    query = query.overlaps('work_preferences', workPrefVariants)
+  }
   if (selectedLanguages.length) {
     query = query.or(selectedLanguages.map((l: string) => `languages.cs.[{"name":"${l}"}]`).join(','))
   }
@@ -204,7 +231,7 @@ app.post('/', async (c) => {
   let total = 0
 
   if (!isSemanticMode && !isJdMode) {
-    const { data, count, error } = await query.order('created_at', { ascending: false }).limit(50).range(offset, offset + limit - 1)
+    const { data, count, error } = await query.order('created_at', { ascending: false }).range(offset, offset + limit - 1)
     if (error) return c.json({ error: error.message }, 500)
     results = data ?? []
     total = count ?? 0
@@ -292,19 +319,21 @@ app.post('/', async (c) => {
     }
   })
 
-  // ---- In-memory sort + paginate (semantic/JD only) ----
+  // ---- In-memory sort only (semantic/JD) — return all ≤50, no pagination ----
   if (isSemanticMode || isJdMode) {
     mappedResults = mappedResults.sort((a, b) =>
       (b.match_score ?? similarityMap[b.uuid] ?? 0) -
       (a.match_score ?? similarityMap[a.uuid] ?? 0)
     )
     total = mappedResults.length
-    mappedResults = mappedResults.slice(offset, offset + limit)
   }
 
+  const isVectorMode = isSemanticMode || isJdMode
   return c.json({
     users: mappedResults,
-    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    pagination: isVectorMode
+      ? { page: 1, limit: total, total, totalPages: total > 0 ? 1 : 0 }
+      : { page, limit, total, totalPages: Math.ceil(total / limit) },
     mode: isJdMode ? 'jd' : isSemanticMode ? 'semantic' : 'filters',
   })
 })
