@@ -338,7 +338,7 @@ app.post('/feed', async (c) => {
           .eq('recruiter_id', user.id)
           .in('candidate_id', uuids)
           .in('status', ['approved', 'partial'])
-          .gt('expires_at', now)
+          .or(`expires_at.is.null,expires_at.gt.${now}`)
         for (const g of grants ?? []) {
           grantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
         }
@@ -418,7 +418,7 @@ app.post('/', async (c) => {
         .eq('recruiter_id', user.id)
         .in('candidate_id', ids)
         .in('status', ['approved', 'partial'])
-        .gt('expires_at', now)
+        .or(`expires_at.is.null,expires_at.gt.${now}`)
       const contactGrantIds: string[] = []
       for (const g of grants ?? []) {
         batchGrantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
@@ -536,7 +536,7 @@ app.get('/', async (c) => {
               .eq('recruiter_id', user.id)
               .in('candidate_id', searchUuids)
               .in('status', ['approved', 'partial'])
-              .gt('expires_at', now)
+              .or(`expires_at.is.null,expires_at.gt.${now}`)
             for (const g of grants ?? []) {
               searchGrantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
             }
@@ -633,7 +633,7 @@ app.get('/', async (c) => {
           .eq('recruiter_id', user.id)
           .in('candidate_id', userIds)
           .in('status', ['approved', 'partial'])
-          .gt('expires_at', now)
+          .or(`expires_at.is.null,expires_at.gt.${now}`)
         const aiContactIds: string[] = []
         for (const g of grants ?? []) {
           aiGrantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
@@ -733,7 +733,7 @@ app.get('/', async (c) => {
         .eq('recruiter_id', user.id)
         .eq('candidate_id', targetUserId)
         .in('status', ['approved', 'partial'])
-        .gt('expires_at', now)
+        .or(`expires_at.is.null,expires_at.gt.${now}`)
         .maybeSingle()
       approvedFields = grant?.approved_fields ?? []
 

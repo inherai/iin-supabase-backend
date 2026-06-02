@@ -65,12 +65,12 @@ app.get('/', async (c) => {
     .filter((r: any) => r.status === 'pending')
     .map(enrich)
   const active = requests
-    .filter((r: any) => ['approved', 'partial'].includes(r.status) && r.expires_at > now)
+    .filter((r: any) => ['approved', 'partial'].includes(r.status) && (!r.expires_at || r.expires_at > now))
     .map(enrich)
   const history = requests
     .filter((r: any) =>
       ['rejected', 'revoked'].includes(r.status) ||
-      (['approved', 'partial'].includes(r.status) && r.expires_at <= now)
+      (['approved', 'partial'].includes(r.status) && r.expires_at && r.expires_at <= now)
     )
     .map(enrich)
 
