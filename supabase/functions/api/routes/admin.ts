@@ -502,9 +502,18 @@ app.get("/companies", async (c) => {
 
   if (error) return c.json({ error: error.message }, 500);
 
+  // Resolve owner_uuid → owner_email for companies that have an owner
+  const ownerUuids = [...new Set((companies || []).map((c: any) => c.owner_uuid).filter(Boolean))] as string[];
+  const ownerEmailMap = new Map<string, string>();
+  for (const uuid of ownerUuids) {
+    const { data: email } = await db.rpc('get_user_email_by_uuid', { p_uuid: uuid });
+    if (email) ownerEmailMap.set(uuid, email);
+  }
+
   const enriched = (companies || []).map((company: any) => ({
     ...company,
     employees_count: Array.isArray(company.employees) ? company.employees.filter(Boolean).length : 0,
+    owner_email: company.owner_uuid ? (ownerEmailMap.get(company.owner_uuid) ?? null) : null,
   }));
 
   return c.json({
