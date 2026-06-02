@@ -555,14 +555,14 @@ app.put("/companies/:id", async (c) => {
 
   const { id, created_at, owner_email, ...updates } = body;
 
-  // Resolve owner_email → owner_uuid (queries auth.users directly so anonymous users are included)
+  // Resolve owner_email → owner_uuid via RPC (queries auth.users directly, includes anonymous users)
   if (owner_email !== undefined) {
     if (!owner_email) {
       updates.owner_uuid = null;
     } else {
-      const { data: authData, error: authError } = await db.auth.admin.getUserByEmail(owner_email.trim().toLowerCase());
-      if (authError || !authData?.user) return c.json({ error: `User not found for email: ${owner_email}` }, 404);
-      updates.owner_uuid = authData.user.id;
+      const { data: resolvedUuid, error: rpcError } = await db.rpc('get_uuid_by_email', { p_email: owner_email.trim() });
+      if (rpcError || !resolvedUuid) return c.json({ error: `User not found for email: ${owner_email}` }, 404);
+      updates.owner_uuid = resolvedUuid;
     }
   }
 
