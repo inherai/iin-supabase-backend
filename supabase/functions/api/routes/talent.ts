@@ -32,7 +32,11 @@ async function extractSkillsFromJd(jdText: string): Promise<string[]> {
       messages: [
         {
           role: 'system',
-          content: 'Extract technical and professional skills from the job description. Return JSON: {"skills": ["React","TypeScript",...]}',
+          content:
+            'Extract technical and professional skills from the job description. ' +
+            'Return ONLY the bare skill name — no qualifiers like "developer", "engineer", "programming", "framework", "experience", "proficiency". ' +
+            'Good: "React", "Python", "Machine Learning". Bad: "React Developer", "Python Programming", "Machine Learning Engineer". ' +
+            'Return JSON: {"skills": ["React","TypeScript","Machine Learning",...]}',
         },
         { role: 'user', content: jdText.slice(0, 4000) },
       ],
@@ -308,12 +312,64 @@ function normalizeSkill(s: string): string {
   return SKILL_ALIASES[n] ?? n
 }
 
+// Suffixes GPT sometimes appends even with a good prompt ("React Developer", "Python Programming")
+const NOISE_SUFFIXES = [
+  'developers', 'developer',
+  'programmers', 'programmer', 'programming', 'programing',
+  'engineers', 'engineer', 'engineering',
+  'development',
+  'languages', 'language',
+  'frameworks', 'framework',
+  'libraries', 'library',
+  'experience', 'skills', 'skill',
+  'expertise', 'proficiency', 'knowledge',
+  'concepts', 'concept', 'fundamentals', 'basics',
+  'applications', 'application',
+  'services', 'service',
+  'pipelines', 'pipeline',
+]
+
+// Deeper normalization: version numbers + noise suffixes on top of normalizeSkill
+function normalizeDeep(s: string): string {
+  const versionStripped = s.replace(/\s+v?\d+(\.\d+)*(x|\+)?/gi, '').trim()  // "Python 3.9" → "Python", "Node 18.x" → "Node"
+  let n = normalizeSkill(versionStripped)
+  for (const suf of NOISE_SUFFIXES) {
+    if (n.endsWith(suf) && n.length > suf.length + 2) {
+      n = n.slice(0, n.length - suf.length)
+      break
+    }
+  }
+  return n
+}
+
+// Split compound skills like "JavaScript/TypeScript" or "React & Vue"
+function splitCompound(s: string): string[] {
+  return s.split(/\s*[/,;&|+]\s*/).map(p => p.trim()).filter(p => p.length > 0)
+}
+
+function skillsMatch(userSkill: string, jdSkill: string): boolean {
+  // Phase 1: exact normalized match (alias map + regex)
+  if (normalizeSkill(userSkill) === normalizeSkill(jdSkill)) return true
+
+  // Phase 2: deep match (version stripping + noise suffixes)
+  const nu = normalizeDeep(userSkill), nj = normalizeDeep(jdSkill)
+  if (nu === nj && nu.length >= 3) return true
+
+  // Phase 3: compound splitting — "JavaScript/TypeScript" matches if any part aligns
+  const jdParts = splitCompound(jdSkill)
+  if (jdParts.length > 1 && jdParts.some(p => normalizeDeep(userSkill) === normalizeDeep(p))) return true
+  const userParts = splitCompound(userSkill)
+  if (userParts.length > 1 && userParts.some(p => normalizeDeep(p) === nj)) return true
+
+  return false
+}
+
 function computeMatchScore(rawSimilarity: number, userSkills: string[], jdSkills: string[]) {
-  const userNormalized = (userSkills ?? []).map(s => normalizeSkill(s))
+  const safeUserSkills = userSkills ?? []
   // Cap at 8 skills so a long JD doesn't dilute every candidate's score
   const effectiveJd = jdSkills.slice(0, 8)
-  const matched_skills = effectiveJd.filter(s => userNormalized.includes(normalizeSkill(s)))
-  const missing_skills = effectiveJd.filter(s => !userNormalized.includes(normalizeSkill(s)))
+  const matched_skills = effectiveJd.filter(jd => safeUserSkills.some(u => skillsMatch(u, jd)))
+  const missing_skills = effectiveJd.filter(jd => !safeUserSkills.some(u => skillsMatch(u, jd)))
 
   // Calibrate cosine similarity: 0.15 (threshold) → 0, 0.45 (excellent) → 1
   const semScore = Math.min(Math.max((rawSimilarity - 0.15) / 0.30, 0), 1)
