@@ -80,8 +80,10 @@ export const authMiddleware = async (c: Context, next: Next) => {
   };
 
   // קליינט עם JWT של המשתמש לצורך RLS בשאילתות
+  // persistSession: false נדרש ב-Edge Functions כדי שה-JWT יישלח נכון ל-PostgREST
   const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: authHeader } }
+    global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false, autoRefreshToken: false },
   });
 
   // הכל תקין! מזריקים לקונטקסט וממשיכים הלאה

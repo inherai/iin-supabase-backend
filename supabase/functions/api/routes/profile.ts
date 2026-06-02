@@ -319,24 +319,41 @@ app.post('/feed', async (c) => {
 
     if (error) return c.json({ error: error.message }, 500)
 
-    // פונקציית עזר לבדיקת הרשאות (כמו בשאר הקוד שלך)
+    // פונקציית עזר לבדיקת הרשאות
     const hasAccess = (privacyArray: any) => {
       if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
       return privacyArray.includes(viewerBusinessRole)
     }
 
+    // Fetch active grants if viewer is a recruiter (grant overrides privacy settings)
+    const isRecruiterViewer = viewerBusinessRole === 'recruiters'
+    const grantMap: Record<string, string[]> = {}
+    if (isRecruiterViewer) {
+      const uuids = (data || []).map((u: any) => u.uuid).filter(Boolean)
+      if (uuids.length > 0) {
+        const now = new Date().toISOString()
+        const { data: grants } = await supabaseAdmin
+          .from('profile_access_requests')
+          .select('candidate_id, approved_fields')
+          .eq('recruiter_id', user.id)
+          .in('candidate_id', uuids)
+          .in('status', ['approved', 'partial'])
+          .gt('expires_at', now)
+        for (const g of grants ?? []) {
+          grantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
+        }
+      }
+    }
+
     const enrichedUsers = (data || []).map((u) => {
       const isOwner = u.uuid === user.id
       const isAnonymous = u.is_anonymous === true
-      
-      // לוגיקת פרטיות משולבת:
-      // 1. אם אנונימי ולא בעלים -> הכל מוסתר
-      // 2. אם לא אנונימי -> בודקים רול לפי המערכים (privacy)
-      
+      const approvedFields: string[] = grantMap[(u as any).uuid] ?? []
+
       const canSeeGeneralInfo = !isAnonymous || isOwner
-      const canSeeLastName = isOwner || !u.privacy_lastname || hasAccess(u.privacy_lastname)
-      const canSeePicture = isOwner || !u.privacy_picture || hasAccess(u.privacy_picture)
-      const canSeeContact = isOwner || !u.privacy_contact_details || hasAccess(u.privacy_contact_details)
+      const canSeeLastName = isOwner || approvedFields.includes('last_name') || !u.privacy_lastname || hasAccess(u.privacy_lastname)
+      const canSeePicture = isOwner || approvedFields.includes('picture') || !u.privacy_picture || hasAccess(u.privacy_picture)
+      const canSeeContact = isOwner || approvedFields.includes('contact_details') || !u.privacy_contact_details || hasAccess(u.privacy_contact_details)
 
       return {
         uuid: u.uuid,
@@ -345,11 +362,8 @@ app.post('/feed', async (c) => {
         email: (canSeeGeneralInfo && canSeeContact) ? u.email : null,
         first_name: canSeeGeneralInfo ? u.first_name : (isAnonymous ? 'Anonymous' : null),
         headline: canSeeGeneralInfo ? u.headline : null,
-
-        // שם משפחה ותמונה תלויים במערכי ה-Privacy (גם אם לא אנונימי!)
         last_name: (canSeeGeneralInfo && canSeeLastName) ? u.last_name : null,
         image: (canSeeGeneralInfo && canSeePicture) ? (u.image ? true : null) : null,
-
         cover_image_url: canSeeGeneralInfo ? u.cover_image_url : null,
         _internal_email_lookup: u.email?.toLowerCase()
       }
@@ -387,6 +401,42 @@ app.post('/', async (c) => {
     if (error) return c.json({ error: error.message }, 500)
 
     const viewerBusinessRole = user.app_metadata?.role
+    const isRecruiterViewerBatch = viewerBusinessRole === 'recruiters'
+
+    // Fetch grants + actual contact info for recruiters (public_users_view masks email via RLS)
+    const batchGrantMap: Record<string, string[]> = {}
+    const batchContactMap: Record<string, { email: string | null; phone: string | null }> = {}
+    if (isRecruiterViewerBatch && ids.length > 0) {
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL') ?? '',
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      )
+      const now = new Date().toISOString()
+      const { data: grants } = await supabaseAdmin
+        .from('profile_access_requests')
+        .select('candidate_id, approved_fields')
+        .eq('recruiter_id', user.id)
+        .in('candidate_id', ids)
+        .in('status', ['approved', 'partial'])
+        .gt('expires_at', now)
+      const contactGrantIds: string[] = []
+      for (const g of grants ?? []) {
+        batchGrantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
+        if (((g as any).approved_fields ?? []).includes('contact_details')) {
+          contactGrantIds.push((g as any).candidate_id)
+        }
+      }
+      if (contactGrantIds.length > 0) {
+        const { data: contacts } = await supabaseAdmin
+          .from('users')
+          .select('uuid, email, phone')
+          .in('uuid', contactGrantIds)
+        for (const c of contacts ?? []) {
+          batchContactMap[(c as any).uuid] = { email: (c as any).email ?? null, phone: (c as any).phone ?? null }
+        }
+      }
+    }
+
     const profiles = (data || []).map((profile: any) => {
       const resolvedName = [profile.first_name, profile.last_name].filter(Boolean).join(' ')
 
@@ -396,13 +446,17 @@ app.post('/', async (c) => {
         undefined
 
       const isOwner = profile.uuid === user.id
+      const approvedFields: string[] = batchGrantMap[profile.uuid] ?? []
       const canSeeContact = isOwner ||
+        approvedFields.includes('contact_details') ||
         !profile.privacy_contact_details ||
         (Array.isArray(profile.privacy_contact_details) && profile.privacy_contact_details.includes(viewerBusinessRole))
 
+      const effectiveEmail = batchContactMap[profile.uuid]?.email ?? profile.email ?? null
+
       return {
         id: profile.uuid || undefined,
-        email: canSeeContact ? (profile.email || undefined) : undefined,
+        email: canSeeContact ? (effectiveEmail || undefined) : undefined,
         name: resolvedName || undefined,
         headline: profile.headline || '',
         role: profile.role || undefined,
@@ -464,9 +518,36 @@ app.get('/', async (c) => {
         })
 
         const viewerBusinessRole = user.app_metadata?.role
+        const isRecruiterSearch = viewerBusinessRole === 'recruiters'
+
+        // Fetch grants for recruiter viewers
+        const searchGrantMap: Record<string, string[]> = {}
+        if (isRecruiterSearch) {
+          const supabaseAdmin = createClient(
+            Deno.env.get('SUPABASE_URL') ?? '',
+            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+          )
+          const searchUuids = cleanResults.map((u: any) => u.uuid)
+          if (searchUuids.length > 0) {
+            const now = new Date().toISOString()
+            const { data: grants } = await supabaseAdmin
+              .from('profile_access_requests')
+              .select('candidate_id, approved_fields')
+              .eq('recruiter_id', user.id)
+              .in('candidate_id', searchUuids)
+              .in('status', ['approved', 'partial'])
+              .gt('expires_at', now)
+            for (const g of grants ?? []) {
+              searchGrantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
+            }
+          }
+        }
+
         const enrichedUsers = cleanResults.map((u: any) => {
           const isOwner = u.uuid === user.id
+          const approvedFields: string[] = searchGrantMap[u.uuid] ?? []
           const canSeeContact = isOwner ||
+            approvedFields.includes('contact_details') ||
             !u.privacy_contact_details ||
             (Array.isArray(u.privacy_contact_details) && u.privacy_contact_details.includes(viewerBusinessRole))
           return {
@@ -535,11 +616,51 @@ app.get('/', async (c) => {
         .filter(Boolean)
 
       const viewerBusinessRole = user.app_metadata?.role
+      const isRecruiterAI = viewerBusinessRole === 'recruiters'
+
+      // Fetch grants + contact info for recruiters (public_users_view masks email/phone via RLS)
+      const aiGrantMap: Record<string, string[]> = {}
+      const aiContactMap: Record<string, { email: string | null; phone: string | null }> = {}
+      if (isRecruiterAI && userIds.length > 0) {
+        const supabaseAdmin = createClient(
+          Deno.env.get('SUPABASE_URL') ?? '',
+          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+        )
+        const now = new Date().toISOString()
+        const { data: grants } = await supabaseAdmin
+          .from('profile_access_requests')
+          .select('candidate_id, approved_fields')
+          .eq('recruiter_id', user.id)
+          .in('candidate_id', userIds)
+          .in('status', ['approved', 'partial'])
+          .gt('expires_at', now)
+        const aiContactIds: string[] = []
+        for (const g of grants ?? []) {
+          aiGrantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
+          if (((g as any).approved_fields ?? []).includes('contact_details')) {
+            aiContactIds.push((g as any).candidate_id)
+          }
+        }
+        if (aiContactIds.length > 0) {
+          const { data: contacts } = await supabaseAdmin
+            .from('users')
+            .select('uuid, email, phone')
+            .in('uuid', aiContactIds)
+          for (const c of contacts ?? []) {
+            aiContactMap[(c as any).uuid] = { email: (c as any).email ?? null, phone: (c as any).phone ?? null }
+          }
+        }
+      }
+
       const enrichedUsers = usersData.map((u: any) => {
         const isOwner = u.uuid === user.id
+        const approvedFields: string[] = aiGrantMap[u.uuid] ?? []
         const canSeeContact = isOwner ||
+          approvedFields.includes('contact_details') ||
           !u.privacy_contact_details ||
           (Array.isArray(u.privacy_contact_details) && u.privacy_contact_details.includes(viewerBusinessRole))
+        const effectiveEmail = aiContactMap[u.uuid]?.email ?? u.email ?? null
+        const effectivePhone = aiContactMap[u.uuid]?.phone ?? u.phone ?? null
         return {
           uuid: u.uuid,
           first_name: u.first_name,
@@ -557,9 +678,9 @@ app.get('/', async (c) => {
           certifications: u.certifications,
           skills: u.skills,
           image: u.image === 'true' ? true : null,
-          contact_details: canSeeContact && (u.email || u.phone) ? {
-            email: u.email,
-            phone: u.phone
+          contact_details: canSeeContact && (effectiveEmail || effectivePhone) ? {
+            email: effectiveEmail,
+            phone: effectivePhone
           } : null
         }
       })
@@ -595,7 +716,11 @@ app.get('/', async (c) => {
     const isOwner = targetUser.uuid === user.id
 
     // Fetch active access grant when a recruiter views a candidate profile
+    // Also fetch contact details via admin client when the grant covers them,
+    // because public_users_view masks email/phone from non-owners via RLS.
     let approvedFields: string[] = []
+    let grantedEmail: string | null = null
+    let grantedPhone: string | null = null
     if (isRecruiterViewer && !isOwner) {
       const supabaseAdmin = createClient(
         Deno.env.get('SUPABASE_URL') ?? '',
@@ -611,6 +736,16 @@ app.get('/', async (c) => {
         .gt('expires_at', now)
         .maybeSingle()
       approvedFields = grant?.approved_fields ?? []
+
+      if (approvedFields.includes('contact_details')) {
+        const { data: contactData } = await supabaseAdmin
+          .from('users')
+          .select('email, phone')
+          .eq('uuid', targetUserId)
+          .maybeSingle()
+        grantedEmail = contactData?.email ?? null
+        grantedPhone = contactData?.phone ?? null
+      }
     }
 
     // Grant overrides privacy — if recruiter has an approved field, show it regardless of privacy setting
@@ -620,6 +755,10 @@ app.get('/', async (c) => {
     const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(targetUser.privacy_lastname)
     const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(targetUser.privacy_picture)
     const canSeeContact = isOwner || approvedFields.includes('contact_details') || privacyAllows(targetUser.privacy_contact_details)
+
+    // For non-owner recruiters with a grant, use admin-fetched values (bypasses view RLS on email/phone)
+    const effectiveEmail = isOwner ? (targetUser.email ?? null) : (grantedEmail ?? targetUser.email ?? null)
+    const effectivePhone = isOwner ? (targetUser.phone ?? null) : (grantedPhone ?? targetUser.phone ?? null)
 
     const publicProfile = {
       uuid: targetUser.uuid,
@@ -638,9 +777,9 @@ app.get('/', async (c) => {
       skills: targetUser.skills,
       image: canSeePicture ? (targetUser.image === 'true' ? true : null) : null,
       cover_image_url: targetUser.cover_image_url ?? null,
-      contact_details: canSeeContact && (targetUser.email || targetUser.phone) ? {
-        email: targetUser.email,
-        phone: targetUser.phone
+      contact_details: canSeeContact && (effectiveEmail || effectivePhone) ? {
+        email: effectiveEmail,
+        phone: effectivePhone
       } : null
     }
 
