@@ -11,7 +11,7 @@ function makeAdmin() {
 }
 
 // GET /api/profile-access-request
-// Candidate views their incoming requests and active grants
+// Candidate views their incoming requests, active grants, and history
 app.get('/', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
@@ -23,15 +23,15 @@ app.get('/', async (c) => {
 
   const supabaseAdmin = makeAdmin()
 
+  // Fetch all statuses — split client-side into pending / active / history
   const { data: requests, error } = await supabaseAdmin
     .from('profile_access_requests')
     .select('*')
     .eq('candidate_id', user.id)
-    .in('status', ['pending', 'approved', 'partial'])
     .order('created_at', { ascending: false })
 
   if (error) return c.json({ error: error.message }, 500)
-  if (!requests || requests.length === 0) return c.json({ pending: [], active: [] })
+  if (!requests || requests.length === 0) return c.json({ pending: [], active: [], history: [] })
 
   // Enrich with recruiter profile data
   const recruiterIds = [...new Set(requests.map((r: any) => r.recruiter_id))]
@@ -67,8 +67,14 @@ app.get('/', async (c) => {
   const active = requests
     .filter((r: any) => ['approved', 'partial'].includes(r.status) && r.expires_at > now)
     .map(enrich)
+  const history = requests
+    .filter((r: any) =>
+      ['rejected', 'revoked'].includes(r.status) ||
+      (['approved', 'partial'].includes(r.status) && r.expires_at <= now)
+    )
+    .map(enrich)
 
-  return c.json({ pending, active })
+  return c.json({ pending, active, history })
 })
 
 // POST /api/profile-access-request
@@ -121,7 +127,7 @@ app.post('/', async (c) => {
 })
 
 // PUT /api/profile-access-request/:id
-// Candidate approves (with field selection) or rejects
+// Candidate approves (with field selection), rejects, or edits an active grant
 app.put('/:id', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
@@ -135,13 +141,15 @@ app.put('/:id', async (c) => {
   // Verify this request belongs to this candidate
   const { data: request } = await supabaseAdmin
     .from('profile_access_requests')
-    .select('id, status, requested_fields')
+    .select('id, status, requested_fields, expires_at')
     .eq('id', id)
     .eq('candidate_id', user.id)
     .single()
 
   if (!request) return c.json({ error: 'Not found' }, 404)
-  if (!['pending', 'partial'].includes(request.status)) {
+
+  // Allow editing pending, partial, and approved grants
+  if (!['pending', 'partial', 'approved'].includes(request.status)) {
     return c.json({ error: 'Cannot update this request' }, 400)
   }
 
@@ -154,7 +162,10 @@ app.put('/:id', async (c) => {
     const isAll = requestedFields.every((f: string) => approved_fields.includes(f))
     updates.status = isAll ? 'approved' : 'partial'
     updates.approved_fields = approved_fields
-    updates.expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    // Only reset expires_at when transitioning from pending — keep existing expiry when editing an active grant
+    if (request.status === 'pending') {
+      updates.expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    }
   } else {
     return c.json({ error: 'Provide approved_fields or status=rejected' }, 400)
   }

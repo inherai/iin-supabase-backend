@@ -1,6 +1,39 @@
 // supabase/functions/api/middleware.ts
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Context, Next } from 'https://deno.land/x/hono/mod.ts'
+import * as jose from "https://deno.land/x/jose@v4.14.4/index.ts";
+
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+// JWKS supports both ECC (P-256) and legacy HS256 keys automatically.
+// jose caches the key set in memory — fetched once on cold start, not per request.
+const JWKS = jose.createRemoteJWKSet(
+  new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`)
+);
+
+// Singleton admin client — created once per cold start, reused across all requests
+export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// In-memory cache: userId → timestamp of last successful users-table check
+// Persists within the same Edge Function instance; TTL prevents stale entries
+const userExistsCache = new Map<string, number>();
+const USER_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function isUserActive(userId: string): Promise<boolean> {
+  const cached = userExistsCache.get(userId);
+  if (cached && Date.now() - cached < USER_CACHE_TTL_MS) return true;
+
+  const { data } = await supabaseAdmin
+    .from('users')
+    .select('uuid')
+    .eq('uuid', userId)
+    .maybeSingle();
+
+  if (data) userExistsCache.set(userId, Date.now());
+  return !!data;
+}
 
 export const authMiddleware = async (c: Context, next: Next) => {
   // 1. דילוג מהיר על בקשות CORS Preflight
@@ -9,59 +42,59 @@ export const authMiddleware = async (c: Context, next: Next) => {
   }
 
   const authHeader = c.req.header('Authorization');
-  
+
   // --- עצירה מוקדמת: אין טוקן בכלל ---
   if (!authHeader) {
     return c.json({ error: 'Unauthorized: Missing authentication token' }, 401);
   }
 
-  // יש טוקן - ניצור קליינט של סופאבייס
-  const supabaseClient = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-    { global: { headers: { Authorization: authHeader } } }
-  );
-  
-  // בדיקה מול סופאבייס: האם הטוקן באמת תקין ולא פג תוקף?
-  const { data, error } = await supabaseClient.auth.getUser();
-  
-  // --- עצירה מוקדמת: הטוקן מזויף, שגוי או פג תוקף ---
-  if (error || !data.user) {
+  const token = authHeader.replace('Bearer ', '');
+
+  // אימות JWT עם JWKS — תומך ב-ECC (P-256) וב-legacy HS256, ללא בקשת רשת ל-GoTrue
+  let payload: jose.JWTPayload;
+  try {
+    const result = await jose.jwtVerify(token, JWKS);
+    payload = result.payload;
+  } catch {
     return c.json({ error: 'Unauthorized: Invalid or expired token' }, 401);
   }
 
-  // בדיקה אם המשתמש קיים בטבלת users
-  const supabaseAdmin = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-  );
-
-  const { data: userRecord, error: userError } = await supabaseAdmin
-    .from('users')
-    .select('uuid')
-    .eq('uuid', data.user.id)
-    .maybeSingle();
-
-  if (userError) {
-    return c.json({ error: 'Database error' }, 500);
+  const userId = payload.sub;
+  if (!userId) {
+    return c.json({ error: 'Unauthorized: Missing user ID in token' }, 401);
   }
 
-  if (!userRecord) {
-    await supabaseAdmin.auth.admin.deleteUser(data.user.id);
+  // בדיקת קיום משתמש בטבלת users — עם cache של 5 דקות
+  const active = await isUserActive(userId);
+  if (!active) {
+    await supabaseAdmin.auth.admin.deleteUser(userId);
     return c.json({ error: 'User not found, deleted from auth' }, 404);
   }
 
+  // בניית אובייקט user מה-JWT claims (מקביל ל-data.user מ-getUser())
+  const user = {
+    id: userId,
+    email: payload.email as string ?? '',
+    app_metadata: (payload.app_metadata as Record<string, any>) ?? {},
+    user_metadata: (payload.user_metadata as Record<string, any>) ?? {},
+  };
+
+  // קליינט עם JWT של המשתמש לצורך RLS בשאילתות
+  const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: authHeader } }
+  });
+
   // הכל תקין! מזריקים לקונטקסט וממשיכים הלאה
   c.set('supabase', supabaseClient);
-  c.set('user', data.user);
+  c.set('user', user);
 
   // אדמינים עוקפים את כל בדיקות הרול
-  if (data.user?.app_metadata?.is_admin === true) {
+  if (user.app_metadata?.is_admin === true) {
     return await next();
   }
 
   // חסימת feed_participant מרואוטים מסוימים
-  const role = data.user?.app_metadata?.role;
+  const role = user.app_metadata?.role;
   const path = c.req.path;
   const method = c.req.method;
 
@@ -69,8 +102,8 @@ export const authMiddleware = async (c: Context, next: Next) => {
     const allowed = [
       '/api/me',
       '/api/posts',
-      '/api/summary',     
-      '/api/search-ai',    
+      '/api/summary',
+      '/api/search-ai',
       '/api/jobs',
       '/api/profile',
       '/api/like',
@@ -83,8 +116,8 @@ export const authMiddleware = async (c: Context, next: Next) => {
       '/api/skills',
       '/api/degrees',
       '/api/fields-of-study',
-      '/api/activity',     
-      '/api/avatar',       
+      '/api/activity',
+      '/api/avatar',
       '/api/saved-resources',
       '/api/company-insights'
     ];

@@ -126,6 +126,39 @@ app.get("/:id", async (c) => {
   return c.json({ count: count ?? 0 });
 });
 
+// POST /api/connections/batch-status
+// Body: { user_ids: string[] }
+// Returns: { connected_ids: string[] } — which of the given user IDs are accepted connections
+app.post("/batch-status", async (c) => {
+  const supabase = c.get("supabase");
+  const user = c.get("user");
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  const body = await c.req.json();
+  const userIds: string[] = body?.user_ids ?? [];
+
+  if (!Array.isArray(userIds) || userIds.length === 0) {
+    return c.json({ connected_ids: [] });
+  }
+
+  const { data, error } = await supabase
+    .from("connections")
+    .select("requester_id, receiver_id")
+    .eq("status", "accepted")
+    .or(
+      `and(requester_id.eq.${user.id},receiver_id.in.(${userIds.join(",")})),` +
+      `and(receiver_id.eq.${user.id},requester_id.in.(${userIds.join(",")}))`
+    );
+
+  if (error) return c.json({ error: error.message }, 400);
+
+  const connectedIds = (data ?? []).map((row: any) =>
+    row.requester_id === user.id ? row.receiver_id : row.requester_id
+  );
+
+  return c.json({ connected_ids: connectedIds });
+});
+
 // POST /api/connections
 // Creates a connection request with status='pending' by default
 app.post("/", async (c) => {

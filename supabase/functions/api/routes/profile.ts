@@ -576,6 +576,7 @@ app.get('/', async (c) => {
     }
 
     const viewerBusinessRole = user.app_metadata.role;
+    const isRecruiterViewer = viewerBusinessRole === 'recruiters'
 
     // 4. שליפת המשתמש
     const { data: targetUser, error: fetchError } = await supabase
@@ -589,19 +590,41 @@ app.get('/', async (c) => {
     }
 
     // 5. לוגיקת סינון
-    // העשרת experience עם נתוני חברות
     const enrichedExperience = await enrichExperience(targetUser.experience, supabase);
 
     const isOwner = targetUser.uuid === user.id
-    const canSeeContact = isOwner ||
-      !targetUser.privacy_contact_details ||
-      (Array.isArray(targetUser.privacy_contact_details) &&
-        targetUser.privacy_contact_details.includes(viewerBusinessRole))
+
+    // Fetch active access grant when a recruiter views a candidate profile
+    let approvedFields: string[] = []
+    if (isRecruiterViewer && !isOwner) {
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL') ?? '',
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      )
+      const now = new Date().toISOString()
+      const { data: grant } = await supabaseAdmin
+        .from('profile_access_requests')
+        .select('approved_fields')
+        .eq('recruiter_id', user.id)
+        .eq('candidate_id', targetUserId)
+        .in('status', ['approved', 'partial'])
+        .gt('expires_at', now)
+        .maybeSingle()
+      approvedFields = grant?.approved_fields ?? []
+    }
+
+    // Grant overrides privacy — if recruiter has an approved field, show it regardless of privacy setting
+    const privacyAllows = (arr: any) =>
+      !arr || !Array.isArray(arr) || arr.includes(viewerBusinessRole)
+
+    const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(targetUser.privacy_lastname)
+    const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(targetUser.privacy_picture)
+    const canSeeContact = isOwner || approvedFields.includes('contact_details') || privacyAllows(targetUser.privacy_contact_details)
 
     const publicProfile = {
       uuid: targetUser.uuid,
       first_name: targetUser.first_name,
-      last_name: targetUser.last_name,
+      last_name: canSeeLastName ? targetUser.last_name : null,
       headline: targetUser.headline,
       role: targetUser.role || undefined,
       location: targetUser.location,
@@ -613,7 +636,7 @@ app.get('/', async (c) => {
       education: targetUser.education,
       certifications: targetUser.certifications,
       skills: targetUser.skills,
-      image: targetUser.image === 'true' ? true : null,
+      image: canSeePicture ? (targetUser.image === 'true' ? true : null) : null,
       cover_image_url: targetUser.cover_image_url ?? null,
       contact_details: canSeeContact && (targetUser.email || targetUser.phone) ? {
         email: targetUser.email,
