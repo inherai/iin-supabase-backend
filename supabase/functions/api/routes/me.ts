@@ -482,4 +482,22 @@ app.get('/strength', async (c) => {
   return c.json({ items, percentage, tier, nextItem })
 })
 
+// --------------------------------------------------------------------
+// GET /api/me/companies
+// Companies the current user owns (for compose-dialog identity switcher)
+// --------------------------------------------------------------------
+app.get('/companies', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const supabase = c.get('supabase')
+  const { data, error } = await supabase
+    .from('companies')
+    .select('id, name, logo')
+    .eq('owner_uuid', user.id)
+
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json(data || [])
+})
+
 export default app

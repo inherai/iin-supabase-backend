@@ -255,5 +255,68 @@ app.patch("/:conversationId/messages/:messageId", async (c) => {
   return c.json(updated);
 });
 
+// POST /api/chat/:conversationId/messages/:messageId/react
+app.post("/:conversationId/messages/:messageId/react", async (c) => {
+  const user = c.get("user");
+  const conversationId = c.req.param("conversationId");
+  const messageId = c.req.param("messageId");
+
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  const body = await c.req.json().catch(() => null);
+  const emoji = body?.emoji?.trim();
+  if (!emoji) return c.json({ error: "emoji is required" }, 400);
+
+  const admin = getAdminClient();
+
+  // Verify user is a participant in the conversation
+  const { data: conv, error: convError } = await admin
+    .from("conversations")
+    .select("user1_id, user2_id")
+    .eq("id", conversationId)
+    .single();
+
+  if (convError || !conv) return c.json({ error: "Conversation not found" }, 404);
+  if (conv.user1_id !== user.id && conv.user2_id !== user.id) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+
+  // Fetch current reactions
+  const { data: message, error: fetchError } = await admin
+    .from("messages")
+    .select("id, conversation_id, reactions")
+    .eq("id", messageId)
+    .eq("conversation_id", conversationId)
+    .single();
+
+  if (fetchError || !message) return c.json({ error: "Message not found" }, 404);
+
+  const reactions: Record<string, string[]> = message.reactions ?? {};
+  const currentIds: string[] = reactions[emoji] ?? [];
+
+  if (currentIds.includes(user.id)) {
+    // Remove reaction
+    const updated = currentIds.filter((id) => id !== user.id);
+    if (updated.length === 0) {
+      delete reactions[emoji];
+    } else {
+      reactions[emoji] = updated;
+    }
+  } else {
+    // Add reaction
+    reactions[emoji] = [...currentIds, user.id];
+  }
+
+  const { data: updatedMsg, error: updateError } = await admin
+    .from("messages")
+    .update({ reactions })
+    .eq("id", messageId)
+    .select("*")
+    .single();
+
+  if (updateError) return c.json({ error: updateError.message }, 400);
+  return c.json(updatedMsg);
+});
+
 export default app;
 

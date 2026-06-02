@@ -553,7 +553,22 @@ app.put("/companies/:id", async (c) => {
   const companyId = parseInt(c.req.param("id"));
   const body = await c.req.json().catch(() => ({}));
 
-  const { id, created_at, ...updates } = body;
+  const { id, created_at, owner_email, ...updates } = body;
+
+  // Resolve owner_email → owner_uuid
+  if (owner_email !== undefined) {
+    if (!owner_email) {
+      updates.owner_uuid = null;
+    } else {
+      const { data: ownerUser } = await db
+        .from('public_users_view')
+        .select('uuid')
+        .ilike('email', owner_email.trim())
+        .maybeSingle();
+      if (!ownerUser?.uuid) return c.json({ error: `User not found for email: ${owner_email}` }, 404);
+      updates.owner_uuid = ownerUser.uuid;
+    }
+  }
 
   const { data, error } = await db
     .from("companies")

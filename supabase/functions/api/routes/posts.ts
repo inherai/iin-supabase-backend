@@ -293,6 +293,15 @@ async function insertMentionNotifications(
   }
 }
 
+function buildCompanyAuthor(company: { name: string; logo?: string | null }) {
+  return {
+    first_name: company.name,
+    last_name: null,
+    image: company.logo ?? null,
+    is_anonymous: false,
+  }
+}
+
 async function insertReplyNotification(actorId: string, parentCommentAuthorId: string, postId: string) {
   if (actorId === parentCommentAuthorId) return;
   const supabaseAdmin = createClient(
@@ -701,6 +710,14 @@ if (targetUserId) {
       )
     }
 
+    // Batch-fetch company data for company posts
+    const companyIdsInFeed = [...new Set(sourcePosts.map((p: any) => p.company_id).filter(Boolean))] as number[]
+    const companiesById = new Map<number, any>()
+    if (companyIdsInFeed.length > 0) {
+      const { data: companiesData } = await supabase.from('companies').select('id, name, logo').in('id', companyIdsInFeed)
+      ;(companiesData || []).forEach((co: any) => companiesById.set(Number(co.id), co))
+    }
+
     const enrichedCommentsList = visibleComments.map((comment: any) => {
       const senderEmail = comment.sender
       const profileData = usersByEmail.get(senderEmail?.toLowerCase());
@@ -779,24 +796,26 @@ if (targetUserId) {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
       const senderEmail = post.sender
       const profileData = usersByEmail.get(senderEmail?.toLowerCase());
-      
+
       let postAuthor
-      if (profileData) {
+      if (post.company_id && companiesById.has(Number(post.company_id))) {
+        postAuthor = buildCompanyAuthor(companiesById.get(Number(post.company_id))!)
+      } else if (profileData) {
         const isAnonymous = profileData.is_anonymous === true
         const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData
-        
-        postAuthor = { 
+
+        postAuthor = {
           ...cleanProfile,
           first_name: cleanProfile.first_name,
           last_name: cleanProfile.last_name,
           is_anonymous: isAnonymous
         }
       } else {
-        postAuthor = { 
-          first_name: senderEmail, 
-          last_name: null, 
+        postAuthor = {
+          first_name: senderEmail,
+          last_name: null,
           image: null,
-          is_anonymous: false 
+          is_anonymous: false
         }
       }
 
@@ -830,6 +849,7 @@ if (targetUserId) {
       const { sender, ...postWithoutSender } = post
       return {
         ...postWithoutSender,
+        ...(post.company_id ? { is_company_post: true } : {}),
         attachments: normalizeAttachments(post.attachments),
         author: postAuthor,
         comments: commentsByPostId?.[post.id] || [],
@@ -973,6 +993,13 @@ app.get('/:id', async (c) => {
       if (u._internal_email_lookup) usersByEmail.set(u._internal_email_lookup, u)
     })
 
+    // Fetch company data if this is a company post
+    let postCompany: { name: string; logo?: string | null } | null = null
+    if (post.company_id) {
+      const { data: co } = await supabase.from('companies').select('id, name, logo').eq('id', post.company_id).maybeSingle()
+      postCompany = co
+    }
+
     const allEnrichedComments = comments.map((comment: any) => {
       const senderEmail = comment.sender
       const profileData = usersByEmail.get(senderEmail?.toLowerCase())
@@ -1042,7 +1069,9 @@ app.get('/:id', async (c) => {
     const profileData = usersByEmail.get(senderEmail?.toLowerCase())
     let postAuthor
 
-    if (profileData) {
+    if (postCompany) {
+      postAuthor = buildCompanyAuthor(postCompany)
+    } else if (profileData) {
       const isAnonymous = profileData.is_anonymous === true
       const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData
       postAuthor = {
@@ -1091,6 +1120,7 @@ app.get('/:id', async (c) => {
       success: true,
       data: {
         ...postWithoutSender,
+        ...(post.company_id ? { is_company_post: true } : {}),
         attachments: normalizeAttachments(post.attachments),
         author: postAuthor,
         comments: commentsEnriched,
@@ -1172,12 +1202,28 @@ app.post('/', async (c) => {
 
       const { subject, message, attachments, post_type } = body;
       const communityMembersOnlyInput = body.community_members_only ?? body.communityMembersOnly;
+      const company_id = body.company_id ? Number(body.company_id) : null;
 
       if (communityMembersOnlyInput !== undefined && typeof communityMembersOnlyInput !== 'boolean') {
         return c.json({ error: "community_members_only must be boolean" }, 400);
       }
 
       const community_members_only = communityMembersOnlyInput === true;
+
+      // Validate company ownership when posting as a company
+      if (company_id) {
+        const { data: companyCheck, error: companyCheckError } = await supabaseAdmin
+          .from('companies')
+          .select('id, owner_uuid')
+          .eq('id', company_id)
+          .maybeSingle()
+        if (companyCheckError || !companyCheck) {
+          return c.json({ error: "Company not found" }, 404);
+        }
+        if (companyCheck.owner_uuid !== user.id) {
+          return c.json({ error: "You don't have permission to post on behalf of this company" }, 403);
+        }
+      }
 
       if (!message) return c.json({ error: "Message is required" }, 400);
       const postId = crypto.randomUUID();
@@ -1191,7 +1237,8 @@ app.post('/', async (c) => {
         attachments: normalizedAttachments,
         sent_at: new Date().toISOString(),
         post_type: post_type || 'discussion',
-        community_members_only
+        community_members_only,
+        ...(company_id ? { company_id, posted_by_uuid: user.id } : { posted_by_uuid: user.id })
       }).select().single();
 
       if (error) throw error;
@@ -1272,6 +1319,13 @@ app.post('/', async (c) => {
         if (u._internal_email_lookup) usersByEmail.set(u._internal_email_lookup, u);
       });
 
+      // Fetch company data if this is a company post
+      let postCompanyAfterCreate: { name: string; logo?: string | null } | null = null;
+      if (post.company_id) {
+        const { data: co } = await supabase.from('companies').select('id, name, logo').eq('id', post.company_id).maybeSingle();
+        postCompanyAfterCreate = co;
+      }
+
       const commentsEnriched = comments.map((comment: any) => {
         const senderEmail = comment.sender;
         const profileData = usersByEmail.get(senderEmail?.toLowerCase());
@@ -1335,7 +1389,9 @@ app.post('/', async (c) => {
       const senderEmail = post.sender;
       const profileData = usersByEmail.get(senderEmail?.toLowerCase());
       let postAuthor;
-      if (profileData) {
+      if (postCompanyAfterCreate) {
+        postAuthor = buildCompanyAuthor(postCompanyAfterCreate);
+      } else if (profileData) {
         const isAnonymous = profileData.is_anonymous === true;
         const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData;
         postAuthor = {
@@ -1379,6 +1435,7 @@ app.post('/', async (c) => {
         success: true,
         data: {
           ...postWithoutSender,
+          ...(post.company_id ? { is_company_post: true } : {}),
           attachments: normalizeAttachments(post.attachments),
           author: postAuthor,
           comments: commentsEnriched,
@@ -1417,12 +1474,12 @@ app.put('/:id', async (c) => {
       return c.json({ error: "Invalid JSON" }, 400)
     }
 
-    // 1) שליפת הפוסט הקיים כדי להשוות attachments
-    const { data: existingPost, error: fetchError } = await supabase
+    // 1) שליפת הפוסט הקיים — בדיקת הרשאות ו-attachments
+    const supabaseAdminPut = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    const { data: existingPost, error: fetchError } = await supabaseAdminPut
       .from('posts')
-      .select('attachments')
+      .select('attachments, sender, posted_by_uuid')
       .eq('id', postId)
-      .eq('sender', user.email)
       .single()
 
     if (fetchError) {
@@ -1430,6 +1487,11 @@ app.put('/:id', async (c) => {
         return c.json({ error: "Post not found or you don't have permission to edit it" }, 404)
       }
       throw fetchError
+    }
+
+    const canEdit = existingPost.sender === user.email || existingPost.posted_by_uuid === user.id
+    if (!canEdit) {
+      return c.json({ error: "Post not found or you don't have permission to edit it" }, 404)
     }
 
     // 2) הכנת אובייקט עדכון
@@ -1487,11 +1549,10 @@ app.put('/:id', async (c) => {
     }
 
     // 4) עדכון DB
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdminPut
       .from('posts')
       .update(updateData)
       .eq('id', postId)
-      .eq('sender', user.email)
       .select()
       .single()
 
@@ -1531,12 +1592,31 @@ app.delete('/:id', async (c) => {
     
     if (!postId) return c.json({ error: "Post ID is required" }, 400);
 
-    // 1. מחיקה מהדאטהבייס עם select().single() כדי לקבל את הפוסט שנמחק
-    const { data: deletedPost, error } = await supabase
+    // 1. בדיקת הרשאות ומחיקה
+    const supabaseAdminDel = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+
+    const { data: postToDelete, error: fetchDelError } = await supabaseAdminDel
+      .from('posts')
+      .select('sender, posted_by_uuid, attachments')
+      .eq('id', postId)
+      .single();
+
+    if (fetchDelError) {
+      if (fetchDelError.code === 'PGRST116') {
+        return c.json({ error: "Post not found or you don't have permission to delete it" }, 404);
+      }
+      throw fetchDelError;
+    }
+
+    const canDelete = postToDelete.sender === user.email || postToDelete.posted_by_uuid === user.id
+    if (!canDelete) {
+      return c.json({ error: "Post not found or you don't have permission to delete it" }, 404);
+    }
+
+    const { data: deletedPost, error } = await supabaseAdminDel
       .from('posts')
       .delete()
       .eq('id', postId)
-      .eq('sender', user.email)
       .select()
       .single();
 
