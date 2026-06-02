@@ -487,7 +487,7 @@ app.get("/companies", async (c) => {
 
   let query = db
     .from("companies")
-    .select("id,name,active,description,universal_name,website,phone,logo,tagline,locations,industries,specialities,employee_count_range,founded_on,created_at,employees", { count: "exact" });
+    .select("id,name,active,description,universal_name,website,phone,logo,tagline,locations,industries,specialities,employee_count_range,founded_on,created_at,employees,owner_uuid", { count: "exact" });
 
   if (search) query = query.ilike("name", `%${search}%`);
   if (active === "true") query = query.eq("active", true);
