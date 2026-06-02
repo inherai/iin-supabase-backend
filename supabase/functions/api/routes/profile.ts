@@ -334,8 +334,8 @@ app.post('/feed', async (c) => {
       // 2. אם לא אנונימי -> בודקים רול לפי המערכים (privacy)
       
       const canSeeGeneralInfo = !isAnonymous || isOwner
-      const canSeeLastName = isOwner || hasAccess(u.privacy_lastname)
-      const canSeePicture = isOwner || hasAccess(u.privacy_picture)
+      const canSeeLastName = isOwner || !u.privacy_lastname || hasAccess(u.privacy_lastname)
+      const canSeePicture = isOwner || !u.privacy_picture || hasAccess(u.privacy_picture)
       const canSeeContact = isOwner || !u.privacy_contact_details || hasAccess(u.privacy_contact_details)
 
       return {

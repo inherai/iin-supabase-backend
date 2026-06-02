@@ -555,18 +555,14 @@ app.put("/companies/:id", async (c) => {
 
   const { id, created_at, owner_email, ...updates } = body;
 
-  // Resolve owner_email → owner_uuid
+  // Resolve owner_email → owner_uuid (queries auth.users directly so anonymous users are included)
   if (owner_email !== undefined) {
     if (!owner_email) {
       updates.owner_uuid = null;
     } else {
-      const { data: ownerUser } = await db
-        .from('public_users_view')
-        .select('uuid')
-        .ilike('email', owner_email.trim())
-        .maybeSingle();
-      if (!ownerUser?.uuid) return c.json({ error: `User not found for email: ${owner_email}` }, 404);
-      updates.owner_uuid = ownerUser.uuid;
+      const { data: authData, error: authError } = await db.auth.admin.getUserByEmail(owner_email.trim().toLowerCase());
+      if (authError || !authData?.user) return c.json({ error: `User not found for email: ${owner_email}` }, 404);
+      updates.owner_uuid = authData.user.id;
     }
   }
 
