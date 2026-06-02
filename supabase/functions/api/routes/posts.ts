@@ -851,6 +851,39 @@ if (targetUserId) {
   }
 })
 
+app.get('/new-count', async (c) => {
+  try {
+    const supabase = c.get('supabase')
+    const currentUser = c.get('user')
+    const viewerIsRecruiter = isRecruiterViewer(currentUser)
+
+    const since = c.req.query('since')
+    const excludeEmail = c.req.query('exclude_email') === 'true'
+
+    if (!since) return c.json({ error: 'since param required' }, 400)
+
+    let query = supabase
+      .from('posts')
+      .select('id', { count: 'exact', head: true })
+      .gt('created_at', since)
+
+    if (excludeEmail) {
+      query = query.not('post_type', 'is', null).neq('post_type', 'email')
+    }
+
+    if (viewerIsRecruiter) {
+      query = query.neq('community_members_only', true)
+    }
+
+    const { count, error } = await query
+    if (error) throw error
+
+    return c.json({ count: count ?? 0 })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 app.get('/:id', async (c) => {
   try {
     const supabase = c.get('supabase')
