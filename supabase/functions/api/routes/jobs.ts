@@ -139,6 +139,7 @@ app.get('/', async (c) => {
         totalCount = count || 0;
     }
 
+    c.header('Cache-Control', 'private, max-age=300');
     return c.json({
         data: result,
         meta: {

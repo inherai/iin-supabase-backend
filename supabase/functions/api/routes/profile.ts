@@ -43,6 +43,7 @@ app.get('/views/count', async (c) => {
       return c.json({ error: error.message }, 500)
     }
 
+    c.header('Cache-Control', 'private, max-age=300');
     return c.json({ count: count ?? 0 })
   } catch (err: any) {
     return c.json({ error: err.message }, 500)

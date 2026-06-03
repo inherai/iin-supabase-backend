@@ -83,6 +83,7 @@ app.get('/', async (c) => {
     }
   })
 
+  c.header('Cache-Control', 'public, max-age=300, s-maxage=900');
   return c.json({
     companies: processedData,
     pagination: {
@@ -151,6 +152,7 @@ app.get('/:id', async (c) => {
     locations = israelLocations.length > 0 ? israelLocations : [locations[0]]
   }
 
+  c.header('Cache-Control', 'public, max-age=300, s-maxage=900');
   return c.json({
     ...company,
     employees: employeesDetails,

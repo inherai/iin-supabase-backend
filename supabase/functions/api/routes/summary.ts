@@ -28,6 +28,7 @@ app.get('/', async (c) => {
     }
 
     // 4. החזרת התשובה
+    c.header('Cache-Control', 'public, max-age=300, s-maxage=3600');
     return c.json({ data })
 
   } catch (err: any) {
