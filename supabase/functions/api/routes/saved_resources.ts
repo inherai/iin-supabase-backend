@@ -42,22 +42,51 @@ app.get('/', async (c) => {
 
       let profiles: any[] = []
       if (uuids.length) {
-        const { data: profileData } = await supabaseAdmin
-          .from('talent_search_view')
-          .select('uuid, first_name, last_name, headline, location, skills, image, status, job_seeking_status, privacy_lastname, privacy_picture')
-          .in('uuid', uuids)
-          .eq('status', 'Active')
-          .neq('role', 'feed_participant')
+        const [profileResult, grantResult] = await Promise.all([
+          supabaseAdmin
+            .from('talent_search_view')
+            .select('uuid, first_name, raw_last_name, headline, location, skills, has_image, status, job_seeking_status, user_privacy_lastname, user_privacy_picture')
+            .in('uuid', uuids)
+            .eq('status', 'Active')
+            .neq('role', 'feed_participant'),
+          // Fetch active grants so privacy can be overridden
+          supabaseAdmin
+            .from('profile_access_requests')
+            .select('candidate_id, approved_fields')
+            .eq('recruiter_id', user.id)
+            .in('candidate_id', uuids)
+            .in('status', ['approved', 'partial'])
+            .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+        ])
 
+        const grantMap: Record<string, string[]> = Object.fromEntries(
+          (grantResult.data ?? []).map((g: any) => [g.candidate_id, g.approved_fields ?? []])
+        )
         const savedMap = Object.fromEntries((saved ?? []).map((s: any) => [s.saved_resource_id, s.id]))
         const viewerRole: string = user.app_metadata?.role || 'guest'
-        const hasPrivacyAccess = (arr: any) => Array.isArray(arr) && arr.includes(viewerRole)
-        profiles = (profileData ?? []).map(p => ({
-          ...p,
-          last_name: hasPrivacyAccess(p.privacy_lastname) ? p.last_name : null,
-          image_accessible: hasPrivacyAccess(p.privacy_picture),
-          saved_id: savedMap[p.uuid],
-        }))
+        const hasPrivacyAccess = (arr: any) => !arr || !Array.isArray(arr) || arr.includes(viewerRole)
+
+        profiles = (profileResult.data ?? []).map((p: any) => {
+          const approvedFields: string[] = grantMap[p.uuid] ?? []
+          const canSeeLastName = approvedFields.includes('last_name') || hasPrivacyAccess(p.user_privacy_lastname)
+          const canSeePicture = approvedFields.includes('picture') || hasPrivacyAccess(p.user_privacy_picture)
+          return {
+            uuid: p.uuid,
+            first_name: p.first_name,
+            last_name: canSeeLastName ? p.raw_last_name : null,
+            headline: p.headline,
+            location: p.location,
+            skills: p.skills,
+            status: p.status,
+            job_seeking_status: p.job_seeking_status,
+            image: canSeePicture ? p.has_image : false,
+            image_accessible: canSeePicture,
+            has_hidden_details: false,
+            access_status: approvedFields.length > 0 ? 'approved' : 'none',
+            approved_fields: approvedFields,
+            saved_id: savedMap[p.uuid],
+          }
+        })
       }
 
       return c.json({ saved: profiles, pagination: { page, limit } })
