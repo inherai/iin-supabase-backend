@@ -7,11 +7,38 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
-// JWKS supports both ECC (P-256) and legacy HS256 keys automatically.
-// jose caches the key set in memory — fetched once on cold start, not per request.
-const JWKS = jose.createRemoteJWKSet(
+// Hardcoded ECC P-256 public key — eliminates the JWKS network call on every cold start.
+// Each cold start previously fetched /auth/v1/.well-known/jwks.json (counted as an auth
+// request in the Supabase dashboard). With the key baked in, verification is purely local.
+// If Supabase rotates the key (manual action in the dashboard), jwtVerify throws
+// JWKSNoMatchingKey → verifyJwt falls back to REMOTE_JWKS automatically.
+const LOCAL_JWKS = jose.createLocalJWKSet({
+  keys: [{
+    alg: "ES256", crv: "P-256", ext: true, key_ops: ["verify"],
+    kid: "ebbce9be-0a05-4597-918e-cfa6d8c1a075", kty: "EC", use: "sig",
+    x: "wN8h_jGdSCjqGoxSoqPGGiRH-w5fmUycc8T5sWgJ170",
+    y: "Fo_zDCZgO_8lNXVclgNWaGyfQ1qGnW0fZ42-FNwhl7U",
+  }],
+});
+
+const REMOTE_JWKS = jose.createRemoteJWKSet(
   new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`)
 );
+
+async function verifyJwt(token: string): Promise<jose.JWTPayload> {
+  try {
+    const { payload } = await jose.jwtVerify(token, LOCAL_JWKS);
+    return payload;
+  } catch (err) {
+    // Only fall back if the key is unrecognized (key rotation in Supabase dashboard).
+    // Other errors (expired token, bad signature) are re-thrown immediately.
+    if (err instanceof jose.errors.JWKSNoMatchingKey) {
+      const { payload } = await jose.jwtVerify(token, REMOTE_JWKS);
+      return payload;
+    }
+    throw err;
+  }
+}
 
 // ⚠️  ADMIN CLIENT — bypasses ALL Supabase RLS policies.
 // Use only for operations that cannot be done with the user's JWT (e.g. writing
@@ -25,7 +52,7 @@ export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KE
 // In-memory cache: userId → timestamp of last successful users-table check
 // Persists within the same Edge Function instance; TTL prevents stale entries
 const userExistsCache = new Map<string, number>();
-const USER_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const USER_CACHE_TTL_MS = 60 * 60 * 1000; // 60 minutes — aligns with JWT lifetime
 
 async function isUserActive(userId: string): Promise<boolean> {
   const cached = userExistsCache.get(userId);
@@ -56,11 +83,9 @@ export const authMiddleware = async (c: Context, next: Next) => {
 
   const token = authHeader.replace('Bearer ', '');
 
-  // אימות JWT עם JWKS — תומך ב-ECC (P-256) וב-legacy HS256, ללא בקשת רשת ל-GoTrue
   let payload: jose.JWTPayload;
   try {
-    const result = await jose.jwtVerify(token, JWKS);
-    payload = result.payload;
+    payload = await verifyJwt(token);
   } catch {
     return c.json({ error: 'Unauthorized: Invalid or expired token' }, 401);
   }
@@ -70,7 +95,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
     return c.json({ error: 'Unauthorized: Missing user ID in token' }, 401);
   }
 
-  // בדיקת קיום משתמש בטבלת users — עם cache של 5 דקות
+  // בדיקת קיום משתמש בטבלת users — עם cache של 60 דקות (מתואם לתוקף ה-JWT)
   const active = await isUserActive(userId);
   if (!active) {
     await supabaseAdmin.auth.admin.deleteUser(userId);
