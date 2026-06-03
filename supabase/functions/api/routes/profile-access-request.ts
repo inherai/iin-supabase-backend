@@ -3,6 +3,11 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const app = new Hono()
 
+// ⚠️  ADMIN CLIENT — bypasses ALL Supabase RLS policies.
+// Grant management must always run as admin because candidates and recruiters
+// each own only their side of the row. Verify entitlement in application code
+// before adding any new queries here. Consult a second developer before
+// introducing new admin-client usage.
 function makeAdmin() {
   return createClient(
     Deno.env.get('SUPABASE_URL')!,

@@ -23,6 +23,11 @@ app.get('/', async (c) => {
 
     // Candidate type requires a custom handler — RPC doesn't know how to resolve profiles
     if (type === 'candidate') {
+      // ⚠️  ADMIN CLIENT — bypasses ALL Supabase RLS policies.
+      // Used here to read talent_search_view (which joins users directly) and to
+      // check active access grants. Entitlement is verified below: only fields
+      // covered by an approved grant or by the candidate's own privacy settings
+      // are returned. Consult a second developer before adding new queries here.
       const supabaseAdmin = createClient(
         Deno.env.get('SUPABASE_URL')!,
         Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!

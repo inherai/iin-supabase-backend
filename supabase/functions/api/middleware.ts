@@ -13,7 +13,13 @@ const JWKS = jose.createRemoteJWKSet(
   new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`)
 );
 
-// Singleton admin client — created once per cold start, reused across all requests
+// ⚠️  ADMIN CLIENT — bypasses ALL Supabase RLS policies.
+// Use only for operations that cannot be done with the user's JWT (e.g. writing
+// auth metadata, sending notifications, or reading data that the user is
+// legitimately entitled to but that RLS intentionally hides from the client).
+// Before adding any new usage: confirm with a second developer that there is no
+// RLS-safe alternative, that the caller's entitlement has been verified in
+// application code, and that no private data leaks to an unauthorised party.
 export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // In-memory cache: userId → timestamp of last successful users-table check

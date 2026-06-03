@@ -1,3 +1,9 @@
+// ⚠️  ADMIN CLIENT usage in this file — bypasses ALL Supabase RLS policies.
+// talent_search_view joins the users table directly (raw_last_name, raw_email,
+// raw_phone, has_image) — privacy is enforced entirely in application code using
+// privacy_* columns and active access grants from profile_access_requests.
+// Before adding any new createClient(SERVICE_ROLE_KEY) call here, confirm with
+// a second developer that there is no RLS-safe alternative.
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import OpenAI from 'https://esm.sh/openai@4'

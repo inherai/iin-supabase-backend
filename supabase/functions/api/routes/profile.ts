@@ -2,6 +2,17 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+// ⚠️  ADMIN CLIENT usage in this file — bypasses ALL Supabase RLS policies.
+// It is used in two categories:
+//   1. System operations (profile views, post/comment counts, account deletion)
+//      that must run as the service role because the target rows are not owned
+//      by the requesting user.
+//   2. Grant-based privacy override: when a recruiter holds an active approved
+//      grant, fields that RLS hides (email, phone, last_name, image) are fetched
+//      via admin and returned ONLY after verifying the grant in application code.
+// Before adding any new createClient(SERVICE_ROLE_KEY) call here, confirm with
+// a second developer that there is no RLS-safe alternative.
+
 const app = new Hono()
 
 app.get('/views/count', async (c) => {

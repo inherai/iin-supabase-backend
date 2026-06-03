@@ -1,147 +1,136 @@
 // supabase/functions/api/routes/avatar.ts
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { supabaseAdmin } from '../middleware.ts'
 
 const app = new Hono()
 
+// In-memory permission cache: "${viewerId}:${targetId}" → timestamp of last successful check
+// Only caches GRANTED permissions — denials are never cached so that newly granted access
+// takes effect on the next request without waiting for TTL expiry.
+const permissionCache = new Map<string, number>();
+const PERMISSION_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function checkPermission(
+  viewerId: string,
+  targetId: string,
+  viewerRole: string,
+  isAdmin: boolean
+): Promise<boolean> {
+  // Same-user always allowed
+  if (viewerId === targetId) return true;
+
+  const cacheKey = `${viewerId}:${targetId}`;
+  const cachedAt = permissionCache.get(cacheKey);
+  if (cachedAt && Date.now() - cachedAt < PERMISSION_TTL_MS) {
+    return true; // cache only stores granted permissions
+  }
+
+  let allowed = false;
+
+  const { data: rpcResult, error: rpcError } = await supabaseAdmin
+    .rpc('can_view_profile_picture', {
+      target_user_id: targetId,
+      viewer_role: viewerRole
+    });
+
+  if (!rpcError && rpcResult === true) allowed = true;
+
+  if (!allowed && viewerRole === 'recruiters') {
+    const { data: profile } = await supabaseAdmin
+      .from('public_users_view')
+      .select('privacy_picture')
+      .eq('uuid', targetId)
+      .single();
+    if (profile?.privacy_picture && Array.isArray(profile.privacy_picture) &&
+        profile.privacy_picture.includes('recruiters')) {
+      allowed = true;
+    }
+  }
+
+  if (!allowed && (viewerRole === 'recruiters' || isAdmin)) {
+    const { data: grant } = await supabaseAdmin
+      .from('profile_access_requests')
+      .select('approved_fields')
+      .eq('recruiter_id', viewerId)
+      .eq('candidate_id', targetId)
+      .in('status', ['approved', 'partial'])
+      .or(`expires_at.is.null,expires_at.gte.${new Date().toISOString()}`)
+      .single();
+    if (grant?.approved_fields?.includes('picture')) allowed = true;
+  }
+
+  // Cache only granted permissions — never denied ones.
+  // Denial of a previously allowed request takes effect within TTL (acceptable).
+  // Granting of a previously denied request takes effect immediately (required).
+  if (allowed) permissionCache.set(cacheKey, Date.now());
+  return allowed;
+}
+
+async function getImagePath(targetId: string): Promise<{ path: string; etag: string } | null> {
+  const { data: userRecord, error } = await supabaseAdmin
+    .from('users')
+    .select('image')
+    .eq('uuid', targetId)
+    .single();
+
+  if (error || !userRecord?.image) return null;
+
+  const etag = `"${btoa(userRecord.image)}"`;
+  return { path: userRecord.image, etag };
+}
+
 app.get('/', async (c) => {
   try {
-    // 1. קבלת המשתמש מה-Middleware
     const user = c.get('user');
-
-    if (!user) {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
     const targetUserId = c.req.query('id');
-    if (!targetUserId) {
-      return c.json({ error: 'Missing id parameter' }, 400);
-    }
-
-    // 2. יצירת קליינט אדמין
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    if (!targetUserId) return c.json({ error: 'Missing id parameter' }, 400);
 
     const viewerRole = user.app_metadata.role || 'guest';
-    const myUserId = user.id;
+    const isAdmin = user.app_metadata?.is_admin === true;
 
-    // 3. בדיקת הרשאות (RPC + grant check for recruiters)
-    let isAllowed = false;
-    if (myUserId === targetUserId) {
-      isAllowed = true;
-    } else {
-      const { data: rpcResult, error: rpcError } = await supabaseAdmin
-        .rpc('can_view_profile_picture', {
-          target_user_id: targetUserId,
-          viewer_role: viewerRole
-        });
+    const allowed = await checkPermission(user.id, targetUserId, viewerRole, isAdmin);
+    if (!allowed) return c.json({ error: 'Access Denied' }, 403);
 
-      if (!rpcError && rpcResult === true) isAllowed = true;
+    const imageResult = await getImagePath(targetUserId);
+    if (!imageResult) return c.json({ error: 'No image set for user' }, 404);
 
-      // For recruiters: check privacy_picture setting (same source as profile route)
-      if (!isAllowed && viewerRole === 'recruiters') {
-        const { data: profile } = await supabaseAdmin
-          .from('public_users_view')
-          .select('privacy_picture')
-          .eq('uuid', targetUserId)
-          .single();
-        if (profile?.privacy_picture && Array.isArray(profile.privacy_picture) &&
-            profile.privacy_picture.includes('recruiters')) {
-          isAllowed = true;
-        }
-      }
-      // Fallback: check if recruiter has an explicit approved grant for 'picture'
-      if (!isAllowed && (viewerRole === 'recruiters' || user.app_metadata?.is_admin === true)) {
-        const { data: grant } = await supabaseAdmin
-          .from('profile_access_requests')
-          .select('approved_fields')
-          .eq('recruiter_id', myUserId)
-          .eq('candidate_id', targetUserId)
-          .in('status', ['approved', 'partial'])
-          .or(`expires_at.is.null,expires_at.gte.${new Date().toISOString()}`)
-          .single();
-        if (grant?.approved_fields?.includes('picture')) isAllowed = true;
-      }
-    }
+    const { path: imagePath, etag } = imageResult;
 
-    if (!isAllowed) {
-      return c.json({ error: 'Access Denied' }, 403);
-    }
-
-    // 4. שליפת הנתיב מהדאטהבייס
-    const { data: userRecord, error: dbError } = await supabaseAdmin
-        .from('users')
-        .select('image')
-        .eq('uuid', targetUserId)
-        .single();
-
-    if (dbError || !userRecord || !userRecord.image) {
-        return c.json({ error: 'No image set for user' }, 404);
-    }
-
-    // =================================================================
-    // 🌟 התיקון הראשון: טיפול ב-ETag ובקשת ה-Cache מהדפדפן (חסכון אדיר בביצועים!)
-    // =================================================================
-    // מכיוון שכל פעם שמעלים תמונה חדשה ה-URL/נתיב שלה בדאטהבייס משתנה (או מכיל מזהה חדש),
-    // אנחנו יכולים פשוט להשתמש בנתיב עצמו כמזהה (ETag) ייחודי לתמונה.
-    // נקודד אותו ל-base64 כדי שיהיה תקני, ונוסיף מרכאות כנדרש בתקן HTTP.
-    const eTag = `"${btoa(userRecord.image)}"`; 
-
-    // בודקים אם הדפדפן שלח את ה-ETag הישן שלו
     const clientETag = c.req.header('If-None-Match');
-
-    if (clientETag === eTag) {
-        // בינגו! התמונה לא השתנתה. 
-        // מחזירים 304 מיד! חסכנו גם הורדה מה-Storage וגם שליחת קובץ כבד ברשת!
-        return new Response(null, {
-            status: 304,
-            headers: {
-                'ETag': eTag,
-                'Cache-Control': 'private, no-cache, must-revalidate'
-            }
-        });
+    if (clientETag === etag) {
+      return new Response(null, {
+        status: 304,
+        headers: {
+          'ETag': etag,
+          'Cache-Control': 'private, max-age=300'
+        }
+      });
     }
-    // =================================================================
 
-    // 5. חילוץ הנתיב
     const bucketName = 'profile-images';
-    const splitPath = userRecord.image.split(`/${bucketName}/`);
-    
-    if (splitPath.length < 2) {
-        return c.json({ error: 'Invalid image URL' }, 500);
-    }
+    const splitPath = imagePath.split(`/${bucketName}/`);
+    if (splitPath.length < 2) return c.json({ error: 'Invalid image URL' }, 500);
 
     const relativePath = decodeURIComponent(splitPath[1]);
-
-    // 6. הורדה מה-Storage (יקרה רק אם לא החזרנו 304)
     const { data: fileData, error: downloadError } = await supabaseAdmin
       .storage
-      .from(bucketName) 
+      .from(bucketName)
       .download(relativePath);
 
-    if (downloadError) {
-      return c.json({ error: 'Image not found in storage' }, 404);
-    }
+    if (downloadError) return c.json({ error: 'Image not found in storage' }, 404);
 
-    // 7. המרה ל-ArrayBuffer
     const arrayBuffer = await fileData.arrayBuffer();
-
-    // =================================================================
-    // 🌟 התיקון השני: עדכון הכותרות (Headers) שיוחזרו לדפדפן
-    // =================================================================
     return c.body(arrayBuffer, 200, {
-        'Content-Type': fileData.type || 'image/jpeg',
-        'Content-Length': arrayBuffer.byteLength.toString(),
-        // שינינו את זה מהגדרת ה-public המקורית לדרישות המדויקות שלך:
-        'Cache-Control': 'private, no-cache, must-revalidate',
-        // חובה לשלוח את ה-ETag בתשובה כדי שהדפדפן יידע לשמור אותו לפעם הבאה:
-        'ETag': eTag 
+      'Content-Type': fileData.type || 'image/jpeg',
+      'Content-Length': arrayBuffer.byteLength.toString(),
+      'Cache-Control': 'private, max-age=300',
+      'ETag': etag
     });
 
   } catch (error) {
-    console.error("🔥 Avatar Route Error:", error);
+    console.error('Avatar Route Error:', error);
     return c.json({ error: error.message }, 500);
   }
 })
