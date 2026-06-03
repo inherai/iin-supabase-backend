@@ -520,8 +520,9 @@ app.get('/', async (c) => {
         const viewerBusinessRole = user.app_metadata?.role
         const isRecruiterSearch = viewerBusinessRole === 'recruiters'
 
-        // Fetch grants for recruiter viewers
+        // Fetch grants + raw private fields for recruiter viewers (view masks them via RLS)
         const searchGrantMap: Record<string, string[]> = {}
+        const searchRawMap: Record<string, { email: string | null; phone: string | null; last_name: string | null; image: string | null }> = {}
         if (isRecruiterSearch) {
           const supabaseAdmin = createClient(
             Deno.env.get('SUPABASE_URL') ?? '',
@@ -537,8 +538,27 @@ app.get('/', async (c) => {
               .in('candidate_id', searchUuids)
               .in('status', ['approved', 'partial'])
               .or(`expires_at.is.null,expires_at.gt.${now}`)
+            const rawFetchIds: string[] = []
             for (const g of grants ?? []) {
               searchGrantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
+              const fields: string[] = (g as any).approved_fields ?? []
+              if (fields.includes('contact_details') || fields.includes('last_name') || fields.includes('picture')) {
+                rawFetchIds.push((g as any).candidate_id)
+              }
+            }
+            if (rawFetchIds.length > 0) {
+              const { data: rawRows } = await supabaseAdmin
+                .from('users')
+                .select('uuid, email, phone, last_name, image')
+                .in('uuid', rawFetchIds)
+              for (const r of rawRows ?? []) {
+                searchRawMap[(r as any).uuid] = {
+                  email: (r as any).email ?? null,
+                  phone: (r as any).phone ?? null,
+                  last_name: (r as any).last_name ?? null,
+                  image: (r as any).image ?? null,
+                }
+              }
             }
           }
         }
@@ -546,14 +566,22 @@ app.get('/', async (c) => {
         const enrichedUsers = cleanResults.map((u: any) => {
           const isOwner = u.uuid === user.id
           const approvedFields: string[] = searchGrantMap[u.uuid] ?? []
+          const raw = searchRawMap[u.uuid]
+          const privacyAllows = (arr: any) => !arr || !Array.isArray(arr) || arr.includes(viewerBusinessRole)
+          const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(u.privacy_lastname)
+          const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(u.privacy_picture)
           const canSeeContact = isOwner ||
             approvedFields.includes('contact_details') ||
             !u.privacy_contact_details ||
             (Array.isArray(u.privacy_contact_details) && u.privacy_contact_details.includes(viewerBusinessRole))
+          const effectiveLastName = raw?.last_name ?? u.last_name ?? null
+          const effectiveEmail = raw?.email ?? u.email ?? null
+          const effectivePhone = raw?.phone ?? u.phone ?? null
+          const effectiveHasImage = !!(raw?.image) || u.image === 'true'
           return {
             uuid: u.uuid,
             first_name: u.first_name,
-            last_name: u.last_name,
+            last_name: canSeeLastName ? effectiveLastName : null,
             headline: u.headline,
             role: u.role || undefined,
             cover_image_url: u.cover_image_url ?? null,
@@ -566,10 +594,10 @@ app.get('/', async (c) => {
             education: u.education,
             certifications: u.certifications,
             skills: u.skills,
-            image: u.image === 'true' ? true : null,
-            contact_details: canSeeContact && (u.email || u.phone) ? {
-              email: u.email,
-              phone: u.phone
+            image: canSeePicture ? (effectiveHasImage ? true : null) : null,
+            contact_details: canSeeContact && (effectiveEmail || effectivePhone) ? {
+              email: effectiveEmail,
+              phone: effectivePhone
             } : null
           }
         })
@@ -618,9 +646,9 @@ app.get('/', async (c) => {
       const viewerBusinessRole = user.app_metadata?.role
       const isRecruiterAI = viewerBusinessRole === 'recruiters'
 
-      // Fetch grants + contact info for recruiters (public_users_view masks email/phone via RLS)
+      // Fetch grants + raw private fields for recruiters (public_users_view masks them via RLS)
       const aiGrantMap: Record<string, string[]> = {}
-      const aiContactMap: Record<string, { email: string | null; phone: string | null }> = {}
+      const aiRawMap: Record<string, { email: string | null; phone: string | null; last_name: string | null; image: string | null }> = {}
       if (isRecruiterAI && userIds.length > 0) {
         const supabaseAdmin = createClient(
           Deno.env.get('SUPABASE_URL') ?? '',
@@ -634,20 +662,26 @@ app.get('/', async (c) => {
           .in('candidate_id', userIds)
           .in('status', ['approved', 'partial'])
           .or(`expires_at.is.null,expires_at.gt.${now}`)
-        const aiContactIds: string[] = []
+        const rawFetchIds: string[] = []
         for (const g of grants ?? []) {
           aiGrantMap[(g as any).candidate_id] = (g as any).approved_fields ?? []
-          if (((g as any).approved_fields ?? []).includes('contact_details')) {
-            aiContactIds.push((g as any).candidate_id)
+          const fields: string[] = (g as any).approved_fields ?? []
+          if (fields.includes('contact_details') || fields.includes('last_name') || fields.includes('picture')) {
+            rawFetchIds.push((g as any).candidate_id)
           }
         }
-        if (aiContactIds.length > 0) {
-          const { data: contacts } = await supabaseAdmin
+        if (rawFetchIds.length > 0) {
+          const { data: rawRows } = await supabaseAdmin
             .from('users')
-            .select('uuid, email, phone')
-            .in('uuid', aiContactIds)
-          for (const c of contacts ?? []) {
-            aiContactMap[(c as any).uuid] = { email: (c as any).email ?? null, phone: (c as any).phone ?? null }
+            .select('uuid, email, phone, last_name, image')
+            .in('uuid', rawFetchIds)
+          for (const r of rawRows ?? []) {
+            aiRawMap[(r as any).uuid] = {
+              email: (r as any).email ?? null,
+              phone: (r as any).phone ?? null,
+              last_name: (r as any).last_name ?? null,
+              image: (r as any).image ?? null,
+            }
           }
         }
       }
@@ -655,16 +689,22 @@ app.get('/', async (c) => {
       const enrichedUsers = usersData.map((u: any) => {
         const isOwner = u.uuid === user.id
         const approvedFields: string[] = aiGrantMap[u.uuid] ?? []
+        const raw = aiRawMap[u.uuid]
+        const privacyAllows = (arr: any) => !arr || !Array.isArray(arr) || arr.includes(viewerBusinessRole)
+        const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(u.privacy_lastname)
+        const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(u.privacy_picture)
         const canSeeContact = isOwner ||
           approvedFields.includes('contact_details') ||
           !u.privacy_contact_details ||
           (Array.isArray(u.privacy_contact_details) && u.privacy_contact_details.includes(viewerBusinessRole))
-        const effectiveEmail = aiContactMap[u.uuid]?.email ?? u.email ?? null
-        const effectivePhone = aiContactMap[u.uuid]?.phone ?? u.phone ?? null
+        const effectiveLastName = raw?.last_name ?? u.last_name ?? null
+        const effectiveEmail = raw?.email ?? u.email ?? null
+        const effectivePhone = raw?.phone ?? u.phone ?? null
+        const effectiveHasImage = !!(raw?.image) || u.image === 'true'
         return {
           uuid: u.uuid,
           first_name: u.first_name,
-          last_name: u.last_name,
+          last_name: canSeeLastName ? effectiveLastName : null,
           headline: u.headline,
           role: u.role || undefined,
           cover_image_url: u.cover_image_url ?? null,
@@ -677,7 +717,7 @@ app.get('/', async (c) => {
           education: u.education,
           certifications: u.certifications,
           skills: u.skills,
-          image: u.image === 'true' ? true : null,
+          image: canSeePicture ? (effectiveHasImage ? true : null) : null,
           contact_details: canSeeContact && (effectiveEmail || effectivePhone) ? {
             email: effectiveEmail,
             phone: effectivePhone
@@ -715,12 +755,14 @@ app.get('/', async (c) => {
 
     const isOwner = targetUser.uuid === user.id
 
-    // Fetch active access grant when a recruiter views a candidate profile
-    // Also fetch contact details via admin client when the grant covers them,
-    // because public_users_view masks email/phone from non-owners via RLS.
+    // public_users_view masks last_name, image, email, phone from non-owners via RLS.
+    // When a recruiter has an active grant covering these fields, fetch raw values via
+    // admin client (bypasses RLS) so the grant actually reveals what it should.
     let approvedFields: string[] = []
     let grantedEmail: string | null = null
     let grantedPhone: string | null = null
+    let grantedLastName: string | null = null
+    let grantedHasImage: boolean = false
     if (isRecruiterViewer && !isOwner) {
       const supabaseAdmin = createClient(
         Deno.env.get('SUPABASE_URL') ?? '',
@@ -737,14 +779,26 @@ app.get('/', async (c) => {
         .maybeSingle()
       approvedFields = grant?.approved_fields ?? []
 
-      if (approvedFields.includes('contact_details')) {
-        const { data: contactData } = await supabaseAdmin
+      const needsRawFetch = approvedFields.includes('contact_details') ||
+        approvedFields.includes('last_name') ||
+        approvedFields.includes('picture')
+
+      if (needsRawFetch) {
+        const { data: rawData } = await supabaseAdmin
           .from('users')
-          .select('email, phone')
+          .select('email, phone, last_name, image')
           .eq('uuid', targetUserId)
           .maybeSingle()
-        grantedEmail = contactData?.email ?? null
-        grantedPhone = contactData?.phone ?? null
+        if (approvedFields.includes('contact_details')) {
+          grantedEmail = rawData?.email ?? null
+          grantedPhone = rawData?.phone ?? null
+        }
+        if (approvedFields.includes('last_name')) {
+          grantedLastName = rawData?.last_name ?? null
+        }
+        if (approvedFields.includes('picture')) {
+          grantedHasImage = !!(rawData?.image)
+        }
       }
     }
 
@@ -756,14 +810,18 @@ app.get('/', async (c) => {
     const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(targetUser.privacy_picture)
     const canSeeContact = isOwner || approvedFields.includes('contact_details') || privacyAllows(targetUser.privacy_contact_details)
 
-    // For non-owner recruiters with a grant, use admin-fetched values (bypasses view RLS on email/phone)
+    // Use admin-fetched raw values when grant covers them (view masks these from non-owners)
+    const effectiveLastName = isOwner ? targetUser.last_name : (grantedLastName ?? targetUser.last_name ?? null)
     const effectiveEmail = isOwner ? (targetUser.email ?? null) : (grantedEmail ?? targetUser.email ?? null)
     const effectivePhone = isOwner ? (targetUser.phone ?? null) : (grantedPhone ?? targetUser.phone ?? null)
+    const effectiveHasImage = isOwner
+      ? (targetUser.image === 'true')
+      : (grantedHasImage || targetUser.image === 'true')
 
     const publicProfile = {
       uuid: targetUser.uuid,
       first_name: targetUser.first_name,
-      last_name: canSeeLastName ? targetUser.last_name : null,
+      last_name: canSeeLastName ? effectiveLastName : null,
       headline: targetUser.headline,
       role: targetUser.role || undefined,
       location: targetUser.location,
@@ -775,7 +833,7 @@ app.get('/', async (c) => {
       education: targetUser.education,
       certifications: targetUser.certifications,
       skills: targetUser.skills,
-      image: canSeePicture ? (targetUser.image === 'true' ? true : null) : null,
+      image: canSeePicture ? (effectiveHasImage ? true : null) : null,
       cover_image_url: targetUser.cover_image_url ?? null,
       contact_details: canSeeContact && (effectiveEmail || effectivePhone) ? {
         email: effectiveEmail,
