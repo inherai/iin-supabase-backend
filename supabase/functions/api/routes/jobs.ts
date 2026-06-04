@@ -207,6 +207,7 @@ app.get('/:jobId/match-profile', async (c) => {
         explanation: saved.explanation ?? null,
         checked_at: saved.checked_at,
         check_count: saved.check_count,
+        source: 'cache',
       })
     }
   }
@@ -288,7 +289,7 @@ app.get('/:jobId/match-profile', async (c) => {
     check_count: checkCount,
   }, { onConflict: 'user_id,job_id' })
 
-  return c.json({ ...result, checked_at: checkedAt, check_count: checkCount })
+  return c.json({ ...result, checked_at: checkedAt, check_count: checkCount, source: 'computed' })
 })
 
 // ====================================================================

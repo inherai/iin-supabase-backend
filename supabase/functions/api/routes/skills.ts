@@ -106,9 +106,9 @@ app.get("/suggestions", async (c) => {
   // --- Adaptive weights ---
   const hasSkills = existing.length > 0;
   const hasRole   = normalizedTitle !== null;
-  const wPop   = hasSkills && hasRole ? 0.25 : (hasSkills || hasRole) ? 0.40 : 1.0;
-  const wRole  = hasSkills && hasRole ? 0.30 : hasRole   ? 0.60 : 0.0;
-  const wCoocc = hasSkills && hasRole ? 0.45 : hasSkills ? 0.60 : 0.0;
+  const wPop   = hasSkills && hasRole ? 0.10 : (hasSkills || hasRole) ? 0.20 : 1.0;
+  const wRole  = hasSkills && hasRole ? 0.35 : hasRole   ? 0.80 : 0.0;
+  const wCoocc = hasSkills && hasRole ? 0.55 : hasSkills ? 0.80 : 0.0;
 
   const popMax   = Math.max(...popMap.values(),   1);
   const roleMax  = Math.max(...roleMap.values(),  1);
@@ -122,14 +122,24 @@ app.get("/suggestions", async (c) => {
 
   const existingLower = new Set(existing.map((s: string) => s.toLowerCase()));
 
+  // Lift: co-occurrence normalized by popularity — penalizes skills that are
+  // universally popular (JavaScript appears with everything) and rewards skills
+  // that are specifically correlated with the user's niche (e.g. Jenkins for QA).
+  const liftMap = new Map<string, number>();
+  for (const [key, cooccCnt] of cooccMap) {
+    const popCnt = popMap.get(key) ?? 1;
+    liftMap.set(key, cooccCnt / popCnt);
+  }
+  const liftMax = Math.max(...liftMap.values(), 1);
+
   const scored = (allSkills ?? [])
     .filter((s: any) => !existingLower.has((s.name as string).toLowerCase()))
     .map((s: any) => {
       const key = (s.name as string).toLowerCase();
       const score =
-        ((popMap.get(key)   ?? 0) / popMax)   * wPop  +
-        ((roleMap.get(key)  ?? 0) / roleMax)  * wRole +
-        ((cooccMap.get(key) ?? 0) / cooccMax) * wCoocc;
+        ((popMap.get(key)   ?? 0) / popMax)  * wPop  +
+        ((roleMap.get(key)  ?? 0) / roleMax) * wRole +
+        ((liftMap.get(key)  ?? 0) / liftMax) * wCoocc;
       return { id: s.id as number, name: s.name as string, score };
     })
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
