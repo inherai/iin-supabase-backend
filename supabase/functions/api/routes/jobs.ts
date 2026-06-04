@@ -348,7 +348,7 @@ app.post('/:jobId/match-explanation', async (c) => {
   const profileSnapshot = [
     `Headline: ${profile?.headline || '(empty)'}`,
     `Bio (About): ${profile?.about ? `"${String(profile.about).slice(0, 250)}"` : '(empty — not filled in)'}`,
-    `Skills section (${profileSkills.length}/20 slots used): ${profileSkills.join(', ') || '(none)'}`,
+    `Skills section (${profileSkills.length}/100 slots used): ${profileSkills.join(', ') || '(none)'}`,
     `Experience (${profileExp.length} roles):\n${
       profileExp.map((e: any) => {
         const co = typeof e.company === 'object' ? e.company?.name ?? '' : (e.company ?? '')
@@ -401,7 +401,7 @@ ${profileSnapshot}
 
 === כללים לצעדים ===
 לפחות 2 מתוך 3 הצעדים חייבים להיות המלצות ספציפיות לשיפור הפרופיל — עם ציון שם הסקשיין בפרופיל (Skills, Bio, Experience, Education, Certifications).
-לדוגמה: "הוסיפי Docker לסקשיין Skills — יש לך עוד ${20 - profileSkills.length} מקומות פנויים"
+לדוגמה: "הוסיפי Docker לסקשיין Skills — יש לך עוד ${100 - profileSkills.length} מקומות פנויים"
 לדוגמה: "הביוגרפיה שלך ריקה — הוסיפי פסקה שמציינת ניסיון ב-X שמופיע כדרישת חובה"
 לדוגמה: "לתפקיד ב-${job.job_title} אין תיאור — הוסיפי נקודות בולט שמציגות ניסיון רלוונטי"
 צעד אחד לפיתוח מקצועי חיצוני (קורס, סרטיפיקציה, פרויקט).
@@ -431,7 +431,7 @@ ${profileSnapshot}
 
 === Steps Rules ===
 At least 2 of 3 steps must be specific profile improvement tips — naming the exact profile section (Skills, Bio/About, Experience, Education, Certifications).
-Example: "Add Docker to your Skills section — you have ${20 - profileSkills.length} slots remaining"
+Example: "Add Docker to your Skills section — you have ${100 - profileSkills.length} slots remaining"
 Example: "Your Bio is empty — add a paragraph highlighting your X experience, which appears as a required skill"
 Example: "Your ${job.job_title} role has no description — add bullet points showcasing relevant work"
 One step for external professional development (course, certification, side project).
