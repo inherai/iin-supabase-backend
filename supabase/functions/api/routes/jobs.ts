@@ -288,47 +288,49 @@ app.post('/:jobId/match-explanation', async (c) => {
     : ''
 
   const systemPrompt = isHebrew
-    ? `אתה מנהל בכיר בתחום משאבי אנוש ומיועץ קריירה ותיק עם ניסיון של מעל 20 שנה בגיוס טכנולוגי, ניהול ארגוני ופיתוח הון אנושי בחברות טכנולוגיה. אתה משלב אינטואיציה חדה של HR עם הבנה טכנית עמוקה. דבר ישירות, מקצועית ובצורה בונה — כמו יועץ מהימן, לא כמי שמייצר דו"חות.`
-    : `You are a veteran talent executive and career strategist with over 20 years spanning technical recruiting, people operations, and organizational leadership at high-growth technology companies. You combine razor-sharp HR instincts with deep technical fluency across software engineering, product, and management. Speak directly, professionally, and constructively — like a trusted advisor, not a report generator.`
+    ? `את יועצת קריירה בכירה עם ניסיון של מעל 20 שנה בגיוס טכנולוגי. פני תמיד למועמדת בגוף נקבה ובלשון נוכח: "יש לך", "את מביאה", "כדאי לך". ללא מבוא, ללא חזרות. כל משפט חייב לשאת ערך.`
+    : `You are a veteran talent executive with 20+ years in technical recruiting. Address the candidate directly in second person. Be sharp and brief — no preamble, no filler. Every sentence must carry weight.`
 
   const userPrompt = isHebrew
-    ? `נתח את התאמת המועמד למשרה וכתוב הערכה מקצועית.
+    ? `הערכת התאמה — החזירי JSON בלבד (ללא markdown). כל שדה: משפט אחד, קצר ומדויק, בלשון נוכח ונקבה.
 
 משרה: ${job.job_title}
-ציון התאמה: ${match_score}/98
+ציון: ${match_score}/98
 ${expLine}
 
-${skillLines(required, 'כישורים נדרשים')}
-${skillLines(preferred, 'כישורים מועדפים')}
-${skillLines(nice_to_have, 'יתרון')}
+${skillLines(required, 'חובה')}
+${skillLines(preferred, 'יתרון')}
+${skillLines(nice_to_have, 'נחמד')}
 
-תיאור המשרה (קטע): "${jdSnippet}..."
+הקשר: "${jdSnippet}..."
 
-החזר JSON בלבד (ללא markdown):
+כללים לצעדים: לפחות 2 מתוך 3 צעדים חייבים להיות המלצות לשיפור הפרופיל (כגון: הדגשת ניסיון X, הוספת כישור Y לפרופיל, שינוי ניסוח Z). צעד אחד לפיתוח מקצועי חיצוני.
+
 {
-  "summary": "2-3 משפטים: הערכה מקצועית של רמת ההתאמה והתמונה הכוללת",
-  "strengths": "1-2 משפטים: מה ספציפית תרם לציון — היה מדויק לגבי כישורים וניסיון",
-  "gaps": "1-2 משפטים: מה ספציפית הוריד את הציון — בונה ומדויק, ללא דיבורים סרק",
-  "steps": ["צעד קונקרטי 1 (פעולה ספציפית, לא עצות כלליות)", "צעד קונקרטי 2", "צעד קונקרטי 3"]
+  "summary": "משפט אחד — רמת ההתאמה הכוללת",
+  "strengths": "משפט אחד — מה ספציפית חיזק את הציון",
+  "gaps": "משפט אחד — מה ספציפית הוריד את הציון",
+  "steps": ["המלצה לשיפור פרופיל 1", "המלצה לשיפור פרופיל 2", "פיתוח מקצועי"]
 }`
-    : `Analyze this candidate's job match and write a professional assessment.
+    : `Job match assessment — return ONLY valid JSON (no markdown). Each field: one sentence, direct second person ("you have", "your experience").
 
 Role: ${job.job_title}
-Match Score: ${match_score}/98
+Score: ${match_score}/98
 ${expLine}
 
-${skillLines(required, 'Required Skills')}
-${skillLines(preferred, 'Preferred Skills')}
-${skillLines(nice_to_have, 'Nice-to-have Skills')}
+${skillLines(required, 'Required')}
+${skillLines(preferred, 'Preferred')}
+${skillLines(nice_to_have, 'Nice-to-have')}
 
-Job context: "${jdSnippet}..."
+Context: "${jdSnippet}..."
 
-Return ONLY valid JSON (no markdown):
+Steps rule: at least 2 of 3 steps must be profile improvement tips (e.g. highlight skill X on your profile, add certification Y, reword experience Z). One step for external professional development.
+
 {
-  "summary": "2-3 sentences: professional assessment of fit quality and the overall picture",
-  "strengths": "1-2 sentences: what specifically elevated the score — precise about skills and experience",
-  "gaps": "1-2 sentences: what specifically reduced the score — constructive, specific, no filler",
-  "steps": ["Concrete step 1 (specific action, not vague advice)", "Concrete step 2", "Concrete step 3"]
+  "summary": "One sentence — overall fit quality",
+  "strengths": "One sentence — what specifically boosted your score",
+  "gaps": "One sentence — what specifically reduced your score",
+  "steps": ["Profile improvement tip 1", "Profile improvement tip 2", "Professional development"]
 }`
 
   try {
@@ -341,8 +343,8 @@ Return ONLY valid JSON (no markdown):
         { role: 'user', content: userPrompt },
       ],
       response_format: { type: 'json_object' },
-      temperature: 0.35,
-      max_tokens: 700,
+      temperature: 0.25,
+      max_tokens: 450,
     })
 
     const raw = completion.choices[0].message.content || '{}'
