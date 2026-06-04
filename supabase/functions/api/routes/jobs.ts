@@ -1,5 +1,6 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import OpenAI from 'https://esm.sh/openai@4'
 import {
   getEmbedding,
   extractSkillsFromJd,
@@ -236,6 +237,121 @@ app.get('/:jobId/match-profile', async (c) => {
   // 6. Score — same computeMatchScore as talent search → identical result for same candidate+job
   const result = computeMatchScore(rawSimilarity, userSkills, jdSkills, experienceYears)
   return c.json(result)
+})
+
+// ====================================================================
+// POST /api/jobs/:jobId/match-explanation — LLM narrative on match result
+// Client sends the already-computed match result; we generate an expert explanation.
+// ====================================================================
+app.post('/:jobId/match-explanation', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  if (user.app_metadata?.role === 'recruiters') return c.json({ error: 'Forbidden' }, 403)
+
+  const jobId = c.req.param('jobId')
+
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'Invalid body' }, 400) }
+
+  const {
+    match_score,
+    required = [],
+    preferred = [],
+    nice_to_have = [],
+    experience_years_candidate,
+    experience_years_required,
+    lang = 'en',
+  } = body
+
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  )
+
+  const { data: job } = await supabaseAdmin
+    .from('open_position')
+    .select('job_title, job_description_html')
+    .eq('job_id', jobId)
+    .single()
+  if (!job) return c.json({ error: 'Job not found' }, 404)
+
+  const isHebrew = lang === 'he'
+  const jdSnippet = stripHtml(job.job_description_html ?? '').slice(0, 500)
+
+  const skillLines = (skills: { skill: string; has: boolean }[], label: string) =>
+    skills.length
+      ? `${label}:\n${skills.map(s => `  ${s.has ? '✓' : '✗'} ${s.skill}`).join('\n')}`
+      : ''
+
+  const expLine = experience_years_required != null
+    ? `Experience: candidate has ${experience_years_candidate ?? 0} years, role requires ${experience_years_required}+`
+    : ''
+
+  const systemPrompt = isHebrew
+    ? `אתה מנהל בכיר בתחום משאבי אנוש ומיועץ קריירה ותיק עם ניסיון של מעל 20 שנה בגיוס טכנולוגי, ניהול ארגוני ופיתוח הון אנושי בחברות טכנולוגיה. אתה משלב אינטואיציה חדה של HR עם הבנה טכנית עמוקה. דבר ישירות, מקצועית ובצורה בונה — כמו יועץ מהימן, לא כמי שמייצר דו"חות.`
+    : `You are a veteran talent executive and career strategist with over 20 years spanning technical recruiting, people operations, and organizational leadership at high-growth technology companies. You combine razor-sharp HR instincts with deep technical fluency across software engineering, product, and management. Speak directly, professionally, and constructively — like a trusted advisor, not a report generator.`
+
+  const userPrompt = isHebrew
+    ? `נתח את התאמת המועמד למשרה וכתוב הערכה מקצועית.
+
+משרה: ${job.job_title}
+ציון התאמה: ${match_score}/98
+${expLine}
+
+${skillLines(required, 'כישורים נדרשים')}
+${skillLines(preferred, 'כישורים מועדפים')}
+${skillLines(nice_to_have, 'יתרון')}
+
+תיאור המשרה (קטע): "${jdSnippet}..."
+
+החזר JSON בלבד (ללא markdown):
+{
+  "summary": "2-3 משפטים: הערכה מקצועית של רמת ההתאמה והתמונה הכוללת",
+  "strengths": "1-2 משפטים: מה ספציפית תרם לציון — היה מדויק לגבי כישורים וניסיון",
+  "gaps": "1-2 משפטים: מה ספציפית הוריד את הציון — בונה ומדויק, ללא דיבורים סרק",
+  "steps": ["צעד קונקרטי 1 (פעולה ספציפית, לא עצות כלליות)", "צעד קונקרטי 2", "צעד קונקרטי 3"]
+}`
+    : `Analyze this candidate's job match and write a professional assessment.
+
+Role: ${job.job_title}
+Match Score: ${match_score}/98
+${expLine}
+
+${skillLines(required, 'Required Skills')}
+${skillLines(preferred, 'Preferred Skills')}
+${skillLines(nice_to_have, 'Nice-to-have Skills')}
+
+Job context: "${jdSnippet}..."
+
+Return ONLY valid JSON (no markdown):
+{
+  "summary": "2-3 sentences: professional assessment of fit quality and the overall picture",
+  "strengths": "1-2 sentences: what specifically elevated the score — precise about skills and experience",
+  "gaps": "1-2 sentences: what specifically reduced the score — constructive, specific, no filler",
+  "steps": ["Concrete step 1 (specific action, not vague advice)", "Concrete step 2", "Concrete step 3"]
+}`
+
+  try {
+    const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.35,
+      max_tokens: 700,
+    })
+
+    const raw = completion.choices[0].message.content || '{}'
+    const explanation = JSON.parse(raw)
+    return c.json(explanation)
+  } catch (e) {
+    console.error('match-explanation error:', e)
+    return c.json({ error: 'Explanation service unavailable' }, 503)
+  }
 })
 
 export default app
