@@ -1,5 +1,11 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import {
+  getEmbedding,
+  extractSkillsFromJd,
+  stripHtml,
+  computeMatchScore,
+} from './_matchHelpers.ts'
 
 const app = new Hono()
 const allowedCategories = new Set(['Development', 'QA', 'Data', 'Management', 'Product'])
@@ -154,6 +160,82 @@ app.get('/', async (c) => {
   } catch (error: any) {
     return c.json({ error: error.message, success: false }, 500);
   }
+})
+
+// ====================================================================
+// GET /api/jobs/:jobId/match-profile — candidate self-match against a job
+// ====================================================================
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0, normA = 0, normB = 0
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i]; normA += a[i] ** 2; normB += b[i] ** 2
+  }
+  return normA && normB ? dot / (Math.sqrt(normA) * Math.sqrt(normB)) : 0
+}
+
+app.get('/:jobId/match-profile', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  // Feature is for candidates and admins; recruiters are excluded
+  if (user.app_metadata?.role === 'recruiters') return c.json({ error: 'Forbidden' }, 403)
+
+  const jobId = c.req.param('jobId')
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  )
+
+  // 1. User embedding — same users_vectors as talent search → guaranteed consistency
+  const { data: userVector } = await supabaseAdmin
+    .from('users_vectors').select('vector').eq('user_id', user.id).maybeSingle()
+  if (!userVector?.vector) {
+    return c.json({ match_score: null, reason: 'no_profile_embedding' })
+  }
+
+  // 2. Job
+  const { data: job } = await supabaseAdmin
+    .from('open_position')
+    .select('job_id, job_description_html, job_title')
+    .eq('job_id', jobId)
+    .single()
+  if (!job) return c.json({ error: 'Job not found' }, 404)
+
+  // 3. Job embedding — reuse job_embeddings cache (shared with recruiter talent search)
+  let jobEmbedding: number[]
+  const { data: cached } = await supabaseAdmin
+    .from('job_embeddings').select('embedding').eq('job_id', jobId).single()
+  if (cached?.embedding) {
+    jobEmbedding = cached.embedding
+  } else {
+    const text = stripHtml(job.job_description_html ?? '') + ' ' + job.job_title
+    try {
+      jobEmbedding = await getEmbedding(text)
+      await supabaseAdmin.from('job_embeddings').upsert({ job_id: jobId, embedding: jobEmbedding })
+    } catch {
+      return c.json({ error: 'Embedding service unavailable' }, 503)
+    }
+  }
+
+  // 4. Cosine similarity — single pair, no index scan needed
+  const rawSimilarity = cosineSimilarity(userVector.vector, jobEmbedding)
+
+  // 5. Skills extraction + user profile fetch (parallel)
+  const jdText = stripHtml(job.job_description_html ?? '') + ' ' + job.job_title
+  const [jdSkills, userRow] = await Promise.all([
+    extractSkillsFromJd(jdText),
+    supabaseAdmin
+      .from('talent_search_view')
+      .select('skills, experience_years')
+      .eq('uuid', user.id)
+      .single(),
+  ])
+
+  const userSkills: string[] = userRow.data?.skills ?? []
+  const experienceYears: number = userRow.data?.experience_years ?? 0
+
+  // 6. Score — same computeMatchScore as talent search → identical result for same candidate+job
+  const result = computeMatchScore(rawSimilarity, userSkills, jdSkills, experienceYears)
+  return c.json(result)
 })
 
 export default app
