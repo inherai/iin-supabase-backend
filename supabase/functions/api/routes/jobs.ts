@@ -268,12 +268,46 @@ app.post('/:jobId/match-explanation', async (c) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
 
-  const { data: job } = await supabaseAdmin
-    .from('open_position')
-    .select('job_title, job_description_html')
-    .eq('job_id', jobId)
-    .single()
+  // Fetch job + candidate profile in parallel
+  const [jobResult, profileResult] = await Promise.all([
+    supabaseAdmin
+      .from('open_position')
+      .select('job_title, job_description_html')
+      .eq('job_id', jobId)
+      .single(),
+    supabaseAdmin
+      .from('talent_search_view')
+      .select('headline, about, skills, experience, education, certifications, languages, experience_years')
+      .eq('uuid', user.id)
+      .single(),
+  ])
+
+  const job = jobResult.data
   if (!job) return c.json({ error: 'Job not found' }, 404)
+
+  const profile = profileResult.data
+  const profileSkills: string[] = profile?.skills ?? []
+  const profileExp: any[] = profile?.experience ?? []
+  const profileEdu: any[] = profile?.education ?? []
+  const profileCerts: any[] = profile?.certifications ?? []
+  const profileLangs: any[] = profile?.languages ?? []
+
+  // Build a concrete profile snapshot for the AI
+  const profileSnapshot = [
+    `Headline: ${profile?.headline || '(empty)'}`,
+    `Bio (About): ${profile?.about ? `"${String(profile.about).slice(0, 250)}"` : '(empty — not filled in)'}`,
+    `Skills section (${profileSkills.length}/20 slots used): ${profileSkills.join(', ') || '(none)'}`,
+    `Experience (${profileExp.length} roles): ${
+      profileExp.map((e: any) => {
+        const co = typeof e.company === 'object' ? e.company?.name ?? '' : (e.company ?? '')
+        const hasDesc = e.description && String(e.description).trim().length > 0
+        return `"${e.title}" at ${co}${hasDesc ? '' : ' [NO DESCRIPTION]'}`
+      }).join(', ') || '(none)'
+    }`,
+    `Education: ${profileEdu.map((e: any) => `${e.degree} in ${e.field}, ${e.institution}`).join('; ') || '(none)'}`,
+    `Certifications: ${profileCerts.length > 0 ? profileCerts.map((c: any) => c.name).join(', ') : '(none)'}`,
+    `Languages: ${profileLangs.map((l: any) => `${l.name} (${l.level})`).join(', ') || '(none)'}`,
+  ].join('\n')
 
   const isHebrew = lang === 'he'
   const jdSnippet = stripHtml(job.job_description_html ?? '').slice(0, 500)
@@ -284,53 +318,75 @@ app.post('/:jobId/match-explanation', async (c) => {
       : ''
 
   const expLine = experience_years_required != null
-    ? `Experience: candidate has ${experience_years_candidate ?? 0} years, role requires ${experience_years_required}+`
+    ? (isHebrew
+        ? `ניסיון: יש לך ${experience_years_candidate ?? 0} שנים, נדרש ${experience_years_required}+`
+        : `Experience: you have ${experience_years_candidate ?? 0} years, role requires ${experience_years_required}+`)
     : ''
 
   const systemPrompt = isHebrew
-    ? `את יועצת קריירה בכירה עם ניסיון של מעל 20 שנה בגיוס טכנולוגי. פני תמיד למועמדת בגוף נקבה ובלשון נוכח: "יש לך", "את מביאה", "כדאי לך". ללא מבוא, ללא חזרות. כל משפט חייב לשאת ערך.`
-    : `You are a veteran talent executive with 20+ years in technical recruiting. Address the candidate directly in second person. Be sharp and brief — no preamble, no filler. Every sentence must carry weight.`
+    ? `את יועצת קריירה בכירה עם ניסיון של מעל 20 שנה בגיוס טכנולוגי. את מדברת בצורה ישירה, חדה ותמציתית — כמו יועצת שיודעת מה שווה כסף. פני תמיד למועמדת בגוף נקבה ובלשון נוכח: "יש לך", "את מביאה", "כדאי לך", "הפרופיל שלך". ללא מבוא, ללא חזרות, ללא עצות בנאליות.`
+    : `You are a veteran talent executive with 20+ years in technical recruiting. Speak directly and concisely — like an advisor whose time costs money. Address the candidate in second person: "you have", "your profile", "consider updating". No preamble, no filler, no generic advice.`
 
   const userPrompt = isHebrew
-    ? `הערכת התאמה — החזירי JSON בלבד (ללא markdown). כל שדה: משפט אחד, קצר ומדויק, בלשון נוכח ונקבה.
+    ? `נתחי את ההתאמה בהתאם לפרופיל האמיתי של המועמדת. החזירי JSON בלבד (ללא markdown). כל שדה: משפט אחד, קצר ומדויק, בלשון נוכח ונקבה.
 
+=== פרטי המשרה ===
 משרה: ${job.job_title}
 ציון: ${match_score}/98
 ${expLine}
 
-${skillLines(required, 'חובה')}
-${skillLines(preferred, 'יתרון')}
-${skillLines(nice_to_have, 'נחמד')}
+${skillLines(required, 'כישורים חובה')}
+${skillLines(preferred, 'כישורים יתרון')}
+${skillLines(nice_to_have, 'נחמד שיש')}
 
-הקשר: "${jdSnippet}..."
+תיאור המשרה: "${jdSnippet}..."
 
-כללים לצעדים: לפחות 2 מתוך 3 צעדים חייבים להיות המלצות לשיפור הפרופיל (כגון: הדגשת ניסיון X, הוספת כישור Y לפרופיל, שינוי ניסוח Z). צעד אחד לפיתוח מקצועי חיצוני.
+=== הפרופיל האמיתי של המועמדת ===
+${profileSnapshot}
+
+=== כללים לצעדים ===
+לפחות 2 מתוך 3 הצעדים חייבים להיות המלצות ספציפיות לשיפור הפרופיל — עם ציון שם הסקשיין בפרופיל (Skills, Bio, Experience, Education, Certifications).
+לדוגמה: "הוסיפי Docker לסקשיין Skills — יש לך עוד ${20 - profileSkills.length} מקומות פנויים"
+לדוגמה: "הביוגרפיה שלך ריקה — הוסיפי פסקה שמציינת ניסיון ב-X שמופיע כדרישת חובה"
+לדוגמה: "לתפקיד ב-${job.job_title} אין תיאור — הוסיפי נקודות בולט שמציגות ניסיון רלוונטי"
+צעד אחד לפיתוח מקצועי חיצוני (קורס, סרטיפיקציה, פרויקט).
+אל תמציאי — התבססי אך ורק על נתוני הפרופיל שניתנו.
 
 {
   "summary": "משפט אחד — רמת ההתאמה הכוללת",
   "strengths": "משפט אחד — מה ספציפית חיזק את הציון",
   "gaps": "משפט אחד — מה ספציפית הוריד את הציון",
-  "steps": ["המלצה לשיפור פרופיל 1", "המלצה לשיפור פרופיל 2", "פיתוח מקצועי"]
+  "steps": ["שיפור פרופיל 1 (ציון שם הסקשיין)", "שיפור פרופיל 2 (ציון שם הסקשיין)", "פיתוח מקצועי חיצוני"]
 }`
-    : `Job match assessment — return ONLY valid JSON (no markdown). Each field: one sentence, direct second person ("you have", "your experience").
+    : `Analyze this match using the candidate's REAL profile data. Return ONLY valid JSON (no markdown). Each field: one sentence, direct second person.
 
+=== Job Details ===
 Role: ${job.job_title}
 Score: ${match_score}/98
 ${expLine}
 
-${skillLines(required, 'Required')}
-${skillLines(preferred, 'Preferred')}
+${skillLines(required, 'Required Skills')}
+${skillLines(preferred, 'Preferred Skills')}
 ${skillLines(nice_to_have, 'Nice-to-have')}
 
-Context: "${jdSnippet}..."
+Job context: "${jdSnippet}..."
 
-Steps rule: at least 2 of 3 steps must be profile improvement tips (e.g. highlight skill X on your profile, add certification Y, reword experience Z). One step for external professional development.
+=== Candidate's Real Profile ===
+${profileSnapshot}
+
+=== Steps Rules ===
+At least 2 of 3 steps must be specific profile improvement tips — naming the exact profile section (Skills, Bio/About, Experience, Education, Certifications).
+Example: "Add Docker to your Skills section — you have ${20 - profileSkills.length} slots remaining"
+Example: "Your Bio is empty — add a paragraph highlighting your X experience, which appears as a required skill"
+Example: "Your ${job.job_title} role has no description — add bullet points showcasing relevant work"
+One step for external professional development (course, certification, side project).
+Do NOT invent anything — base all advice strictly on the profile data provided above.
 
 {
   "summary": "One sentence — overall fit quality",
   "strengths": "One sentence — what specifically boosted your score",
   "gaps": "One sentence — what specifically reduced your score",
-  "steps": ["Profile improvement tip 1", "Profile improvement tip 2", "Professional development"]
+  "steps": ["Profile improvement 1 (name the section)", "Profile improvement 2 (name the section)", "External professional development"]
 }`
 
   try {
