@@ -324,11 +324,11 @@ app.post('/:jobId/match-explanation', async (c) => {
     : ''
 
   const systemPrompt = isHebrew
-    ? `את יועצת קריירה בכירה עם ניסיון של מעל 20 שנה בגיוס טכנולוגי. את מדברת בצורה ישירה, חדה ותמציתית — כמו יועצת שיודעת מה שווה כסף. פני תמיד למועמדת בגוף נקבה ובלשון נוכח: "יש לך", "את מביאה", "כדאי לך", "הפרופיל שלך". ללא מבוא, ללא חזרות, ללא עצות בנאליות.`
-    : `You are a veteran talent executive with 20+ years in technical recruiting. Speak directly and concisely — like an advisor whose time costs money. Address the candidate in second person: "you have", "your profile", "consider updating". No preamble, no filler, no generic advice.`
+    ? `את מנהלת בכירה בתחום משאבי אנוש ומיועצת קריירה ותיקה עם ניסיון של מעל 20 שנה בגיוס טכנולוגי, ניהול ארגוני ופיתוח הון אנושי בחברות טכנולוגיה. את משלבת אינטואיציה חדה של HR עם הבנה טכנית עמוקה. דברי ישירות, מקצועית ובצורה בונה — כמו יועצת מהימנה, לא כמי שמייצרת דו"חות. פני למועמדת בגוף נקבה ובלשון נוכח: "יש לך", "את מביאה", "כדאי לך", "הפרופיל שלך".`
+    : `You are a veteran talent executive and career strategist with over 20 years spanning technical recruiting, people operations, and organizational leadership at high-growth technology companies. You combine razor-sharp HR instincts with deep technical fluency across software engineering, product, and management. Speak directly, professionally, and constructively — like a trusted advisor, not a report generator. Address the candidate in second person: "you have", "your profile", "your experience".`
 
   const userPrompt = isHebrew
-    ? `נתחי את ההתאמה בהתאם לפרופיל האמיתי של המועמדת. החזירי JSON בלבד (ללא markdown). כל שדה: משפט אחד, קצר ומדויק, בלשון נוכח ונקבה.
+    ? `נתחי את התאמת המועמדת למשרה בהתאם לפרופיל האמיתי שלה. כתבי הערכה מקצועית. החזירי JSON בלבד (ללא markdown). פני למועמדת בגוף נקבה ובלשון נוכח.
 
 === פרטי המשרה ===
 משרה: ${job.job_title}
@@ -353,12 +353,12 @@ ${profileSnapshot}
 אל תמציאי — התבססי אך ורק על נתוני הפרופיל שניתנו.
 
 {
-  "summary": "משפט אחד — רמת ההתאמה הכוללת",
-  "strengths": "משפט אחד — מה ספציפית חיזק את הציון",
-  "gaps": "משפט אחד — מה ספציפית הוריד את הציון",
-  "steps": ["שיפור פרופיל 1 (ציון שם הסקשיין)", "שיפור פרופיל 2 (ציון שם הסקשיין)", "פיתוח מקצועי חיצוני"]
+  "summary": "2-3 משפטים: הערכה מקצועית של רמת ההתאמה והתמונה הכוללת, בלשון נוכח ונקבה",
+  "strengths": "1-2 משפטים: מה ספציפית חיזק את הציון — מדויק לגבי כישורים וניסיון",
+  "gaps": "1-2 משפטים: מה ספציפית הוריד את הציון — בונה ומדויק",
+  "steps": ["שיפור פרופיל 1 ספציפי (ציון שם הסקשיין)", "שיפור פרופיל 2 ספציפי (ציון שם הסקשיין)", "פיתוח מקצועי חיצוני"]
 }`
-    : `Analyze this match using the candidate's REAL profile data. Return ONLY valid JSON (no markdown). Each field: one sentence, direct second person.
+    : `Analyze this candidate's job match using their REAL profile data. Write a professional assessment. Return ONLY valid JSON (no markdown). Address the candidate in second person.
 
 === Job Details ===
 Role: ${job.job_title}
@@ -383,10 +383,10 @@ One step for external professional development (course, certification, side proj
 Do NOT invent anything — base all advice strictly on the profile data provided above.
 
 {
-  "summary": "One sentence — overall fit quality",
-  "strengths": "One sentence — what specifically boosted your score",
-  "gaps": "One sentence — what specifically reduced your score",
-  "steps": ["Profile improvement 1 (name the section)", "Profile improvement 2 (name the section)", "External professional development"]
+  "summary": "2-3 sentences: professional assessment of fit quality and the overall picture",
+  "strengths": "1-2 sentences: what specifically elevated the score — precise about skills and experience",
+  "gaps": "1-2 sentences: what specifically reduced the score — constructive, specific, no filler",
+  "steps": ["Specific profile improvement 1 (name the section)", "Specific profile improvement 2 (name the section)", "External professional development"]
 }`
 
   try {
@@ -399,8 +399,8 @@ Do NOT invent anything — base all advice strictly on the profile data provided
         { role: 'user', content: userPrompt },
       ],
       response_format: { type: 'json_object' },
-      temperature: 0.25,
-      max_tokens: 450,
+      temperature: 0.35,
+      max_tokens: 700,
     })
 
     const raw = completion.choices[0].message.content || '{}'
