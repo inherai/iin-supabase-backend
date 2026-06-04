@@ -297,12 +297,15 @@ app.post('/:jobId/match-explanation', async (c) => {
     `Headline: ${profile?.headline || '(empty)'}`,
     `Bio (About): ${profile?.about ? `"${String(profile.about).slice(0, 250)}"` : '(empty — not filled in)'}`,
     `Skills section (${profileSkills.length}/20 slots used): ${profileSkills.join(', ') || '(none)'}`,
-    `Experience (${profileExp.length} roles): ${
+    `Experience (${profileExp.length} roles):\n${
       profileExp.map((e: any) => {
         const co = typeof e.company === 'object' ? e.company?.name ?? '' : (e.company ?? '')
-        const hasDesc = e.description && String(e.description).trim().length > 0
-        return `"${e.title}" at ${co}${hasDesc ? '' : ' [NO DESCRIPTION]'}`
-      }).join(', ') || '(none)'
+        const desc = e.description ? String(e.description).trim() : ''
+        const descLine = desc
+          ? `  description: "${desc.slice(0, 200)}${desc.length > 200 ? '...' : ''}"`
+          : `  description: [MISSING]`
+        return `  - "${e.title}" at ${co}\n${descLine}`
+      }).join('\n') || '  (none)'
     }`,
     `Education: ${profileEdu.map((e: any) => `${e.degree} in ${e.field}, ${e.institution}`).join('; ') || '(none)'}`,
     `Certifications: ${profileCerts.length > 0 ? profileCerts.map((c: any) => c.name).join(', ') : '(none)'}`,
