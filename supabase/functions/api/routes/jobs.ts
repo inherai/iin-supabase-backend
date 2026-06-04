@@ -177,66 +177,118 @@ function cosineSimilarity(a: number[], b: number[]): number {
 app.get('/:jobId/match-profile', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
-  // Feature is for candidates and admins; recruiters are excluded
   if (user.app_metadata?.role === 'recruiters') return c.json({ error: 'Forbidden' }, 403)
 
   const jobId = c.req.param('jobId')
+  const refresh = c.req.query('refresh') === 'true'
+
   const supabaseAdmin = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
 
-  // 1. User embedding — same users_vectors as talent search → guaranteed consistency
-  const { data: userVector } = await supabaseAdmin
-    .from('users_vectors').select('vector').eq('user_id', user.id).maybeSingle()
-  if (!userVector?.vector) {
-    return c.json({ match_score: null, reason: 'no_profile_embedding' })
-  }
+  // DB cache check — skip only when user explicitly requests a fresh computation
+  if (!refresh) {
+    const { data: saved } = await supabaseAdmin
+      .from('job_match_results')
+      .select('match_score, required, preferred, nice_to_have, experience_years_candidate, experience_years_required, explanation, checked_at, check_count')
+      .eq('user_id', user.id)
+      .eq('job_id', jobId)
+      .maybeSingle()
 
-  // 2. Job
-  const { data: job } = await supabaseAdmin
-    .from('open_position')
-    .select('job_id, job_description_html, job_title')
-    .eq('job_id', jobId)
-    .single()
-  if (!job) return c.json({ error: 'Job not found' }, 404)
-
-  // 3. Job embedding — reuse job_embeddings cache (shared with recruiter talent search)
-  let jobEmbedding: number[]
-  const { data: cached } = await supabaseAdmin
-    .from('job_embeddings').select('embedding').eq('job_id', jobId).single()
-  if (cached?.embedding) {
-    jobEmbedding = cached.embedding
-  } else {
-    const text = stripHtml(job.job_description_html ?? '') + ' ' + job.job_title
-    try {
-      jobEmbedding = await getEmbedding(text)
-      await supabaseAdmin.from('job_embeddings').upsert({ job_id: jobId, embedding: jobEmbedding })
-    } catch {
-      return c.json({ error: 'Embedding service unavailable' }, 503)
+    if (saved) {
+      return c.json({
+        match_score: saved.match_score,
+        required: saved.required ?? [],
+        preferred: saved.preferred ?? [],
+        nice_to_have: saved.nice_to_have ?? [],
+        experience_years_candidate: saved.experience_years_candidate,
+        experience_years_required: saved.experience_years_required,
+        explanation: saved.explanation ?? null,
+        checked_at: saved.checked_at,
+        check_count: saved.check_count,
+      })
     }
   }
 
-  // 4. Cosine similarity — single pair, no index scan needed
-  const rawSimilarity = cosineSimilarity(userVector.vector, jobEmbedding)
+  // 1. Fetch user vector + job + job cache all in parallel (all only need IDs we already have)
+  const [userVectorResult, jobResult, cacheResult] = await Promise.all([
+    supabaseAdmin.from('users_vectors').select('vector').eq('user_id', user.id).maybeSingle(),
+    supabaseAdmin.from('open_position').select('job_id, job_description_html, job_title').eq('job_id', jobId).single(),
+    supabaseAdmin.from('job_embeddings').select('embedding, skills_json').eq('job_id', jobId).single(),
+  ])
 
-  // 5. Skills extraction + user profile fetch (parallel)
+  if (!userVectorResult.data?.vector) {
+    return c.json({ match_score: null, reason: 'no_profile_embedding' })
+  }
+  const job = jobResult.data
+  if (!job) return c.json({ error: 'Job not found' }, 404)
+
   const jdText = stripHtml(job.job_description_html ?? '') + ' ' + job.job_title
-  const [jdSkills, userRow] = await Promise.all([
-    extractSkillsFromJd(jdText),
-    supabaseAdmin
-      .from('talent_search_view')
-      .select('skills, experience_years')
-      .eq('uuid', user.id)
-      .single(),
+  const needsEmbedding = !cacheResult.data?.embedding
+  const needsSkills = !cacheResult.data?.skills_json
+
+  let jobEmbedding: number[]
+  let jdSkills: CategorizedSkills
+
+  if (!needsEmbedding && !needsSkills) {
+    // 2a. Full cache hit — no OpenAI calls
+    jobEmbedding = cacheResult.data.embedding
+    jdSkills = cacheResult.data.skills_json as CategorizedSkills
+  } else {
+    // 2b. Compute whatever is missing, in parallel
+    const [embResult, skillsResult] = await Promise.all([
+      needsEmbedding ? getEmbedding(jdText).catch(() => null) : Promise.resolve(cacheResult.data?.embedding ?? null),
+      needsSkills    ? extractSkillsFromJd(jdText)            : Promise.resolve(cacheResult.data!.skills_json as CategorizedSkills),
+    ])
+    if (!embResult) return c.json({ error: 'Embedding service unavailable' }, 503)
+    jobEmbedding = embResult
+    jdSkills = skillsResult
+
+    // Persist only the columns that were missing (upsert touches only provided columns)
+    const toSave: Record<string, any> = { job_id: jobId }
+    if (needsEmbedding) toSave.embedding = jobEmbedding
+    if (needsSkills)    toSave.skills_json = jdSkills
+    await supabaseAdmin.from('job_embeddings').upsert(toSave)
+  }
+
+  // 3. Cosine similarity + user skills (parallel)
+  const [rawSimilarity, userRow] = await Promise.all([
+    Promise.resolve(cosineSimilarity(userVectorResult.data.vector, jobEmbedding)),
+    supabaseAdmin.from('talent_search_view').select('skills, experience_years').eq('uuid', user.id).single(),
   ])
 
   const userSkills: string[] = userRow.data?.skills ?? []
   const experienceYears: number = userRow.data?.experience_years ?? 0
 
-  // 6. Score — same computeMatchScore as talent search → identical result for same candidate+job
   const result = computeMatchScore(rawSimilarity, userSkills, jdSkills, experienceYears)
-  return c.json(result)
+
+  // Persist result — increment check_count on re-check
+  let checkCount = 1
+  if (refresh) {
+    const { data: existing } = await supabaseAdmin
+      .from('job_match_results')
+      .select('check_count')
+      .eq('user_id', user.id)
+      .eq('job_id', jobId)
+      .maybeSingle()
+    checkCount = (existing?.check_count ?? 0) + 1
+  }
+  const checkedAt = new Date().toISOString()
+  await supabaseAdmin.from('job_match_results').upsert({
+    user_id: user.id,
+    job_id: jobId,
+    match_score: result.match_score,
+    required: result.required,
+    preferred: result.preferred,
+    nice_to_have: result.nice_to_have,
+    experience_years_candidate: result.experience_years_candidate,
+    experience_years_required: result.experience_years_required,
+    checked_at: checkedAt,
+    check_count: checkCount,
+  }, { onConflict: 'user_id,job_id' })
+
+  return c.json({ ...result, checked_at: checkedAt, check_count: checkCount })
 })
 
 // ====================================================================
@@ -408,6 +460,13 @@ Do NOT invent anything — base all advice strictly on the profile data provided
 
     const raw = completion.choices[0].message.content || '{}'
     const explanation = JSON.parse(raw)
+
+    // Save explanation alongside the match result (best-effort, don't fail if row missing)
+    await supabaseAdmin.from('job_match_results')
+      .update({ explanation })
+      .eq('user_id', user.id)
+      .eq('job_id', jobId)
+
     return c.json(explanation)
   } catch (e) {
     console.error('match-explanation error:', e)
