@@ -151,6 +151,46 @@ app.get("/suggestions", async (c) => {
   return c.json(scored);
 });
 
+// GET /api/skills/rank
+// Ranks the caller's own skills by global popularity.
+// Query params:
+//   skills — comma-separated skill names to rank
+// Returns the same list sorted by popularity descending.
+app.get("/rank", async (c) => {
+  const user = c.get("user");
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  const skillsParam = c.req.query("skills") ?? "";
+  const skills = skillsParam
+    ? skillsParam.split(",").map((s: string) => s.trim()).filter(Boolean)
+    : [];
+  if (skills.length === 0) return c.json([]);
+
+  const now = Date.now();
+
+  let popMap: SignalMap;
+  if (popularityCache && popularityCache.expiresAt > now) {
+    popMap = popularityCache.data;
+  } else {
+    const supabase = c.get("supabase");
+    const { data, error } = await supabase.rpc("get_skill_popularity");
+    if (error) return c.json({ error: error.message }, 400);
+    popMap = new Map<string, number>(
+      (data ?? []).map((r: any) => [r.sname as string, Number(r.cnt)]),
+    );
+    popularityCache = { data: popMap, expiresAt: now + TTL_GLOBAL_MS };
+  }
+
+  const ranked = [...skills].sort((a, b) => {
+    const aCount = popMap.get(a.toLowerCase()) ?? 0;
+    const bCount = popMap.get(b.toLowerCase()) ?? 0;
+    return bCount - aCount || a.localeCompare(b);
+  });
+
+  c.header("Cache-Control", "private, max-age=300");
+  return c.json(ranked);
+});
+
 // GET /api/skills
 // - without q: returns random skills (via RPC)
 // - with q: returns autocomplete suggestions sorted by name

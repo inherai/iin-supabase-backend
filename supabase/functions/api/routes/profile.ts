@@ -524,10 +524,25 @@ app.get('/', async (c) => {
         }
 
         const total = searchResults?.[0]?.total_count || 0
-        const cleanResults = (searchResults || []).map((u: any) => {
+        let cleanResults = (searchResults || []).map((u: any) => {
           const { total_count, ...rest } = u
           return rest
         })
+
+        // Filter out deleted users — must never appear in any suggestions
+        if (cleanResults.length > 0) {
+          const adminForDeletedFilter = createClient(
+            Deno.env.get('SUPABASE_URL') ?? '',
+            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+          )
+          const { data: activeRows } = await adminForDeletedFilter
+            .from('users')
+            .select('uuid')
+            .in('uuid', cleanResults.map((u: any) => u.uuid))
+            .not('email', 'ilike', '%@deleted.local')
+          const activeSet = new Set((activeRows ?? []).map((u: any) => u.uuid))
+          cleanResults = cleanResults.filter((u: any) => activeSet.has(u.uuid))
+        }
 
         const viewerBusinessRole = user.app_metadata?.role
         const isRecruiterSearch = viewerBusinessRole === 'recruiters'
@@ -637,7 +652,22 @@ app.get('/', async (c) => {
       }
 
       const total = aiMatches?.[0]?.total_count || 0
-      const userIds = (aiMatches || []).map((m: any) => m.user_id)
+      let userIds = (aiMatches || []).map((m: any) => m.user_id)
+
+      // Filter out deleted users — must never appear in any suggestions
+      if (userIds.length > 0) {
+        const adminForDeletedFilter = createClient(
+          Deno.env.get('SUPABASE_URL') ?? '',
+          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+        )
+        const { data: activeRows } = await adminForDeletedFilter
+          .from('users')
+          .select('uuid')
+          .in('uuid', userIds)
+          .not('email', 'ilike', '%@deleted.local')
+        const activeSet = new Set((activeRows ?? []).map((u: any) => u.uuid))
+        userIds = userIds.filter((id: string) => activeSet.has(id))
+      }
 
       if (userIds.length === 0) {
         return c.json({
