@@ -20,20 +20,24 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
   const expiryDate = new Date(expiresAt).toLocaleDateString('en-GB', {
     day: 'numeric', month: 'long', year: 'numeric',
   });
-  const expiryDateHe = new Date(expiresAt).toLocaleDateString('he-IL', {
-    day: 'numeric', month: 'long', year: 'numeric',
-  });
 
   const personalNoteBlock = personalNote
-    ? `
-      <tr>
-        <td style="padding: 0 32px 24px 32px;">
-          <div style="border-left: 3px solid #762277; padding: 12px 16px; background-color: #f3eaf5; border-radius: 0 8px 8px 0;">
-            <p style="margin: 0 0 4px 0; font-size: 11px; font-weight: 700; color: #762277; text-transform: uppercase; letter-spacing: 0.6px;">Personal Note</p>
-            <p style="margin: 0; font-size: 14px; color: #333333; line-height: 1.6; font-style: italic;">"${personalNote}"</p>
-          </div>
-        </td>
-      </tr>`
+    ? `<tr>
+            <td style="padding:20px 40px 0;background:#fffcff;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background:linear-gradient(135deg,#f5eaff,#fdf6ff);border:1px solid #ddb8ea;border-left:4px solid #9b4aaa;border-radius:0 12px 12px 0;padding:20px 22px;">
+                    <p style="margin:0 0 8px;font-size:10px;font-weight:700;color:#762277;text-transform:uppercase;letter-spacing:1.5px;">
+                      ✉ &nbsp; A note from ${inviterName}
+                    </p>
+                    <p style="margin:0;font-size:14px;font-weight:500;color:#3f3f46;line-height:1.8;font-style:italic;">
+                      "${personalNote}"
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>`
     : '';
 
   const html = `<!DOCTYPE html>
@@ -41,130 +45,157 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>You've been personally invited to Duallin</title>
+  <title>You've been personally invited to Duallin | הוזמנת אישית לדואולין</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f7f0fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f7f0fa;">
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f7f0fa;padding:40px 16px;">
     <tr>
-      <td align="center" style="padding: 32px 16px;">
-        <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; width: 100%; border-radius: 16px; overflow: hidden; box-shadow: 0 8px 32px rgba(59,10,71,0.15);">
+      <td align="center">
+          <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;border-radius:20px;overflow:hidden;box-shadow:0 8px 40px rgba(75,21,76,0.16);">
 
-          <!-- HEADER -->
+
           <tr>
-            <td style="background: linear-gradient(135deg, #380a47 0%, #762277 60%, #754389 100%); padding: 36px 32px 28px 32px; text-align: center;">
-              <!-- Logo white badge -->
-              <div style="display: inline-block; background-color: #ffffff; border-radius: 12px; padding: 10px 20px; margin-bottom: 18px;">
-                <img src="https://www.duallin.com/assets/logotext-Dt264Rdr.png" alt="Duallin" width="180" style="display: block; height: auto;" />
-              </div>
-              <p style="margin: 0 0 6px 0; font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.3px;">Do all in. Together.</p>
-              <p style="margin: 0; font-size: 13px; color: rgba(255,255,255,0.75); font-weight: 400;">The professional network built exclusively for Haredi women in tech</p>
-              <p style="margin: 4px 0 0 0; font-size: 13px; color: rgba(255,255,255,0.75); font-weight: 400;" dir="rtl">הרשת המקצועית שנבנתה במיוחד לנשים חרדיות בהייטק</p>
+            <td style="background:linear-gradient(135deg,#2d0838 0%,#4b154c 55%,#380a47 100%);padding:44px 40px 36px;text-align:center;">
+                <div style="display:block;background:#ffffff;border-radius:12px;padding:12px 28px;margin-bottom:22px;">
+  <img src="https://www.duallin.com/assets/logotext-Dt264Rdr.png" alt="Duallin" width="260" style="display:block;max-width:260px;margin: auto">
+</div>
+
+              <h1 style="margin:0 0 10px;font-size:28px;font-weight:800;color:#ffffff;line-height:1.2;letter-spacing:-0.5px;">
+                Do all in. Together.
+              </h1>
+              <p style="margin:0;font-size:13px;font-weight:500;color:rgba(255,255,255,0.70);line-height:1.75;letter-spacing:0.2px;">
+                Where Orthodox women in tech<br>
+                share real insights and grow - all in.
+              </p>
             </td>
           </tr>
 
-          <!-- ACCENT STRIP -->
+
           <tr>
-            <td style="height: 3px; background: linear-gradient(90deg, #380a47, #c084fc, #380a47); padding: 0;"></td>
+            <td style="background:linear-gradient(90deg,#5a1070,#9b4aaa,#c46fd4,#9b4aaa,#5a1070);height:3px;font-size:0;line-height:0;">&nbsp;</td>
           </tr>
 
-          <!-- PILL TAG -->
-          <tr>
-            <td style="background-color: #ffffff; padding: 24px 32px 0 32px; text-align: center;">
-              <span style="display: inline-block; background: linear-gradient(90deg, #762277, #a855f7); color: #ffffff; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; padding: 6px 18px; border-radius: 100px;">
-                ✦ Personal Invitation &nbsp;·&nbsp; הזמנה אישית ✦
-              </span>
-            </td>
-          </tr>
 
-          <!-- BILINGUAL INVITATION CARDS -->
           <tr>
-            <td style="background-color: #ffffff; padding: 20px 32px 0 32px;">
-              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <td style="padding:40px 40px 0;background:#fffcff;">
+
+
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:32px;">
                 <tr>
-                  <!-- EN card -->
-                  <td width="48%" valign="top" style="background-color: #faf5ff; border: 1px solid #e9d5ff; border-radius: 10px; padding: 16px 14px;">
-                    <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 700; color: #380a47;">You've been personally invited</p>
-                    <p style="margin: 0; font-size: 13px; color: #555555; line-height: 1.5;">
-                      <strong style="color: #762277;">${inviterName}</strong> thinks you'd be a great fit for the Duallin community and personally invites you to join.
+                  <td align="center">
+                    <span style="display:inline-block;background:linear-gradient(135deg,#5a1070,#9b4aaa);color:#ffffff;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;padding:7px 24px;border-radius:50px;box-shadow:0 2px 12px rgba(118,34,119,0.28);">
+                      ✦ &nbsp; Personal Invitation &nbsp;·&nbsp; הזמנה אישית &nbsp; ✦
+                    </span>
+                  </td>
+                </tr>
+              </table>
+
+
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+
+                  <td width="47%" valign="top" style="background:#ffffff;border:1px solid #ede0f0;border-radius:12px;padding:20px 18px;">
+                    <p style="margin:0 0 4px;font-size:10px;font-weight:700;color:#9b4aaa;text-transform:uppercase;letter-spacing:1.5px;">English</p>
+                    <h2 style="margin:0 0 10px;font-size:17px;font-weight:800;color:#4b154c;line-height:1.3;">
+                      You've been personally invited
+                    </h2>
+                    <p style="margin:0;font-size:14px;font-weight:500;color:#3f3f46;line-height:1.75;">
+                      <strong style="color:#4b154c;">${inviterName}</strong> thought you'd be a great fit - a trusted, exclusive network for professional Haredi women.
                     </p>
                   </td>
-                  <td width="4%"></td>
-                  <!-- HE card -->
-                  <td width="48%" valign="top" dir="rtl" style="background-color: #faf5ff; border: 1px solid #e9d5ff; border-radius: 10px; padding: 16px 14px; text-align: right;">
-                    <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 700; color: #380a47;">הוזמנת אישית לדואולין</p>
-                    <p style="margin: 0; font-size: 13px; color: #555555; line-height: 1.5;">
-                      <strong style="color: #762277;">${inviterName}</strong> חושבת שאת תשתלבי נהדר בקהילת דואולין ומזמינה אותך להצטרף באופן אישי.
+
+                  <td width="6%" style="font-size:0;">&nbsp;</td>
+
+
+                  <td width="47%" valign="top" dir="rtl" style="background:#ffffff;border:1px solid #ede0f0;border-radius:12px;padding:20px 18px;text-align:right;">
+                    <p style="margin:0 0 4px;font-size:10px;font-weight:700;color:#9b4aaa;text-transform:uppercase;letter-spacing:1.5px;">עברית</p>
+                    <h2 style="margin:0 0 10px;font-size:17px;font-weight:800;color:#4b154c;line-height:1.3;">
+                      הוזמנת אישית לדואולין
+                    </h2>
+                    <p style="margin:0;font-size:14px;font-weight:500;color:#3f3f46;line-height:1.75;">
+                      <strong style="color:#4b154c;">${inviterName}</strong> חשבה שתתאימי לקהילה - רשת בלעדית ומהימנה לנשים חרדיות מקצועיות.
                     </p>
                   </td>
                 </tr>
               </table>
+
             </td>
           </tr>
 
-          <!-- PERSONAL NOTE (conditional) -->
           ${personalNoteBlock}
 
-          <!-- PLATFORM DESCRIPTION -->
           <tr>
-            <td style="background-color: #ffffff; padding: 24px 32px 0 32px;">
-              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f9f2ff; border: 1px solid #e9d5ff; border-radius: 10px; overflow: hidden;">
+            <td style="padding:20px 40px 0;background:#fffcff;">
+              <table width="100%" cellpadding="0" cellspacing="0">
                 <tr>
-                  <td style="padding: 6px 16px; background: linear-gradient(90deg, #762277, #a855f7);">
-                    <p style="margin: 0; font-size: 10px; font-weight: 800; color: #ffffff; text-transform: uppercase; letter-spacing: 1px;">About Duallin &nbsp;·&nbsp; אודות דואולין</p>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 16px;">
-                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <td style="background:#f9f2ff;border:1px solid #e8d4f5;border-radius:12px;padding:24px 24px;">
+
+                    <p style="margin:0 0 18px;font-size:10px;font-weight:700;color:#9b4aaa;text-transform:uppercase;letter-spacing:2px;text-align:center;">
+                      About Duallin &nbsp;·&nbsp; אודות דואולין
+                    </p>
+
+                    <table width="100%" cellpadding="0" cellspacing="0">
                       <tr>
-                        <!-- EN description -->
-                        <td width="48%" valign="top" style="font-size: 13px; color: #444444; line-height: 1.65;">
-                          Built exclusively for Haredi women in tech - real professional networking, a growing community that understands your world, meaningful career opportunities, daily job listings,
-                          <br /><br />
-                          and honest company insights from women who've actually been there. Not a chat group, not a mailing list - a permanent professional presence, built to last. The place where our community and the tech industry finally meet.
+
+                        <td width="47%" valign="top" style="padding-right:16px;">
+                          <p style="margin:0;font-size:13px;font-weight:600;color:#4a3550;line-height:1.9;">
+                            Built exclusively for Haredi women in tech - real professional networking, a growing community that understands your world, meaningful career opportunities, daily job listings, and honest company insights from women who've actually been there. Not a chat group, not a mailing list - a permanent professional presence, built to last. The place where our community and the tech industry finally meet.
+                          </p>
                         </td>
-                        <td width="4%"></td>
-                        <!-- HE description -->
-                        <td width="48%" valign="top" dir="rtl" style="font-size: 13px; color: #444444; line-height: 1.65; text-align: right;">
-                          נבנתה במיוחד לנשים חרדיות בהייטק - נטוורקינג מקצועי אמיתי, קהילה שמבינה את עולמך, הזדמנויות קריירה, משרות מדי יום,
-                          <br /><br />
-                          ומידע אמיתי על חברות מנשים שהיו שם. לא קבוצת צ&#39;אט ולא רשימת תפוצה - נוכחות מקצועית קבועה שבנויה להישאר. המקום שבו הקהילה שלנו ותעשיית ההייטק סוף סוף נפגשות.
+
+
+                        <td width="6%" style="text-align:center;vertical-align:middle;">
+                          <div style="width:1px;background:linear-gradient(to bottom,transparent,#c9a0dc,transparent);height:100px;margin:0 auto;"></div>
+                        </td>
+
+
+                        <td width="47%" valign="top" dir="rtl" style="text-align:right;padding-left:16px;">
+                          <p style="margin:0;font-size:13px;font-weight:600;color:#4a3550;line-height:1.9;">
+                            נבנתה במיוחד לנשים חרדיות בהייטק - נטוורקינג מקצועי אמיתי, קהילה שמבינה את עולמך, הזדמנויות קריירה, משרות מדי יום, ומידע אמיתי על חברות מנשים שהיו שם. לא קבוצת צ׳אט ולא רשימת תפוצה - נוכחות מקצועית קבועה שבנויה להישאר. המקום שבו הקהילה שלנו ותעשיית ההייטק סוף סוף נפגשות.
+                          </p>
                         </td>
                       </tr>
                     </table>
+
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
 
-          <!-- CTA BUTTON -->
+
           <tr>
-            <td style="background-color: #ffffff; padding: 28px 32px 8px 32px; text-align: center;">
-              <a href="${inviteUrl}" style="display: inline-block; background: linear-gradient(135deg, #380a47 0%, #762277 100%); color: #ffffff; font-size: 15px; font-weight: 700; text-decoration: none; padding: 14px 40px; border-radius: 50px; letter-spacing: 0.3px; box-shadow: 0 4px 14px rgba(118,34,119,0.4);">
+            <td style="padding:32px 40px 16px;background:#fffcff;text-align:center;">
+              <a href="${inviteUrl}" style="display:inline-block;background:linear-gradient(135deg,#2d0838 0%,#762277 50%,#9b4aaa 100%);color:#ffffff;text-decoration:none;font-size:16px;font-weight:700;padding:17px 56px;border-radius:50px;letter-spacing:0.3px;box-shadow:0 6px 28px rgba(118,34,119,0.40);">
                 Join Duallin &nbsp;|&nbsp; הצטרפי לדואולין
               </a>
             </td>
           </tr>
 
-          <!-- EXPIRY -->
+
           <tr>
-            <td style="background-color: #ffffff; padding: 16px 32px 28px 32px; text-align: center;">
-              <p style="margin: 0; font-size: 12px; color: #888888;">
-                &#x23F3; This invitation expires on <strong>${expiryDate}</strong>
-              </p>
-              <p style="margin: 4px 0 0 0; font-size: 12px; color: #888888;" dir="rtl">
-                &#x23F3; הזמנה זו פגה ב-<strong>${expiryDateHe}</strong>
-              </p>
+            <td style="padding:12px 40px 36px;background:#fffcff;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background:#f5eaff;border:1px solid #ddb8ea;border-radius:10px;padding:13px 20px;text-align:center;">
+                    <p style="margin:0;font-size:12px;font-weight:600;color:#6b2175;">
+                    This invitation expires on <strong>${expiryDate}</strong>
+                    </p><p style="margin:0;font-size:12px;font-weight:600;color:#6b2175;" dir="rtl">
+                  ההזמנה תפוג בתאריך <strong>${expiryDate}</strong>
+                    </p>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
 
-          <!-- FOOTER -->
+
           <tr>
-            <td style="background: linear-gradient(135deg, #380a47 0%, #4b154c 100%); padding: 20px 32px; text-align: center;">
-              <p style="margin: 0 0 4px 0; font-size: 12px; color: rgba(255,255,255,0.7);">Questions? Contact us at</p>
-              <a href="mailto:contact@duallin.com" style="font-size: 13px; color: #c084fc; text-decoration: none; font-weight: 600;">contact@duallin.com</a>
-              <p style="margin: 10px 0 0 0; font-size: 11px; color: rgba(255,255,255,0.4);">&copy; ${new Date().getFullYear()} Duallin. All rights reserved.</p>
+            <td style="background:linear-gradient(135deg,#2d0838 0%,#4b154c 60%,#2d0838 100%);padding:28px 40px;text-align:center;">
+              <p style="margin:0 0 6px;font-size:12px;font-weight:500;color:rgba(255,255,255,0.55);">Questions? We're here for you.</p>
+              <a href="mailto:contact@duallin.com" style="font-size:13px;font-weight:700;color:rgba(255,255,255,0.90);text-decoration:none;">contact@duallin.com</a>
+              <p style="margin:14px 0 0;font-size:11px;font-weight:500;color:rgba(255,255,255,0.30);">© 2026 duallin · All rights reserved</p>
             </td>
           </tr>
 
@@ -172,6 +203,7 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
       </td>
     </tr>
   </table>
+
 </body>
 </html>`;
 
