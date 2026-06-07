@@ -6,6 +6,15 @@ const app = new Hono();
 const sanitizeEmail = (email: string) =>
   email.replace(/[​-‏‪-‮﻿­]/g, "").trim().toLowerCase();
 
+function startOfCalendarWeek(): Date {
+  const now = new Date();
+  const day = now.getDay(); // 0 = Sunday
+  const start = new Date(now);
+  start.setDate(now.getDate() - day);
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
 // GET / — list invitations sent by the current user
 app.get("/", async (c) => {
   try {
@@ -39,14 +48,11 @@ app.get("/count", async (c) => {
     const supabase = c.get("supabase");
     if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
     const { count, error } = await supabase
       .from("invites")
       .select("id", { count: "exact", head: true })
       .eq("inviter_id", user.id)
-      .gte("created_at", sevenDaysAgo.toISOString());
+      .gte("created_at", startOfCalendarWeek().toISOString());
 
     if (error) return c.json({ error: error.message }, 500);
     return c.json({ used: count ?? 0, limit: 5 });
@@ -96,15 +102,12 @@ app.post("/", async (c) => {
       return c.json({ error: "recipient already exists" }, 409);
     }
 
-    // Rate limit: max 5 invitations per 7 days
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
+    // Rate limit: max 5 invitations per calendar week (Sun–Sat)
     const { count, error: countError } = await supabase
       .from("invites")
       .select("id", { count: "exact", head: true })
       .eq("inviter_id", user.id)
-      .gte("created_at", sevenDaysAgo.toISOString());
+      .gte("created_at", startOfCalendarWeek().toISOString());
 
     if (countError) {
       return c.json({ error: countError.message }, 500);
