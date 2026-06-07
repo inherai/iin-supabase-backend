@@ -2,6 +2,9 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 
 const app = new Hono();
 
+const sanitizeEmail = (email: string) =>
+  email.replace(/[​-‏‪-‮﻿­]/g, "").trim().toLowerCase();
+
 app.post("/", async (c) => {
   try {
     const user = c.get("user");
@@ -12,13 +15,13 @@ app.post("/", async (c) => {
     }
 
     const body = await c.req.json().catch(() => ({}));
-    const recipientEmail = body?.recipient_email?.trim();
+    const recipientEmail = body?.recipient_email ?? "";
     const personalNote = body?.personal_note?.trim();
 
-    if (!recipientEmail) {
+    if (!recipientEmail.trim()) {
       return c.json({ error: "recipient_email is required" }, 400);
     }
-    const normalizedRecipientEmail = recipientEmail.toLowerCase();
+    const normalizedRecipientEmail = sanitizeEmail(recipientEmail);
 
     const { data: existingUser, error: existingUserError } = await supabase
       .from("users")

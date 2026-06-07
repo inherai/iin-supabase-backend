@@ -9,6 +9,9 @@ const getAdminClient = () =>
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
   );
 
+const sanitizeEmail = (email: string) =>
+  email.replace(/[​-‏‪-‮﻿­]/g, "").trim().toLowerCase();
+
 // Admin guard — 404 to avoid revealing the endpoint exists
 app.use("*", async (c, next) => {
   const user = c.get("user");
@@ -382,14 +385,14 @@ app.post("/invitations", async (c) => {
   const db = getAdminClient();
   const user = c.get("user");
   const body = await c.req.json().catch(() => ({}));
-  const recipientEmail = body?.recipient_email?.trim();
+  const recipientEmail = body?.recipient_email ?? "";
   const personalNote = body?.personal_note?.trim();
   const allowedRoles = ["community", "recruiters"];
   const role = allowedRoles.includes(body?.role) ? body.role : "community";
 
-  if (!recipientEmail) return c.json({ error: "recipient_email is required" }, 400);
+  if (!recipientEmail.trim()) return c.json({ error: "recipient_email is required" }, 400);
 
-  const normalizedEmail = recipientEmail.toLowerCase();
+  const normalizedEmail = sanitizeEmail(recipientEmail);
 
   const [{ data: existingUser }, { data: existingInvite }] = await Promise.all([
     db.from("users").select("uuid").eq("email", normalizedEmail).maybeSingle(),
@@ -445,7 +448,7 @@ app.put("/invitations/:id", async (c) => {
 
   const updates: Record<string, any> = {};
   if (body.status !== undefined) updates.status = body.status;
-  if (body.recipient_email !== undefined) updates.recipient_email = body.recipient_email.toLowerCase().trim();
+  if (body.recipient_email !== undefined) updates.recipient_email = sanitizeEmail(body.recipient_email);
   if (body.personal_note !== undefined) updates.personal_note = body.personal_note;
   const allowedRoles = ["community", "recruiters"];
   if (body.role !== undefined && allowedRoles.includes(body.role)) updates.role = body.role;

@@ -3,6 +3,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const app = new Hono();
 
+// Strips invisible Unicode directional/zero-width marks that can sneak in via copy-paste (e.g. U+200F RLM)
+const sanitizeEmail = (email: string) =>
+  email.replace(/[​-‏‪-‮﻿­]/g, "").trim().toLowerCase();
+
 const isInviteExpired = (expiresAtValue: string | null) => {
   if (!expiresAtValue) return true;
   const expiresAtMs = new Date(expiresAtValue).getTime();
@@ -18,7 +22,7 @@ app.post("/", async (c) => {
       return c.json({ error: "Unauthorized" }, 401);
     }
 
-    const normalizedUserEmail = user.email?.trim()?.toLowerCase();
+    const normalizedUserEmail = sanitizeEmail(user.email ?? "");
     if (!normalizedUserEmail) {
       return c.json({ error: "Email is missing in auth token" }, 400);
     }
@@ -63,7 +67,7 @@ app.post("/", async (c) => {
       return c.json({ error: "Invite was not found" }, 404);
     }
 
-    if ((invite.recipient_email ?? "").toLowerCase() !== normalizedUserEmail) {
+    if (sanitizeEmail(invite.recipient_email ?? "") !== normalizedUserEmail) {
       return c.json({ error: "Email does not match this invite" }, 403);
     }
 
