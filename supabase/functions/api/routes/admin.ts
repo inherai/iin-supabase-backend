@@ -854,6 +854,7 @@ app.get("/join-requests", async (c) => {
   const search = c.req.query("search") || "";
   const type = c.req.query("type") || "";
   const status = c.req.query("status") || "";
+  const decision = c.req.query("decision") || "";
   const offset = (page - 1) * limit;
 
   let query = db.from("platform_join_requests").select("*", { count: "exact" });
@@ -863,6 +864,9 @@ app.get("/join-requests", async (c) => {
   }
   if (type) query = query.eq("type", type);
   if (status) query = query.eq("status", status);
+  if (decision === "approved") query = query.eq("approved", true);
+  else if (decision === "rejected") query = query.eq("approved", false);
+  else if (decision === "none") query = query.is("approved", null);
 
   const { data, count, error } = await query
     .order("created_at", { ascending: false })
