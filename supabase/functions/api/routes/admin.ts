@@ -845,4 +845,50 @@ app.get("/invite-week-stats", async (c) => {
   }
 });
 
+// ==================== PLATFORM JOIN REQUESTS ====================
+
+app.get("/join-requests", async (c) => {
+  const db = getAdminClient();
+  const page = parseInt(c.req.query("page") || "1");
+  const limit = parseInt(c.req.query("limit") || "25");
+  const search = c.req.query("search") || "";
+  const type = c.req.query("type") || "";
+  const status = c.req.query("status") || "";
+  const offset = (page - 1) * limit;
+
+  let query = db.from("platform_join_requests").select("*", { count: "exact" });
+
+  if (search) {
+    query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%,company_name.ilike.%${search}%`);
+  }
+  if (type) query = query.eq("type", type);
+  if (status) query = query.eq("status", status);
+
+  const { data, count, error } = await query
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (error) return c.json({ error: error.message }, 500);
+  return c.json({ requests: data ?? [], total: count ?? 0 });
+});
+
+app.patch("/join-requests/:id", async (c) => {
+  const db = getAdminClient();
+  const { id } = c.req.param();
+  const body = await c.req.json();
+
+  const allowed = ["pending", "reviewed", "contacted"];
+  if (!allowed.includes(body.status)) {
+    return c.json({ error: "Invalid status" }, 400);
+  }
+
+  const { error } = await db
+    .from("platform_join_requests")
+    .update({ status: body.status })
+    .eq("id", id);
+
+  if (error) return c.json({ error: error.message }, 500);
+  return c.json({ success: true });
+});
+
 export default app;

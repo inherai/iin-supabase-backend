@@ -74,6 +74,11 @@ export const authMiddleware = async (c: Context, next: Next) => {
     return await next();
   }
 
+  // Public routes — no authentication required
+  if (c.req.path === '/api/platform-join-request' || c.req.path.startsWith('/api/platform-join-request/')) {
+    return await next();
+  }
+
   const authHeader = c.req.header('Authorization');
 
   // --- עצירה מוקדמת: אין טוקן בכלל ---
