@@ -129,11 +129,13 @@ app.post("/", async (c) => {
     // Fetch inviter name for the email
     const { data: inviterProfile } = await supabase
       .from("users")
-      .select("name")
+      .select("first_name, last_name")
       .eq("uuid", user.id)
       .maybeSingle();
 
-    const inviterName = inviterProfile?.name ?? "A Duallin member";
+    const inviterName = inviterProfile
+      ? [inviterProfile.first_name, inviterProfile.last_name].filter(Boolean).join(" ")
+      : "A Duallin member";
 
     // Send invitation email — failure is logged but does not fail the request
     sendInviteEmail({
