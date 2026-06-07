@@ -799,4 +799,50 @@ app.patch("/reports/:id", async (c) => {
   });
 });
 
+// GET /invite-week-stats — per-user invite counts for the last 7 days
+app.get("/invite-week-stats", async (c) => {
+  try {
+    const supabase = c.get("supabase");
+
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const { data: recentInvites, error } = await supabase
+      .from("invites")
+      .select("inviter_id")
+      .gte("created_at", sevenDaysAgo.toISOString())
+      .not("inviter_id", "is", null);
+
+    if (error) return c.json({ error: error.message }, 500);
+
+    const countMap: Record<string, number> = {};
+    for (const row of recentInvites ?? []) {
+      countMap[row.inviter_id] = (countMap[row.inviter_id] ?? 0) + 1;
+    }
+
+    const inviterIds = Object.keys(countMap);
+    if (inviterIds.length === 0) return c.json([]);
+
+    const { data: users } = await supabase
+      .from("users")
+      .select("uuid, first_name, last_name, email")
+      .in("uuid", inviterIds);
+
+    const userMap = Object.fromEntries((users ?? []).map((u: any) => [u.uuid, u]));
+
+    const stats = inviterIds
+      .map((id) => ({
+        inviter_id: id,
+        used: countMap[id],
+        limit: 5,
+        user: userMap[id] ?? null,
+      }))
+      .sort((a, b) => b.used - a.used);
+
+    return c.json(stats);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
 export default app;

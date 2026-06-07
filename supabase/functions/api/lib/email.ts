@@ -21,6 +21,10 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
     day: 'numeric', month: 'long', year: 'numeric',
   });
 
+  const personalNoteHtml = personalNote
+    ? personalNote.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+    : '';
+
   const personalNoteBlock = personalNote
     ? `<tr>
             <td style="padding:20px 40px 0;background:#fffcff;">
@@ -31,7 +35,7 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
                       ✉ &nbsp; A note from ${inviterName}
                     </p>
                     <p style="margin:0;font-size:14px;font-weight:500;color:#3f3f46;line-height:1.8;font-style:italic;">
-                      "${personalNote}"
+                      "${personalNoteHtml}"
                     </p>
                   </td>
                 </tr>

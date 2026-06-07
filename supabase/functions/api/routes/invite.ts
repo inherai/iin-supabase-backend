@@ -32,6 +32,29 @@ app.get("/", async (c) => {
   }
 });
 
+// GET /count — weekly usage for the current user
+app.get("/count", async (c) => {
+  try {
+    const user = c.get("user");
+    const supabase = c.get("supabase");
+    if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const { count, error } = await supabase
+      .from("invites")
+      .select("id", { count: "exact", head: true })
+      .eq("inviter_id", user.id)
+      .gte("created_at", sevenDaysAgo.toISOString());
+
+    if (error) return c.json({ error: error.message }, 500);
+    return c.json({ used: count ?? 0, limit: 5 });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
 // POST / — create a new invitation
 app.post("/", async (c) => {
   try {
