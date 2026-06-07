@@ -1,0 +1,4 @@
+ALTER TABLE platform_join_requests
+  ADD COLUMN IF NOT EXISTS handled  BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS approved BOOLEAN,
+  ADD COLUMN IF NOT EXISTS admin_note TEXT;

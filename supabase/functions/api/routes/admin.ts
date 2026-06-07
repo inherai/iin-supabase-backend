@@ -877,14 +877,21 @@ app.patch("/join-requests/:id", async (c) => {
   const { id } = c.req.param();
   const body = await c.req.json();
 
-  const allowed = ["pending", "reviewed", "contacted"];
-  if (!allowed.includes(body.status)) {
-    return c.json({ error: "Invalid status" }, 400);
+  const updates: Record<string, unknown> = {};
+
+  if (body.status !== undefined) {
+    const allowed = ["pending", "reviewed", "contacted"];
+    if (!allowed.includes(body.status)) return c.json({ error: "Invalid status" }, 400);
+    updates.status = body.status;
   }
+  if (body.approved !== undefined) updates.approved = body.approved === null ? null : Boolean(body.approved);
+  if (body.admin_note !== undefined) updates.admin_note = body.admin_note ?? null;
+
+  if (Object.keys(updates).length === 0) return c.json({ error: "Nothing to update" }, 400);
 
   const { error } = await db
     .from("platform_join_requests")
-    .update({ status: body.status })
+    .update(updates)
     .eq("id", id);
 
   if (error) return c.json({ error: error.message }, 500);
