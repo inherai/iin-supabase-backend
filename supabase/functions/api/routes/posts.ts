@@ -27,6 +27,18 @@ async function deterministicInt8(seed: string): Promise<number> {
   return Number(n & 0x1fffffffffffffn);
 }
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 async function updatePostVector(postId: any) {
   try {
     const openai = new OpenAI({ apiKey: Deno.env.get("TEST_OPENAI_API_KEY") });
@@ -44,9 +56,9 @@ async function updatePostVector(postId: any) {
     if (error || !post) return;
 
     const subject = post.subject || "";
-    const message = post.message || "";
+    const message = stripHtml(post.message || "");
     const commentsText = (post.comments ?? [])
-      .map((c: any) => c.message)
+      .map((c: any) => stripHtml(c.message || ""))
       .join("\n");
 
     const fullText = `Subject: ${subject}\nMessage: ${message}\nComments:\n${commentsText}`.trim();
@@ -2028,6 +2040,36 @@ app.post('/:id/report', async (c) => {
   if (error) return c.json({ error: error.message }, 500)
 
   return c.json({ success: true })
+})
+
+// ====================================================================
+// ADMIN: BACKFILL VECTORS FOR HTML POSTS
+// ====================================================================
+
+app.post('/admin/backfill-vectors', async (c) => {
+  const user = c.get('user')
+  if (!user?.app_metadata?.is_admin) return c.json({ error: 'Forbidden' }, 403)
+
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  )
+
+  const { data: posts, error } = await supabaseAdmin
+    .from('posts')
+    .select('id')
+    .like('message', '%<%>%')
+    .not('post_type', 'is', null)
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const ids = (posts || []).map((p: any) => p.id)
+
+  for (const id of ids) {
+    await updatePostVector(id)
+  }
+
+  return c.json({ success: true, updated: ids.length })
 })
 
 export default app
