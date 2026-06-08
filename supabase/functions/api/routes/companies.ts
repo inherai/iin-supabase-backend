@@ -15,7 +15,7 @@ app.get('/', async (c) => {
   let query = supabase
     .from('companies_ranked')
     .select('*', { count: 'exact' })
-    .order('activity_score', { ascending: false })
+    .order('latest_job_at', { ascending: false, nullsFirst: false })
     .order('id', { ascending: true })
 
   if (search) {
