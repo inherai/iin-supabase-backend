@@ -150,6 +150,8 @@ app.post('/', async (c) => {
 
     if (rpcError) throw rpcError;
 
+    console.log(`[search-ai] kwError: ${kwError?.message ?? 'none'}, keywordMatches: ${keywordMatches?.map((p: any) => p.id + ' | ' + p.subject?.slice(0, 40))}`);
+
     // מיזוג תוצאות סמנטיות + keyword, ללא כפילויות
     const seenIds = new Set<string>((rawMatches || []).map((m: any) => String(m.id)));
     const extraFromKeyword = (keywordMatches || [])
