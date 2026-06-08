@@ -1298,6 +1298,7 @@ app.post('/', async (c) => {
 
       if (error) throw error;
       updatePostVector(data.id);
+      supabase.from('users').update({ scores_cached_at: null }).eq('uuid', user.id).then(() => {});
 
       await insertMentionNotifications(supabase, message, user.id, data.id);
 
@@ -1773,6 +1774,7 @@ app.post('/comments', async (c) => {
       .single()
 
     if (commentError) throw commentError
+    supabase.from('users').update({ scores_cached_at: null }).eq('uuid', user.id).then(() => {});
 
     await insertMentionNotifications(supabase, message, user.id, postId)
 

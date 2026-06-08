@@ -1,5 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { sendInviteEmail } from "../lib/email.ts";
+import { calculateProfileStrength, calculateActivityScore, getWeeklyLimit } from "./_scoreHelpers.ts";
 
 const app = new Hono();
 
@@ -48,14 +49,59 @@ app.get("/count", async (c) => {
     const supabase = c.get("supabase");
     if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-    const { count, error } = await supabase
-      .from("invites")
-      .select("id", { count: "exact", head: true })
-      .eq("inviter_id", user.id)
-      .gte("created_at", startOfCalendarWeek().toISOString());
+    const [countRes, cacheRes] = await Promise.all([
+      supabase
+        .from("invites")
+        .select("id", { count: "exact", head: true })
+        .eq("inviter_id", user.id)
+        .gte("created_at", startOfCalendarWeek().toISOString()),
+      supabase
+        .from("users")
+        .select("profile_strength_cache, activity_score_cache, scores_cached_at")
+        .eq("uuid", user.id)
+        .single(),
+    ]);
 
-    if (error) return c.json({ error: error.message }, 500);
-    return c.json({ used: count ?? 0, limit: 5 });
+    if (countRes.error) return c.json({ error: countRes.error.message }, 500);
+
+    const cacheData = cacheRes.data;
+    const cacheAge = cacheData?.scores_cached_at
+      ? Date.now() - new Date(cacheData.scores_cached_at).getTime()
+      : Infinity;
+    const cacheWarm = cacheAge < 60 * 60 * 1000
+      && cacheData?.profile_strength_cache != null
+      && cacheData?.activity_score_cache != null;
+
+    let profilePct: number;
+    let activityScore: number;
+
+    if (cacheWarm) {
+      profilePct    = cacheData.profile_strength_cache;
+      activityScore = cacheData.activity_score_cache;
+    } else {
+      const { data: userData } = await supabase
+        .from("users")
+        .select("created_at")
+        .eq("uuid", user.id)
+        .single();
+      const actualDays = userData?.created_at
+        ? Math.floor((Date.now() - new Date(userData.created_at).getTime()) / (1000 * 60 * 60 * 24))
+        : 0;
+      const [strength, activity] = await Promise.all([
+        calculateProfileStrength(supabase, user.id),
+        calculateActivityScore(supabase, user.id, user.email, actualDays),
+      ]);
+      profilePct    = strength.percentage;
+      activityScore = activity.score;
+      supabase.from("users").update({
+        profile_strength_cache: profilePct,
+        activity_score_cache: activityScore,
+        scores_cached_at: new Date().toISOString(),
+      }).eq("uuid", user.id).then(() => {});
+    }
+
+    const limit = getWeeklyLimit(activityScore, profilePct);
+    return c.json({ used: countRes.count ?? 0, limit });
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
@@ -102,7 +148,61 @@ app.post("/", async (c) => {
       return c.json({ error: "recipient already exists" }, 409);
     }
 
-    // Rate limit: max 5 invitations per calendar week (Sun–Sat)
+    // Gate check: account age, profile strength, activity score
+    const { data: inviterData, error: inviterDataError } = await supabase
+      .from("users")
+      .select("created_at, profile_strength_cache, activity_score_cache, scores_cached_at")
+      .eq("uuid", user.id)
+      .single();
+
+    if (inviterDataError) {
+      return c.json({ error: inviterDataError.message }, 500);
+    }
+
+    const actualDays = inviterData?.created_at
+      ? Math.floor((Date.now() - new Date(inviterData.created_at).getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
+
+    if (actualDays < 10) {
+      return c.json({ error: "invite_gate_failed", reason: "new_user", daysLeft: 10 - actualDays }, 403);
+    }
+
+    const cacheAge = inviterData?.scores_cached_at
+      ? Date.now() - new Date(inviterData.scores_cached_at).getTime()
+      : Infinity;
+    const cacheWarm = cacheAge < 60 * 60 * 1000
+      && inviterData?.profile_strength_cache != null
+      && inviterData?.activity_score_cache != null;
+
+    let profilePct: number;
+    let activityScore: number;
+
+    if (cacheWarm) {
+      profilePct    = inviterData.profile_strength_cache;
+      activityScore = inviterData.activity_score_cache;
+    } else {
+      const [strength, activity] = await Promise.all([
+        calculateProfileStrength(supabase, user.id),
+        calculateActivityScore(supabase, user.id, user.email, actualDays),
+      ]);
+      profilePct    = strength.percentage;
+      activityScore = activity.score;
+      supabase.from("users").update({
+        profile_strength_cache: profilePct,
+        activity_score_cache: activityScore,
+        scores_cached_at: new Date().toISOString(),
+      }).eq("uuid", user.id).then(() => {});
+    }
+
+    if (profilePct < 70) {
+      return c.json({ error: "invite_gate_failed", reason: "profile" }, 403);
+    }
+    if (activityScore < 31) {
+      return c.json({ error: "invite_gate_failed", reason: "activity" }, 403);
+    }
+
+    // Rate limit: dynamic weekly limit based on scores
+    const weeklyLimit = getWeeklyLimit(activityScore, profilePct);
     const { count, error: countError } = await supabase
       .from("invites")
       .select("id", { count: "exact", head: true })
@@ -112,7 +212,7 @@ app.post("/", async (c) => {
     if (countError) {
       return c.json({ error: countError.message }, 500);
     }
-    if ((count ?? 0) >= 5) {
+    if ((count ?? 0) >= weeklyLimit) {
       return c.json({ error: "Weekly invitation limit reached" }, 429);
     }
 

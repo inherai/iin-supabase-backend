@@ -1,0 +1,361 @@
+// _scoreHelpers.ts
+// Shared scoring logic for activity score and profile strength.
+// Used by me.ts (display) and invite.ts (gate + dynamic limit).
+
+// ── Signal score helpers (pure) ───────────────────────────────────────────────
+
+function signalPostScore(eff: number): number {
+  if (eff === 0)  return 0
+  if (eff < 2)    return 2   // 1
+  if (eff < 4)    return 4   // 2–3
+  if (eff < 7)    return 6   // 4–6
+  if (eff < 11)   return 8   // 7–10
+  return 10                   // 11+
+}
+
+function signalCommentScore(eff: number): number {
+  if (eff === 0)  return 0
+  if (eff < 3)    return 2   // 1–2
+  if (eff < 8)    return 4   // 3–7
+  if (eff < 16)   return 6   // 8–15
+  if (eff < 26)   return 8   // 16–25
+  return 10                   // 26+
+}
+
+function signalReactionScore(eff: number): number {
+  if (eff === 0)  return 0
+  if (eff < 6)    return 2   // 1–5
+  if (eff < 16)   return 4   // 6–15
+  if (eff < 31)   return 6   // 16–30
+  if (eff < 51)   return 8   // 31–50
+  return 10                   // 51+
+}
+
+function signalConnectionScore(eff: number): number {
+  if (eff === 0)  return 0
+  if (eff < 2)    return 3.5 // 1
+  if (eff < 4)    return 5.5 // 2–3
+  if (eff < 7)    return 7.5 // 4–6
+  return 10                   // 7+
+}
+
+function signalActiveDaysScore(activeDays: number, actualDays: number): number {
+  const periodDays = Math.min(actualDays, 30)
+  if (periodDays === 0) return 0
+  const normalized = (activeDays / periodDays) * 30
+  if (normalized === 0) return 0
+  if (normalized < 3)   return 2  // 1–2
+  if (normalized < 6)   return 4  // 3–5
+  if (normalized < 11)  return 6  // 6–10
+  if (normalized < 19)  return 8  // 11–18
+  return 10                        // 19+
+}
+
+// ── Pure composite calculation ────────────────────────────────────────────────
+
+interface ActivitySignals {
+  postsEff: number
+  commentsEff: number
+  reactionsEff: number
+  connectionsEff: number
+  activeDays: number
+  actualDays: number
+}
+
+export function computeActivityScore(signals: ActivitySignals): {
+  score: number
+  P: number; C: number; R: number; N: number; A: number
+} {
+  const P = signalPostScore(signals.postsEff)
+  const C = signalCommentScore(signals.commentsEff)
+  const R = signalReactionScore(signals.reactionsEff)
+  const N = signalConnectionScore(signals.connectionsEff)
+  const A = signalActiveDaysScore(signals.activeDays, signals.actualDays)
+
+  const E = Math.min(10, C * 0.70 + R * 0.30 + Math.min(C, R) * 0.20)
+
+  const primary = Math.max(P, E)
+  const secondary = Math.min(P, E)
+  const contentScore = Math.min(10, primary * 0.70 + secondary * 0.50)
+
+  const activeDomains = (P > 0 ? 1 : 0) + (E > 0 ? 1 : 0) + (N > 0 ? 1 : 0)
+  const diversityMult = 1 + (activeDomains - 1) * 0.02
+
+  const base = contentScore * 0.55 + N * 0.25 + A * 0.20
+  const score = Math.min(100, Math.round(base * 10 * diversityMult))
+
+  return { score, P, C, R, N, A }
+}
+
+// ── Tier helpers (pure) ───────────────────────────────────────────────────────
+
+export function activityTier(score: number): { tier: string; tierLabel: string } {
+  if (score >= 86) return { tier: 'elite',       tierLabel: 'עילית' }
+  if (score >= 71) return { tier: 'influential', tierLabel: 'משפיעה' }
+  if (score >= 51) return { tier: 'active',      tierLabel: 'פעילה' }
+  if (score >= 31) return { tier: 'participant', tierLabel: 'משתתפת' }
+  if (score >= 16) return { tier: 'observer',    tierLabel: 'מתעניינת' }
+  return              { tier: 'dormant',      tierLabel: 'שקטה' }
+}
+
+export function profileStrengthTier(percentage: number): { tier: string; tierLabel: string } {
+  if (percentage >= 95) return { tier: 'Elite',    tierLabel: 'עילית' }
+  if (percentage >= 85) return { tier: 'Expert',   tierLabel: 'מקצועית' }
+  if (percentage >= 70) return { tier: 'Strong',   tierLabel: 'מבוססת' }
+  if (percentage >= 40) return { tier: 'Building', tierLabel: 'בונה' }
+  return                   { tier: 'Starter',   tierLabel: 'מתחילה' }
+}
+
+// ── Weekly invite limit (pure) ────────────────────────────────────────────────
+
+export function getWeeklyLimit(activityScore: number, profilePct: number): number {
+  let base = activityScore >= 86 ? 10
+           : activityScore >= 71 ? 7
+           : activityScore >= 51 ? 4
+           : 2  // participant 31–50
+
+  if (profilePct >= 95) base += 2
+  else if (profilePct >= 85) base += 1
+
+  return base
+}
+
+// ── Profile strength (async DB) ───────────────────────────────────────────────
+
+export async function calculateProfileStrength(supabase: any, userId: string) {
+  const [userRes, connRes] = await Promise.all([
+    supabase
+      .from('users')
+      .select('headline, about, skills, experience, education, certifications, location, image')
+      .eq('uuid', userId)
+      .single(),
+    supabase
+      .from('connections')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'accepted')
+      .or(`requester_id.eq.${userId},receiver_id.eq.${userId}`),
+  ])
+
+  if (userRes.error) throw new Error(userRes.error.message)
+
+  const userData = userRes.data
+  const connections = connRes.count ?? 0
+
+  const hasPhoto = !!(userData.image && userData.image !== 'null' && userData.image !== 'false')
+
+  const aboutText = userData.about?.trim() ?? ''
+  const aboutScore = aboutText.length === 0 ? 0 : aboutText.length < 200 ? 0.5 : 1
+
+  const experienceList: any[] = userData.experience ?? []
+  const hasExpWithDesc = experienceList.some(
+    (e) => (e?.description ?? e?.summary ?? '').trim().length >= 30
+  )
+  const experienceScore = experienceList.length === 0 ? 0 : hasExpWithDesc ? 1 : 0.5
+
+  const skillsCount = userData.skills?.length ?? 0
+  const skillsScore = skillsCount >= 6 ? 1 : skillsCount >= 3 ? 0.5 : 0
+
+  const connectionsScore =
+    connections >= 30 ? 1    :
+    connections >= 15 ? 0.75 :
+    connections >= 5  ? 0.5  :
+    connections >= 1  ? 0.25 : 0
+
+  const items = [
+    {
+      key: 'experience',
+      label: experienceScore === 0.5 ? 'Add descriptions to your experience' : 'Work experience',
+      tip: experienceScore === 0
+        ? 'The first thing recruiters look for when filtering candidates'
+        : 'Add a description to your roles — recruiters want to know what you actually did',
+      score: experienceScore,
+      weight: 0.191,
+    },
+    {
+      key: 'headline',
+      label: 'Professional headline',
+      tip: 'Your headline is the first thing recruiters see in search',
+      score: userData.headline?.trim() ? 1 : 0,
+      weight: 0.160,
+    },
+    {
+      key: 'photo',
+      label: 'Profile photo',
+      tip: 'Profiles with a photo get 40% more recruiter outreach',
+      score: hasPhoto ? 1 : 0,
+      weight: 0.128,
+    },
+    {
+      key: 'skills',
+      label: skillsScore === 0.5 ? 'Add more skills (aim for 6+)' : 'Skills',
+      tip: 'Recruiters search by skills — the more you add, the better',
+      score: skillsScore,
+      weight: 0.128,
+    },
+    {
+      key: 'education',
+      label: 'Education',
+      tip: 'Shows your academic background and qualifications to recruiters',
+      score: (userData.education?.length ?? 0) >= 1 ? 1 : 0,
+      weight: 0.106,
+    },
+    {
+      key: 'about',
+      label: aboutScore === 0.5 ? 'Expand your About section' : 'About section',
+      tip: aboutScore === 0.5
+        ? 'Your bio is a bit short — aim for 200+ characters to make a real impression'
+        : 'A personal story increases the chance of direct outreach',
+      score: aboutScore,
+      weight: 0.106,
+    },
+    {
+      key: 'connections',
+      label: 'Community connections',
+      tip: connectionsScore === 0
+        ? 'Connect with community members to expand your network'
+        : 'Keep connecting — aim for 30+ connections for full credit',
+      score: connectionsScore,
+      weight: 0.085,
+      activity: true,
+    },
+    {
+      key: 'certifications',
+      label: 'Certifications',
+      tip: 'Certifications validate your expertise and appear in recruiter searches',
+      score: (userData.certifications?.length ?? 0) >= 1 ? 1 : 0,
+      weight: 0.053,
+    },
+    {
+      key: 'location',
+      label: 'Location',
+      tip: 'Recruiters filter by location — add yours to appear in local searches',
+      score: userData.location?.trim() ? 1 : 0,
+      weight: 0.043,
+    },
+  ]
+
+  const totalScore = items.reduce((sum, i) => sum + i.score * i.weight, 0)
+  const percentage = Math.round(totalScore * 100)
+  const nextItem = items.filter((i) => i.score < 1).sort((a, b) => b.weight - a.weight)[0] ?? null
+  const { tier, tierLabel } = profileStrengthTier(percentage)
+
+  return { items, percentage, tier, tierLabel, nextItem }
+}
+
+// ── Activity score (async DB) ─────────────────────────────────────────────────
+
+export async function calculateActivityScore(
+  supabase: any,
+  userId: string,
+  userEmail: string,
+  actualDays: number,
+) {
+  const now = new Date()
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const sevenDaysAgo  = new Date(now.getTime() -  7 * 24 * 60 * 60 * 1000).toISOString()
+  const effectiveDays = Math.max(10, Math.min(actualDays, 30))
+
+  const [
+    postsRecent, postsOlder,
+    commentsRecent, commentsOlder,
+    reactionsRecent, reactionsOlder,
+    connsRecent, connsOlder,
+    activeDaysRes,
+  ] = await Promise.all([
+    supabase.from('posts').select('id', { count: 'exact', head: true })
+      .eq('posted_by_uuid', userId).gte('sent_at', sevenDaysAgo),
+    supabase.from('posts').select('id', { count: 'exact', head: true })
+      .eq('posted_by_uuid', userId).lt('sent_at', sevenDaysAgo).gte('sent_at', thirtyDaysAgo),
+
+    supabase.from('comments').select('id', { count: 'exact', head: true })
+      .eq('sender', userEmail).gte('created_at', sevenDaysAgo),
+    supabase.from('comments').select('id', { count: 'exact', head: true })
+      .eq('sender', userEmail).lt('created_at', sevenDaysAgo).gte('created_at', thirtyDaysAgo),
+
+    supabase.from('likes').select('id', { count: 'exact', head: true })
+      .eq('user_id', userId).gte('created_at', sevenDaysAgo),
+    supabase.from('likes').select('id', { count: 'exact', head: true })
+      .eq('user_id', userId).lt('created_at', sevenDaysAgo).gte('created_at', thirtyDaysAgo),
+
+    supabase.from('connections').select('id', { count: 'exact', head: true })
+      .eq('status', 'accepted').or(`requester_id.eq.${userId},receiver_id.eq.${userId}`)
+      .gte('created_at', sevenDaysAgo),
+    supabase.from('connections').select('id', { count: 'exact', head: true })
+      .eq('status', 'accepted').or(`requester_id.eq.${userId},receiver_id.eq.${userId}`)
+      .lt('created_at', sevenDaysAgo).gte('created_at', thirtyDaysAgo),
+
+    supabase.rpc('count_active_days', {
+      p_user_id: userId,
+      p_user_email: userEmail,
+      p_since: thirtyDaysAgo,
+    }),
+  ])
+
+  const postsEff       = (postsRecent.count    ?? 0) * 2 + (postsOlder.count    ?? 0)
+  const commentsEff    = (commentsRecent.count  ?? 0) * 2 + (commentsOlder.count  ?? 0)
+  const reactionsEff   = (reactionsRecent.count ?? 0) * 2 + (reactionsOlder.count ?? 0)
+  const connectionsEff = (connsRecent.count     ?? 0) * 2 + (connsOlder.count     ?? 0)
+  const activeDays     = activeDaysRes.data ?? 0
+
+  const signals: ActivitySignals = { postsEff, commentsEff, reactionsEff, connectionsEff, activeDays, actualDays }
+  const { score, P, C, R, N, A } = computeActivityScore(signals)
+  const { tier, tierLabel } = activityTier(score)
+
+  // nextAction: simulate one "effort unit" for each action type
+  const nextTierScore =
+    score >= 86 ? null :
+    score >= 71 ? 86 :
+    score >= 51 ? 71 :
+    score >= 31 ? 51 :
+    score >= 16 ? 31 : 16
+
+  const candidates = [
+    {
+      type: 'post' as const,
+      label: 'Write a post',
+      tip: 'Share your expertise with the community',
+      newSignals: { ...signals, postsEff: postsEff + 2 },
+    },
+    {
+      type: 'comment' as const,
+      label: 'Comment on 2 posts',
+      tip: 'Engage with what others are sharing',
+      newSignals: { ...signals, commentsEff: commentsEff + 4 },
+    },
+    {
+      type: 'reaction' as const,
+      label: 'React to 5 posts',
+      tip: 'Show support for posts that resonate with you',
+      newSignals: { ...signals, reactionsEff: reactionsEff + 10 },
+    },
+    {
+      type: 'connect' as const,
+      label: 'Connect with someone new',
+      tip: 'Grow your professional network',
+      newSignals: { ...signals, connectionsEff: connectionsEff + 2 },
+    },
+  ].map((c) => ({ ...c, newScore: computeActivityScore(c.newSignals).score }))
+   .sort((a, b) => b.newScore - a.newScore)
+
+  const best = candidates[0]
+  const nextAction = best && best.newScore > score
+    ? {
+        type:       best.type,
+        label:      best.label,
+        tip:        best.tip,
+        impact:     best.newScore - score,
+        toNextTier: nextTierScore !== null ? Math.max(0, nextTierScore - best.newScore) : 0,
+      }
+    : null
+
+  return {
+    score,
+    tier,
+    tierLabel,
+    signals: { posts: postsEff, comments: commentsEff, reactions: reactionsEff, connections: connectionsEff, activeDays },
+    nextAction,
+    canInvite: score >= 31,
+    effectiveDays,
+    actualDays,
+  }
+}

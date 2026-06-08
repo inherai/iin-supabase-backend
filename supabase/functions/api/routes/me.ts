@@ -2,6 +2,7 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import OpenAI from "https://esm.sh/openai@4";
+import { calculateProfileStrength, calculateActivityScore } from './_scoreHelpers.ts'
 
 const app = new Hono()
 
@@ -189,8 +190,10 @@ app.put('/', async (c) => {
     field => JSON.stringify(profileData[field]) !== JSON.stringify(currentUser[field])
   );
   if (hasEmbeddingChange) {
-     updateUserVector(user.id); 
+     updateUserVector(user.id);
   }
+
+  supabase.from('users').update({ scores_cached_at: null }).eq('uuid', user.id).then(() => {});
 
   // מחזירים לקליינט תשובה עם ה-Mapping החדש
   // ה-select() למעלה שלף גם את התמונה הקיימת ב-DB, אז נוכל להחזיר אותה נכון לקליינט
@@ -310,176 +313,59 @@ app.put('/status', async (c) => {
 
 // --------------------------------------------------------------------
 // GET /api/me/strength
-// חישוב חוזק הפרופיל של המשתמש המחובר
 // --------------------------------------------------------------------
 app.get('/strength', async (c) => {
   const user = c.get('user')
-
-  if (!user) {
-    return c.json({ error: 'Unauthorized: You must be logged in' }, 401)
-  }
+  if (!user) return c.json({ error: 'Unauthorized: You must be logged in' }, 401)
 
   const supabase = c.get('supabase')
+  try {
+    const result = await calculateProfileStrength(supabase, user.id)
 
-  const { data: userData, error: userError } = await supabase
-    .from('users')
-    .select('headline, about, skills, experience, education, certifications, location, image')
-    .eq('uuid', user.id)
-    .single()
+    // update cache (fire-and-forget)
+    supabase.from('users').update({
+      profile_strength_cache: result.percentage,
+      scores_cached_at: new Date().toISOString(),
+    }).eq('uuid', user.id).then(() => {})
 
-  if (userError) {
-    return c.json({ error: userError.message }, 400)
+    return c.json(result)
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
   }
+})
 
-  const { count: connectionsCount, error: connectionsError } = await supabase
-    .from('connections')
-    .select('id', { count: 'exact', head: true })
-    .eq('status', 'accepted')
-    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+// --------------------------------------------------------------------
+// GET /api/me/activity
+// --------------------------------------------------------------------
+app.get('/activity', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized: You must be logged in' }, 401)
 
-  if (connectionsError) {
-    return c.json({ error: connectionsError.message }, 400)
+  const supabase = c.get('supabase')
+  try {
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('created_at')
+      .eq('uuid', user.id)
+      .single()
+
+    if (userError) return c.json({ error: userError.message }, 400)
+
+    const joinedAt = new Date(userData.created_at)
+    const actualDays = Math.floor((Date.now() - joinedAt.getTime()) / (1000 * 60 * 60 * 24))
+
+    const result = await calculateActivityScore(supabase, user.id, user.email, actualDays)
+
+    // update cache (fire-and-forget)
+    supabase.from('users').update({
+      activity_score_cache: result.score,
+      scores_cached_at: new Date().toISOString(),
+    }).eq('uuid', user.id).then(() => {})
+
+    return c.json(result)
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
   }
-
-  const oneMonthAgo = new Date()
-  oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1)
-
-  const { count: postsCount, error: postsError } = await supabase
-    .from('posts')
-    .select('id', { count: 'exact', head: true })
-    .eq('sender', user.email)
-    .gte('sent_at', oneMonthAgo.toISOString())
-
-  if (postsError) {
-    return c.json({ error: postsError.message }, 400)
-  }
-
-  const hasPhoto = !!(userData.image && userData.image !== 'null' && userData.image !== 'false')
-
-  const aboutText = userData.about?.trim() ?? ''
-  const aboutScore = aboutText.length === 0 ? 0 : aboutText.length < 200 ? 0.5 : 1
-
-  const experienceList: any[] = userData.experience ?? []
-  const hasExperienceWithDescription = experienceList.some(
-    (e) => (e?.description ?? e?.summary ?? '').trim().length >= 30
-  )
-  const experienceScore =
-    experienceList.length === 0 ? 0 :
-    hasExperienceWithDescription ? 1 : 0.5
-
-  const skillsCount = userData.skills?.length ?? 0
-  const skillsScore = skillsCount >= 6 ? 1 : skillsCount >= 3 ? 0.5 : 0
-
-  const connections = connectionsCount ?? 0
-  const connectionsScore =
-    connections >= 30 ? 1 :
-    connections >= 15 ? 0.75 :
-    connections >= 5  ? 0.5 :
-    connections >= 1  ? 0.25 : 0
-
-  const recentPosts = postsCount ?? 0
-  const postsScore =
-    recentPosts >= 10 ? 1 :
-    recentPosts >= 6  ? 0.75 :
-    recentPosts >= 3  ? 0.5 :
-    recentPosts >= 1  ? 0.25 : 0
-
-  const items = [
-    {
-      key: 'experience',
-      label: experienceScore === 0.5 ? 'Add descriptions to your experience' : 'Work experience',
-      tip: experienceScore === 0
-        ? 'The first thing recruiters look for when filtering candidates'
-        : 'Add a description to your roles — recruiters want to know what you actually did',
-      score: experienceScore,
-      weight: 0.18,
-    },
-    {
-      key: 'headline',
-      label: 'Professional headline',
-      tip: 'Your headline is the first thing recruiters see in search',
-      score: userData.headline?.trim() ? 1 : 0,
-      weight: 0.15,
-    },
-    {
-      key: 'photo',
-      label: 'Profile photo',
-      tip: 'Profiles with a photo get 40% more recruiter outreach',
-      score: hasPhoto ? 1 : 0,
-      weight: 0.12,
-    },
-    {
-      key: 'skills',
-      label: skillsScore === 0.5 ? 'Add more skills (aim for 6+)' : 'Skills',
-      tip: 'Recruiters search by skills — the more you add, the better',
-      score: skillsScore,
-      weight: 0.12,
-    },
-    {
-      key: 'education',
-      label: 'Education',
-      tip: 'Shows your academic background and qualifications to recruiters',
-      score: (userData.education?.length ?? 0) >= 1 ? 1 : 0,
-      weight: 0.10,
-    },
-    {
-      key: 'about',
-      label: aboutScore === 0.5 ? 'Expand your About section' : 'About section',
-      tip: aboutScore === 0.5
-        ? 'Your bio is a bit short — aim for 200+ characters to make a real impression'
-        : 'A personal story increases the chance of direct outreach',
-      score: aboutScore,
-      weight: 0.10,
-    },
-    {
-      key: 'connections',
-      label: 'Community connections',
-      tip: connectionsScore === 0
-        ? 'Connect with community members to expand your network'
-        : 'Keep connecting — aim for 30+ connections for full credit',
-      score: connectionsScore,
-      weight: 0.08,
-      activity: true,
-    },
-    {
-      key: 'posts',
-      label: 'Recent posts',
-      tip: postsScore === 0
-        ? 'Share a post to show your expertise to the community'
-        : 'Keep posting — aim for 10+ posts this month for full credit',
-      score: postsScore,
-      weight: 0.06,
-      activity: true,
-    },
-    {
-      key: 'certifications',
-      label: 'Certifications',
-      tip: 'Certifications validate your expertise and appear in recruiter searches',
-      score: (userData.certifications?.length ?? 0) >= 1 ? 1 : 0,
-      weight: 0.05,
-    },
-    {
-      key: 'location',
-      label: 'Location',
-      tip: 'Recruiters filter by location — add yours to appear in local searches',
-      score: userData.location?.trim() ? 1 : 0,
-      weight: 0.04,
-    },
-  ]
-
-  const totalScore = items.reduce((sum, i) => sum + i.score * i.weight, 0)
-  const percentage = Math.round(totalScore * 100)
-  const nextItem = items
-    .filter((i) => i.score < 1)
-    .sort((a, b) => b.weight - a.weight)[0] ?? null
-  const tier =
-    percentage >= 95 ? 'Elite' :
-    percentage >= 85 ? 'Expert' :
-    percentage >= 70 ? 'Strong' :
-    percentage >= 40 ? 'Building' :
-    'Starter'
-
-  return c.json({ items, percentage, tier, nextItem })
 })
 
 // --------------------------------------------------------------------

@@ -93,9 +93,10 @@ app.post('/', async (c) => {
       .single()
 
     if (insertError) throw insertError
+    supabase.from('users').update({ scores_cached_at: null }).eq('uuid', user.id).then(() => {});
 
-    return c.json({ 
-      action: 'added', 
+    return c.json({
+      action: 'added',
       target_id,
       target_type,
       reaction_type,

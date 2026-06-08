@@ -230,6 +230,10 @@ app.put("/:id", async (c) => {
   if (error) return c.json({ error: error.message }, 400);
   if (!data) return c.json({ error: "Not found or unauthorized" }, 404);
 
+  // invalidate score cache for both sides of the connection
+  supabase.from("users").update({ scores_cached_at: null })
+    .in("uuid", [user.id, data.requester_id]).then(() => {});
+
   await supabase
     .from("notifications")
     .delete()
