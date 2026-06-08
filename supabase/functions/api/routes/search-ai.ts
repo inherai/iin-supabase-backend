@@ -129,6 +129,9 @@ app.post('/', async (c) => {
 
     if (rpcError) throw rpcError;
 
+    console.log(`[search-ai] rawMatches count: ${rawMatches?.length ?? 0}, threshold: ${dynamicThreshold}`);
+    console.log(`[search-ai] matches:`, rawMatches?.map((m: any) => `${m.id} sim=${m.similarity?.toFixed(3)}`));
+
     // =================================================================
     // שלב 3: דירוג מחדש (Reranking) לפי תאריך
     // =================================================================
