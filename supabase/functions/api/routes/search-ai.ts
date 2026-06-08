@@ -8,9 +8,9 @@ const app = new Hono()
 // ====================================================================
 // קבועים (כפי שביקשת)
 // ====================================================================
-const FETCH_K_SQL = 60;        
-const DECAY_DAYS = 180;        
-const MAX_BONUS = 0.15; 
+const FETCH_K_SQL = 60;
+const DECAY_DAYS = 90;
+const MAX_BONUS = 0.3;
 const STRICT_THRESHOLD = 0.3;        
 const RECRUITER_ROLE = 'recruiters';
 
@@ -121,24 +121,38 @@ app.post('/', async (c) => {
     });
     const queryVector = emb.data[0].embedding;
 
-    const { data: rawMatches, error: rpcError } = await supabaseAdmin.rpc('match_posts', {
-      query_embedding: queryVector,
-      similarity_threshold: dynamicThreshold, 
-      match_limit: FETCH_K_SQL
-    }).select('id, subject, message, sent_at, sender, attachments, community_members_only, similarity');
+    const [{ data: rawMatches, error: rpcError }, { data: keywordMatches, error: kwError }] = await Promise.all([
+      supabaseAdmin.rpc('match_posts', {
+        query_embedding: queryVector,
+        similarity_threshold: dynamicThreshold,
+        match_limit: FETCH_K_SQL
+      }).select('id, subject, message, sent_at, sender, attachments, community_members_only, similarity'),
+      supabaseAdmin
+        .from('posts')
+        .select('id, subject, message, sent_at, sender, attachments, community_members_only')
+        .or(`subject.ilike.%${optimizedQuery}%,message.ilike.%${optimizedQuery}%`)
+        .limit(20)
+    ]);
 
     if (rpcError) throw rpcError;
 
-    console.log(`[search-ai] rawMatches count: ${rawMatches?.length ?? 0}, threshold: ${dynamicThreshold}`);
-    console.log(`[search-ai] matches:`, rawMatches?.map((m: any) => `${m.id} sim=${m.similarity?.toFixed(3)}`));
+    // מיזוג תוצאות סמנטיות + keyword, ללא כפילויות
+    const seenIds = new Set<string>((rawMatches || []).map((m: any) => String(m.id)));
+    const extraFromKeyword = (keywordMatches || [])
+      .filter((p: any) => !seenIds.has(String(p.id)))
+      .map((p: any) => ({ ...p, similarity: 0.1 }));
+
+    const mergedMatches = [...(rawMatches || []), ...extraFromKeyword];
+
+    console.log(`[search-ai] semantic: ${rawMatches?.length ?? 0}, keyword extras: ${extraFromKeyword.length}, threshold: ${dynamicThreshold}`);
 
     // =================================================================
     // שלב 3: דירוג מחדש (Reranking) לפי תאריך
     // =================================================================
     let finalItems: any[] = [];
-    if (rawMatches && rawMatches.length > 0) {
+    if (mergedMatches && mergedMatches.length > 0) {
       const now = new Date();
-      const scoredItems = rawMatches.map((post: any) => {
+      const scoredItems = mergedMatches.map((post: any) => {
         const postDateStr = post.sent_at;
         let daysOld = 730; 
         if (postDateStr) {
