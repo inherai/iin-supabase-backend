@@ -11,7 +11,7 @@ const app = new Hono()
 const FETCH_K_SQL = 60;
 const DECAY_DAYS = 90;
 const MAX_BONUS = 0.3;
-const STRICT_THRESHOLD = 0.2;
+const STRICT_THRESHOLD = 0.15;
 const RECRUITER_ROLE = 'recruiters';
 
 function isRecruiterViewer(user: any): boolean {
@@ -128,9 +128,14 @@ app.post('/', async (c) => {
         match_limit: FETCH_K_SQL
       }).select('id, subject, message, sent_at, sender, attachments, community_members_only, similarity'),
       (() => {
-        const words = optimizedQuery.trim().split(/\s+/).filter(w => w.length > 2);
-        // subject: OR בין מילים בודדות (כותרות קצרות = מעט רעש)
-        // message: הביטוי המלא בדיוק (מונע רעש ממילים נפוצות כמו "עבודה")
+        // הסרת קידומות עבריות נפוצות (ל,ב,מ,ה,כ,ו,ש) לפני keyword search
+        const HEBREW_PREFIXES = /^(שה|מה|לה|כש|וש|ומ|ול|וב|וכ|וה|של|שב|שמ|שכ|בה|כה|לכ|לב|מב|מל|מכ|ל|ב|מ|ה|כ|ו|ש)/;
+        const stripPrefix = (w: string) => w.replace(HEBREW_PREFIXES, '') || w;
+        const words = optimizedQuery.trim().split(/\s+/)
+          .map(stripPrefix)
+          .filter(w => w.length > 2);
+        // subject: OR בין שורשי המילים (כותרות קצרות = מעט רעש)
+        // message: הביטוי המלא בדיוק (מונע רעש ממילים נפוצות)
         const parts = [
           ...words.map(w => `subject.ilike.%${w}%`),
           `message.ilike.%${optimizedQuery}%`
