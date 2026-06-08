@@ -90,9 +90,11 @@ app.get("/users", async (c) => {
   ] = await Promise.all([
     emails.length > 0
       ? db.from("posts").select("sender").in("sender", emails)
+          .not("post_type", "is", null).neq("post_type", "email")
       : Promise.resolve({ data: [] }),
     emails.length > 0
-      ? db.from("comments").select("sender").in("sender", emails)
+      ? db.from("comments").select("sender, posts!inner(post_type)").in("sender", emails)
+          .not("posts.post_type", "is", null).neq("posts.post_type", "email")
       : Promise.resolve({ data: [] }),
     uuids.length > 0
       ? db.from("likes").select("user_id").in("user_id", uuids)
@@ -165,8 +167,10 @@ app.get("/users/:id", async (c) => {
     { count: connectionsCount },
     { count: viewsCount },
   ] = await Promise.all([
-    db.from("posts").select("*", { count: "exact", head: true }).eq("sender", email),
-    db.from("comments").select("*", { count: "exact", head: true }).eq("sender", email),
+    db.from("posts").select("*", { count: "exact", head: true }).eq("sender", email)
+      .not("post_type", "is", null).neq("post_type", "email"),
+    db.from("comments").select("id, posts!inner(post_type)", { count: "exact", head: true }).eq("sender", email)
+      .not("posts.post_type", "is", null).neq("posts.post_type", "email"),
     db.from("likes").select("*", { count: "exact", head: true }).eq("user_id", userId),
     db.from("connections").select("*", { count: "exact", head: true })
       .or(`requester_id.eq.${userId},receiver_id.eq.${userId}`)
