@@ -1,5 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { calculateProfileStrength, calculateActivityScore } from './_scoreHelpers.ts';
 
 const app = new Hono();
 
@@ -180,6 +181,40 @@ app.get("/users/:id", async (c) => {
     likes_count: likesCount || 0,
     connections_count: connectionsCount || 0,
     views_count: viewsCount || 0,
+  });
+});
+
+app.post("/users/:id/refresh-scores", async (c) => {
+  const db = getAdminClient();
+  const userId = c.req.param("id");
+
+  const { data: user, error } = await db
+    .from("users")
+    .select("uuid,email,created_at")
+    .eq("uuid", userId)
+    .maybeSingle();
+
+  if (error) return c.json({ error: error.message }, 500);
+  if (!user) return c.json({ error: "User not found" }, 404);
+
+  const actualDays = Math.floor((Date.now() - new Date(user.created_at).getTime()) / (1000 * 60 * 60 * 24));
+
+  const [strengthResult, activityResult] = await Promise.all([
+    calculateProfileStrength(db, userId),
+    calculateActivityScore(db, userId, user.email, actualDays),
+  ]);
+
+  const cachedAt = new Date().toISOString();
+  await db.from("users").update({
+    profile_strength_cache: strengthResult.percentage,
+    activity_score_cache: activityResult.score,
+    scores_cached_at: cachedAt,
+  }).eq("uuid", userId);
+
+  return c.json({
+    profile_strength: strengthResult.percentage,
+    activity_score: activityResult.score,
+    scores_cached_at: cachedAt,
   });
 });
 
