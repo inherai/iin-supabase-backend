@@ -39,6 +39,7 @@ app.get('/', async (c) => {
     const rawSeniorityLevels = (c.req.query('seniority_levels') ?? '').split(',').map((s: string) => s.trim()).filter(Boolean)
     const id = c.req.query('id')
     const companyId = c.req.query('company_id')
+    const sortByMatch = c.req.query('sort') === 'match'
 
     const page = parseInt(c.req.query('page') || '1')
     const limit = parseInt(c.req.query('limit') || '25')
@@ -144,6 +145,36 @@ app.get('/', async (c) => {
         }
 
         totalCount = count || 0;
+
+        // --- מיון לפי התאמה לפרופיל ---
+        if (sortByMatch && userId && Array.isArray(result) && result.length > 0) {
+          try {
+            const { data: userVectorRow } = await supabaseClient
+              .from('users_vectors')
+              .select('vector')
+              .eq('user_id', userId)
+              .maybeSingle()
+
+            if (userVectorRow?.vector) {
+              const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
+              const titles = result.map((j: any) => (j.job_title || '').slice(0, 200))
+              const embResult = await openai.embeddings.create({
+                model: 'text-embedding-3-small',
+                input: titles,
+              })
+              const userVec: number[] = userVectorRow.vector
+              result = result
+                .map((job: any, i: number) => ({
+                  ...job,
+                  _score: cosineSimilarity(userVec, embResult.data[i].embedding),
+                }))
+                .sort((a: any, b: any) => b._score - a._score)
+                .map(({ _score, ...job }: any) => job)
+            }
+          } catch {
+            // fallback: שמור על סדר created_at המקורי
+          }
+        }
     }
 
     c.header('Cache-Control', 'private, max-age=300');
