@@ -929,6 +929,36 @@ app.get('/new-count', async (c) => {
   }
 })
 
+// ====================================================================
+// ADMIN: BACKFILL VECTORS FOR HTML POSTS
+// ====================================================================
+
+app.post('/admin/backfill-vectors', async (c) => {
+  const user = c.get('user')
+  if (!user?.app_metadata?.is_admin) return c.json({ error: 'Forbidden' }, 403)
+
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  )
+
+  const { data: posts, error } = await supabaseAdmin
+    .from('posts')
+    .select('id')
+    .like('message', '%<%>%')
+    .not('post_type', 'is', null)
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const ids = (posts || []).map((p: any) => p.id)
+
+  for (const id of ids) {
+    await updatePostVector(id)
+  }
+
+  return c.json({ success: true, updated: ids.length })
+})
+
 app.get('/:id', async (c) => {
   try {
     const supabase = c.get('supabase')
@@ -2045,31 +2075,5 @@ app.post('/:id/report', async (c) => {
 // ====================================================================
 // ADMIN: BACKFILL VECTORS FOR HTML POSTS
 // ====================================================================
-
-app.post('/admin/backfill-vectors', async (c) => {
-  const user = c.get('user')
-  if (!user?.app_metadata?.is_admin) return c.json({ error: 'Forbidden' }, 403)
-
-  const supabaseAdmin = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-  )
-
-  const { data: posts, error } = await supabaseAdmin
-    .from('posts')
-    .select('id')
-    .like('message', '%<%>%')
-    .not('post_type', 'is', null)
-
-  if (error) return c.json({ error: error.message }, 500)
-
-  const ids = (posts || []).map((p: any) => p.id)
-
-  for (const id of ids) {
-    await updatePostVector(id)
-  }
-
-  return c.json({ success: true, updated: ids.length })
-})
 
 export default app
