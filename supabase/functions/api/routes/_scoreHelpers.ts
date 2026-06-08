@@ -166,71 +166,73 @@ export async function calculateProfileStrength(supabase: any, userId: string) {
       key: 'experience',
       label: experienceScore === 0.5 ? 'Add descriptions to your experience' : 'Work experience',
       tip: experienceScore === 0
-        ? 'The first thing recruiters look for when filtering candidates'
-        : 'Add a description to your roles — recruiters want to know what you actually did',
+        ? 'The single most important section — recruiters filter by experience first'
+        : 'Great start! Add descriptions to your roles so recruiters understand what you actually did',
       score: experienceScore,
-      weight: 0.191,
-    },
-    {
-      key: 'headline',
-      label: 'Professional headline',
-      tip: 'Your headline is the first thing recruiters see in search',
-      score: userData.headline?.trim() ? 1 : 0,
-      weight: 0.160,
-    },
-    {
-      key: 'photo',
-      label: 'Profile photo',
-      tip: 'Profiles with a photo get 40% more recruiter outreach',
-      score: hasPhoto ? 1 : 0,
-      weight: 0.128,
+      weight: 0.22,
     },
     {
       key: 'skills',
       label: skillsScore === 0.5 ? 'Add more skills (aim for 6+)' : 'Skills',
-      tip: 'Recruiters search by skills — the more you add, the better',
+      tip: skillsScore === 0
+        ? 'Recruiters search by skills — this is one of the first filters they use'
+        : 'You have some skills listed — aim for 6+ to maximize visibility in recruiter searches',
       score: skillsScore,
-      weight: 0.128,
+      weight: 0.20,
     },
     {
-      key: 'education',
-      label: 'Education',
-      tip: 'Shows your academic background and qualifications to recruiters',
-      score: (userData.education?.length ?? 0) >= 1 ? 1 : 0,
-      weight: 0.106,
+      key: 'photo',
+      label: 'Profile photo',
+      tip: 'Profiles with a photo get significantly more recruiter attention and connection requests',
+      score: hasPhoto ? 1 : 0,
+      weight: 0.12,
     },
     {
       key: 'about',
       label: aboutScore === 0.5 ? 'Expand your About section' : 'About section',
       tip: aboutScore === 0.5
-        ? 'Your bio is a bit short — aim for 200+ characters to make a real impression'
-        : 'A personal story increases the chance of direct outreach',
+        ? 'Your bio is a bit short — aim for 200+ characters to make a real impression on recruiters'
+        : 'A well-written bio helps recruiters understand who you are beyond your job titles',
       score: aboutScore,
-      weight: 0.106,
+      weight: 0.11,
+    },
+    {
+      key: 'headline',
+      label: 'Professional headline',
+      tip: 'Your headline appears in search results and gives recruiters an instant sense of who you are',
+      score: userData.headline?.trim() ? 1 : 0,
+      weight: 0.10,
     },
     {
       key: 'connections',
       label: 'Community connections',
       tip: connectionsScore === 0
-        ? 'Connect with community members to expand your network'
-        : 'Keep connecting — aim for 30+ connections for full credit',
+        ? 'Start connecting — an active network makes your profile more credible to recruiters'
+        : 'Keep connecting — aim for 30+ connections to reach full score',
       score: connectionsScore,
-      weight: 0.085,
+      weight: 0.09,
       activity: true,
+    },
+    {
+      key: 'education',
+      label: 'Education',
+      tip: 'Adding your academic background helps recruiters assess your qualifications',
+      score: (userData.education?.length ?? 0) >= 1 ? 1 : 0,
+      weight: 0.08,
     },
     {
       key: 'certifications',
       label: 'Certifications',
-      tip: 'Certifications validate your expertise and appear in recruiter searches',
+      tip: 'Certifications validate specific expertise and can set you apart in recruiter searches',
       score: (userData.certifications?.length ?? 0) >= 1 ? 1 : 0,
-      weight: 0.053,
+      weight: 0.05,
     },
     {
       key: 'location',
       label: 'Location',
-      tip: 'Recruiters filter by location — add yours to appear in local searches',
+      tip: 'Some recruiters filter by location — add yours to appear in local job searches',
       score: userData.location?.trim() ? 1 : 0,
-      weight: 0.043,
+      weight: 0.03,
     },
   ]
 

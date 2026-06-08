@@ -117,6 +117,11 @@ app.post("/", async (c) => {
       return c.json({ error: "Unauthorized" }, 401);
     }
 
+    const inviterRole = user.app_metadata?.role;
+    if (inviterRole === "recruiters" || inviterRole === "feed_participant") {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+
     const body = await c.req.json().catch(() => ({}));
     const recipientEmail = body?.recipient_email ?? "";
     const personalNote = body?.personal_note?.trim();
