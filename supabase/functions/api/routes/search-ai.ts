@@ -11,7 +11,7 @@ const app = new Hono()
 const FETCH_K_SQL = 60;
 const DECAY_DAYS = 90;
 const MAX_BONUS = 0.3;
-const STRICT_THRESHOLD = 0.3;        
+const STRICT_THRESHOLD = 0.2;
 const RECRUITER_ROLE = 'recruiters';
 
 function isRecruiterViewer(user: any): boolean {
@@ -127,11 +127,20 @@ app.post('/', async (c) => {
         similarity_threshold: dynamicThreshold,
         match_limit: FETCH_K_SQL
       }).select('id, subject, message, sent_at, sender, attachments, community_members_only, similarity'),
-      supabaseAdmin
-        .from('posts')
-        .select('id, subject, message, sent_at, sender, attachments, community_members_only')
-        .or(`subject.ilike.%${optimizedQuery}%,message.ilike.%${optimizedQuery}%`)
-        .limit(20)
+      (() => {
+        const words = optimizedQuery.trim().split(/\s+/).filter(w => w.length > 2);
+        // subject: OR בין מילים בודדות (כותרות קצרות = מעט רעש)
+        // message: הביטוי המלא בדיוק (מונע רעש ממילים נפוצות כמו "עבודה")
+        const parts = [
+          ...words.map(w => `subject.ilike.%${w}%`),
+          `message.ilike.%${optimizedQuery}%`
+        ].join(',');
+        return supabaseAdmin
+          .from('posts')
+          .select('id, subject, message, sent_at, sender, attachments, community_members_only')
+          .or(parts)
+          .limit(20);
+      })()
     ]);
 
     if (rpcError) throw rpcError;
