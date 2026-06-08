@@ -1,0 +1,193 @@
+-- ============================================================
+-- Add Comprehensive AI Tools & Skills
+-- Covers: model providers, inference, frameworks, coding assistants,
+-- fine-tuning, evaluation, image/audio/multimodal, concepts, infra
+-- ============================================================
+
+INSERT INTO skills (name)
+SELECT v.name FROM (VALUES
+
+  -- ── Model Providers & Cloud AI APIs ──────────────────────
+  ('Azure OpenAI Service'),
+  ('Google Vertex AI'),
+  ('Google AI Studio'),
+  ('Together AI'),
+  ('Groq'),
+  ('Replicate'),
+  ('Cohere'),
+  ('DeepSeek'),
+  ('Meta Llama'),
+  ('Grok (xAI)'),
+  ('Perplexity API'),
+  ('Cerebras'),
+  ('Amazon SageMaker'),
+  ('Fireworks AI'),
+  ('Anyscale'),
+
+  -- ── Inference & Model Serving ─────────────────────────────
+  ('llama.cpp'),
+  ('Text Generation Inference (TGI)'),
+  ('BentoML'),
+  ('Ray Serve'),
+  ('NVIDIA Triton Inference Server'),
+  ('TorchServe'),
+  ('OpenLLM'),
+  ('KServe'),
+  ('LM Studio'),
+  ('OpenWebUI'),
+  ('ExLlamaV2'),
+  ('llama-server'),
+  ('RunPod'),
+  ('Modal'),
+
+  -- ── AI Frameworks & Orchestration ────────────────────────
+  ('Semantic Kernel'),
+  ('LiteLLM'),
+  ('Instructor'),
+  ('Pydantic AI'),
+  ('Mastra'),
+  ('Vercel AI SDK'),
+  ('Flowise'),
+  ('Dify'),
+  ('Agno'),
+  ('Smolagents'),
+  ('Open Interpreter'),
+  ('AnythingLLM'),
+  ('Swarm (OpenAI)'),
+  ('MetaGPT'),
+  ('TaskWeaver'),
+  ('Composio'),
+
+  -- ── AI Coding Assistants & Dev Tools ─────────────────────
+  ('GitHub Copilot'),
+  ('Cursor AI'),
+  ('Tabnine'),
+  ('Codeium'),
+  ('Amazon Q Developer'),
+  ('Windsurf'),
+  ('Continue.dev'),
+  ('Aider'),
+  ('Devin'),
+  ('Replit AI'),
+
+  -- ── Fine-tuning & Training Techniques ────────────────────
+  ('LoRA (Low-Rank Adaptation)'),
+  ('QLoRA'),
+  ('PEFT (Parameter-Efficient Fine-Tuning)'),
+  ('Unsloth'),
+  ('Axolotl'),
+  ('RLHF (Reinforcement Learning from Human Feedback)'),
+  ('DPO (Direct Preference Optimization)'),
+  ('Constitutional AI'),
+  ('Instruction Tuning'),
+  ('Transfer Learning'),
+  ('Synthetic Data Generation'),
+  ('Data Augmentation'),
+  ('Distillation (Model Distillation)'),
+  ('Quantization (LLM)'),
+
+  -- ── AI Evaluation & Observability ────────────────────────
+  ('LangSmith'),
+  ('Langfuse'),
+  ('Ragas'),
+  ('DeepEval'),
+  ('Helicone'),
+  ('Arize AI'),
+  ('MLflow'),
+  ('ClearML'),
+  ('Comet ML'),
+  ('Neptune AI'),
+  ('PromptLayer'),
+  ('Braintrust'),
+  ('LLM Evaluation'),
+  ('AI Benchmarking'),
+
+  -- ── AI Concepts & Techniques ─────────────────────────────
+  ('Model Context Protocol (MCP)'),
+  ('Function Calling (AI)'),
+  ('Structured Outputs (AI)'),
+  ('Chain of Thought (CoT)'),
+  ('Tree of Thought (ToT)'),
+  ('ReAct (Reasoning + Acting)'),
+  ('Mixture of Experts (MoE)'),
+  ('Few-Shot Learning'),
+  ('Zero-Shot Learning'),
+  ('In-Context Learning'),
+  ('Transformer Architecture'),
+  ('Attention Mechanism'),
+  ('Speculative Decoding'),
+  ('Long Context Windows'),
+  ('AI Red Teaming'),
+  ('Neural Architecture Search (NAS)'),
+  ('AutoML'),
+  ('Hyperparameter Tuning'),
+  ('Contrastive Learning'),
+  ('Self-Supervised Learning'),
+  ('Federated Learning'),
+  ('AI Model Alignment'),
+  ('Guardrails (AI)'),
+
+  -- ── Image Generation & Multimodal ────────────────────────
+  ('Stable Diffusion'),
+  ('ComfyUI'),
+  ('DALL-E'),
+  ('Flux (Image Generation)'),
+  ('ControlNet'),
+  ('Midjourney API'),
+  ('Stable Diffusion XL'),
+  ('Diffusion Models'),
+  ('Image-to-Image'),
+  ('Text-to-Image'),
+  ('Text-to-Video AI'),
+  ('Vision Language Models (VLM)'),
+
+  -- ── Speech & Audio AI ────────────────────────────────────
+  ('Whisper (OpenAI)'),
+  ('ElevenLabs'),
+  ('AssemblyAI'),
+  ('Deepgram'),
+  ('Suno AI'),
+  ('Text-to-Speech (TTS)'),
+  ('Speech-to-Text (STT)'),
+  ('Voice Cloning'),
+
+  -- ── AI Infrastructure & MLOps Platforms ──────────────────
+  ('pgvector'),
+  ('DVC (Data Version Control)'),
+  ('ZenML'),
+  ('Metaflow'),
+  ('Feast (Feature Store)'),
+  ('Tecton'),
+  ('Gradient AI'),
+  ('Lambda Labs'),
+  ('Vast.ai'),
+  ('Paperspace'),
+
+  -- ── AI Search & Agents Tools ─────────────────────────────
+  ('Tavily Search API'),
+  ('SerpAPI'),
+  ('Browserbase'),
+  ('Stagehand'),
+  ('Firecrawl'),
+  ('Jina AI'),
+  ('Cohere Rerank'),
+  ('Hybrid Search'),
+
+  -- ── Specialized AI Domains ───────────────────────────────
+  ('AI Product Management'),
+  ('AI Ethics'),
+  ('Responsible AI'),
+  ('AI Governance'),
+  ('AI Infrastructure Engineering'),
+  ('LLMOps'),
+  ('Conversational AI'),
+  ('Chatbot Development'),
+  ('AI-Powered Search'),
+  ('Document AI'),
+  ('Code Generation AI'),
+  ('AI for Cybersecurity')
+
+) AS v(name)
+WHERE NOT EXISTS (
+  SELECT 1 FROM skills s WHERE LOWER(s.name) = LOWER(v.name)
+);

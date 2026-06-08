@@ -1708,6 +1708,7 @@ app.delete('/:id', async (c) => {
       }
     }
 
+    supabase.from('users').update({ scores_cached_at: null }).eq('uuid', user.id).then(() => {});
     return c.json({ success: true, message: "Post and files deleted successfully" });
 
   } catch (err: any) {

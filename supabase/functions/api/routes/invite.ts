@@ -266,7 +266,7 @@ app.post("/", async (c) => {
 
     const inviterName = inviterProfile
       ? [inviterProfile.first_name, inviterProfile.last_name].filter(Boolean).join(" ")
-      : "A Duallin member";
+      : "a duallin member";
 
     // Send invitation email — failure is logged but does not fail the request
     sendInviteEmail({

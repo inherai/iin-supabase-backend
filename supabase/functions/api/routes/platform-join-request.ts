@@ -71,7 +71,7 @@ async function sendAdminNotification(req: JoinRequestPayload): Promise<void> {
     <body style="margin:0;padding:24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f0fa;">
       <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(75,21,76,0.12);">
         <div style="background:linear-gradient(135deg,#2d0838,#4b154c);padding:28px 32px;">
-          <p style="margin:0 0 4px;font-size:11px;font-weight:700;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:2px">Duallin · Platform Access</p>
+          <p style="margin:0 0 4px;font-size:11px;font-weight:700;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:2px">duallin · Platform Access</p>
           <h1 style="margin:0;font-size:22px;font-weight:800;color:#fff">${subject}</h1>
           <span style="display:inline-block;margin-top:10px;background:rgba(255,255,255,0.15);color:#fff;font-size:11px;font-weight:700;padding:4px 14px;border-radius:50px;letter-spacing:1px">${typeLabel}</span>
         </div>
@@ -106,7 +106,7 @@ async function sendAdminNotification(req: JoinRequestPayload): Promise<void> {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      from: "Duallin System <noreply@duallin.com>",
+      from: "duallin System <noreply@duallin.com>",
       to: [ADMIN_EMAIL],
       subject,
       html,

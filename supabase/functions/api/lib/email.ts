@@ -49,7 +49,7 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>You've been personally invited to Duallin | הוזמנת אישית לדואולין</title>
+  <title>You've been personally invited to duallin | הוזמנת אישית לדואולין</title>
 </head>
 <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
 
@@ -62,7 +62,7 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
           <tr>
             <td style="background:linear-gradient(135deg,#2d0838 0%,#4b154c 55%,#380a47 100%);padding:44px 40px 36px;text-align:center;">
                 <div style="display:block;background:#ffffff;border-radius:12px;padding:12px 28px;margin-bottom:22px;">
-  <img src="https://www.duallin.com/assets/logotext-Dt264Rdr.png" alt="Duallin" width="260" style="display:block;max-width:260px;margin: auto">
+  <img src="https://www.duallin.com/assets/logotext-Dt264Rdr.png" alt="duallin" width="260" style="display:block;max-width:260px;margin: auto">
 </div>
 
               <h1 style="margin:0 0 10px;font-size:28px;font-weight:800;color:#ffffff;line-height:1.2;letter-spacing:-0.5px;">
@@ -136,7 +136,7 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
                   <td style="background:#f9f2ff;border:1px solid #e8d4f5;border-radius:12px;padding:24px 24px;">
 
                     <p style="margin:0 0 18px;font-size:10px;font-weight:700;color:#9b4aaa;text-transform:uppercase;letter-spacing:2px;text-align:center;">
-                      About Duallin &nbsp;·&nbsp; אודות דואולין
+                      About duallin &nbsp;·&nbsp; אודות דואולין
                     </p>
 
                     <table width="100%" cellpadding="0" cellspacing="0">
@@ -172,7 +172,7 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
           <tr>
             <td style="padding:32px 40px 16px;background:#fffcff;text-align:center;">
               <a href="${inviteUrl}" style="display:inline-block;background:linear-gradient(135deg,#2d0838 0%,#762277 50%,#9b4aaa 100%);color:#ffffff;text-decoration:none;font-size:16px;font-weight:700;padding:17px 56px;border-radius:50px;letter-spacing:0.3px;box-shadow:0 6px 28px rgba(118,34,119,0.40);">
-                Join Duallin &nbsp;|&nbsp; הצטרפי לדואולין
+                Join duallin &nbsp;|&nbsp; הצטרפי לדואולין
               </a>
             </td>
           </tr>
@@ -218,9 +218,9 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: 'Duallin <invites@duallin.com>',
+      from: 'duallin <invites@duallin.com>',
       to: [to],
-      subject: "You've been personally invited to Duallin | הוזמנת אישית לדואולין",
+      subject: "You've been personally invited to duallin | הוזמנת אישית לדואולין",
       html,
     }),
   });

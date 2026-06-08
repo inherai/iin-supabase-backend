@@ -142,19 +142,22 @@ Deno.serve(async (req) => {
 
     if (roleError) throw roleError;
 
-    // Step 3: recruiter-specific privacy fields (separate update so a trigger
+    // Step 3: set privacy defaults per role (separate update so a trigger
     // error here does not revert the already-committed role above).
-    if (inviteRole === "recruiters") {
-      await supabaseAdmin
-        .from("users")
-        .update({
+    const privacyDefaults = inviteRole === "recruiters"
+      ? {
           is_anonymous: false,
           privacy_picture: ["community", "recruiters"],
           privacy_lastname: ["community", "recruiters"],
           privacy_contact_details: ["community", "recruiters"],
-        })
-        .eq("uuid", currentUserId);
-    }
+        }
+      : {
+          privacy_contact_details: [],
+        };
+    await supabaseAdmin
+      .from("users")
+      .update(privacyDefaults)
+      .eq("uuid", currentUserId);
 
     await supabaseAdmin.auth.admin.updateUserById(currentUserId, {
       app_metadata: { role: inviteRole },

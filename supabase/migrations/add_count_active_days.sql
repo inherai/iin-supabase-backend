@@ -11,11 +11,18 @@ SET search_path = public
 AS $$
   SELECT COUNT(DISTINCT DATE(ts AT TIME ZONE 'UTC'))::INTEGER
   FROM (
-    SELECT sent_at    AS ts FROM posts
-      WHERE posted_by_uuid = p_user_id AND sent_at >= p_since
+    SELECT p.sent_at AS ts FROM posts p
+      WHERE p.posted_by_uuid = p_user_id
+        AND p.sent_at >= p_since
+        AND p.post_type IS NOT NULL
+        AND p.post_type != 'email'
     UNION ALL
-    SELECT created_at AS ts FROM comments
-      WHERE sender = p_user_email AND created_at >= p_since
+    SELECT c.created_at AS ts FROM comments c
+      JOIN posts p ON p.id = c.post_id
+      WHERE c.sender = p_user_email
+        AND c.created_at >= p_since
+        AND p.post_type IS NOT NULL
+        AND p.post_type != 'email'
     UNION ALL
     SELECT created_at AS ts FROM likes
       WHERE user_id = p_user_id AND created_at >= p_since

@@ -265,14 +265,18 @@ export async function calculateActivityScore(
     activeDaysRes,
   ] = await Promise.all([
     supabase.from('posts').select('id', { count: 'exact', head: true })
-      .eq('posted_by_uuid', userId).gte('sent_at', sevenDaysAgo),
+      .eq('posted_by_uuid', userId).not('post_type', 'is', null).neq('post_type', 'email')
+      .gte('sent_at', sevenDaysAgo),
     supabase.from('posts').select('id', { count: 'exact', head: true })
-      .eq('posted_by_uuid', userId).lt('sent_at', sevenDaysAgo).gte('sent_at', thirtyDaysAgo),
+      .eq('posted_by_uuid', userId).not('post_type', 'is', null).neq('post_type', 'email')
+      .lt('sent_at', sevenDaysAgo).gte('sent_at', thirtyDaysAgo),
 
-    supabase.from('comments').select('id', { count: 'exact', head: true })
-      .eq('sender', userEmail).gte('created_at', sevenDaysAgo),
-    supabase.from('comments').select('id', { count: 'exact', head: true })
-      .eq('sender', userEmail).lt('created_at', sevenDaysAgo).gte('created_at', thirtyDaysAgo),
+    supabase.from('comments').select('id, posts!inner(post_type)', { count: 'exact', head: true })
+      .eq('sender', userEmail).not('posts.post_type', 'is', null).neq('posts.post_type', 'email')
+      .gte('created_at', sevenDaysAgo),
+    supabase.from('comments').select('id, posts!inner(post_type)', { count: 'exact', head: true })
+      .eq('sender', userEmail).not('posts.post_type', 'is', null).neq('posts.post_type', 'email')
+      .lt('created_at', sevenDaysAgo).gte('created_at', thirtyDaysAgo),
 
     supabase.from('likes').select('id', { count: 'exact', head: true })
       .eq('user_id', userId).gte('created_at', sevenDaysAgo),
