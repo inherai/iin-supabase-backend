@@ -126,6 +126,28 @@ app.get("/:id", async (c) => {
   return c.json({ count: count ?? 0 });
 });
 
+// GET /api/connections/accepted-ids
+// Returns: { ids: string[] } — all accepted connection user IDs for the current user (no pagination)
+app.get("/accepted-ids", async (c) => {
+  const supabase = c.get("supabase");
+  const user = c.get("user");
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  const { data, error } = await supabase
+    .from("connections")
+    .select("requester_id, receiver_id")
+    .eq("status", "accepted")
+    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
+
+  if (error) return c.json({ error: error.message }, 400);
+
+  const ids = (data ?? []).map((row: any) =>
+    row.requester_id === user.id ? row.receiver_id : row.requester_id
+  );
+
+  return c.json({ ids });
+});
+
 // POST /api/connections/batch-status
 // Body: { user_ids: string[] }
 // Returns: { connected_ids: string[] } — which of the given user IDs are accepted connections

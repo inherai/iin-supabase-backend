@@ -332,11 +332,16 @@ app.delete("/users/:id", async (c) => {
   }).eq("uuid", userId);
   if (updateErr) return c.json({ error: updateErr.message }, 500);
 
-  // 7. Delete auth user LAST — no FK/CASCADE to users table (verified via pg_constraint)
-  //    Note: if auth user was already deleted (e.g. retry), skip gracefully
+  // 7. Delete auth user LAST — public.users FK was dropped via migration fix_drop_users_auth_fk.sql
+  //    so no constraint blocks this. If auth user was already deleted (e.g. retry), skip gracefully.
   const { error: authErr } = await db.auth.admin.deleteUser(userId);
-  if (authErr && !authErr.message.toLowerCase().includes("not found")) {
-    return c.json({ error: authErr.message }, 500);
+  if (authErr) {
+    const msg = authErr.message.toLowerCase();
+    if (!msg.includes("not found")) {
+      // Auth deletion failed but public data is already anonymized — log and surface the partial failure
+      console.error(`[admin-delete] auth.deleteUser failed for ${userId}: ${authErr.message}`);
+      return c.json({ error: authErr.message, partial: true }, 500);
+    }
   }
 
   return c.json({ success: true });
