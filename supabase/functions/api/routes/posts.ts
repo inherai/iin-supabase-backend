@@ -465,7 +465,7 @@ if (targetUserId) {
 
       const { data: apComments } = await supabase
         .from('comments').select('*').in('post_id', apIds)
-        .lte('created_at', session_start).order('created_at', { ascending: true })
+        .lte('created_at', session_start).order('created_at', { ascending: true }).limit(500)
 
       const apVisibleComments = viewerIsRecruiter
         ? (apComments || []).filter((cm: any) => cm.community_members_only !== true)

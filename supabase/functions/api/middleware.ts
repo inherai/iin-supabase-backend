@@ -103,8 +103,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
   // בדיקת קיום משתמש בטבלת users — עם cache של 60 דקות (מתואם לתוקף ה-JWT)
   const active = await isUserActive(userId);
   if (!active) {
-    await supabaseAdmin.auth.admin.deleteUser(userId);
-    return c.json({ error: 'User not found, deleted from auth' }, 404);
+    return c.json({ error: 'Unauthorized' }, 401);
   }
 
   // בניית אובייקט user מה-JWT claims (מקביל ל-data.user מ-getUser())

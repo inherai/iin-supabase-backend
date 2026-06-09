@@ -211,7 +211,7 @@ app.post('/', async (c) => {
         // 2. שולפים post_type ותגובות במקביל
         const [{ data: postTypes }, { data: comments, error: commentsError }] = await Promise.all([
           supabaseUser.from('posts').select('id, post_type').in('id', postIds),
-          supabaseUser.from('comments').select('*').in('post_id', postIds).order('created_at', { ascending: true }),
+          supabaseUser.from('comments').select('*').in('post_id', postIds).order('created_at', { ascending: true }).limit(200),
         ]);
 
         const postTypeMap = (postTypes || []).reduce((acc: any, p: any) => {
