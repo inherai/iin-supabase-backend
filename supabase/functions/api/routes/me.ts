@@ -193,8 +193,6 @@ app.put('/', async (c) => {
      updateUserVector(user.id);
   }
 
-  supabase.from('users').update({ scores_cached_at: null }).eq('uuid', user.id).then(() => {});
-
   // מחזירים לקליינט תשובה עם ה-Mapping החדש
   // ה-select() למעלה שלף גם את התמונה הקיימת ב-DB, אז נוכל להחזיר אותה נכון לקליינט
   const responseData = {

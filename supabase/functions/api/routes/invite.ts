@@ -68,7 +68,7 @@ app.get("/count", async (c) => {
     const cacheAge = cacheData?.scores_cached_at
       ? Date.now() - new Date(cacheData.scores_cached_at).getTime()
       : Infinity;
-    const cacheWarm = cacheAge < 60 * 60 * 1000
+    const cacheWarm = cacheAge < 4 * 60 * 60 * 1000
       && cacheData?.profile_strength_cache != null
       && cacheData?.activity_score_cache != null;
 
@@ -189,7 +189,7 @@ app.post("/", async (c) => {
     const cacheAge = inviterData?.scores_cached_at
       ? Date.now() - new Date(inviterData.scores_cached_at).getTime()
       : Infinity;
-    const cacheWarm = cacheAge < 60 * 60 * 1000
+    const cacheWarm = cacheAge < 4 * 60 * 60 * 1000
       && inviterData?.profile_strength_cache != null
       && inviterData?.activity_score_cache != null;
 

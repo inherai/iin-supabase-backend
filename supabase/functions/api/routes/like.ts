@@ -52,7 +52,6 @@ app.post('/', async (c) => {
           .eq('id', existingReaction.id)
 
         if (deleteError) throw deleteError
-        supabase.from('users').update({ scores_cached_at: null }).eq('uuid', user.id).then(() => {});
 
         return c.json({
           action: 'removed',
@@ -94,7 +93,6 @@ app.post('/', async (c) => {
       .single()
 
     if (insertError) throw insertError
-    supabase.from('users').update({ scores_cached_at: null }).eq('uuid', user.id).then(() => {});
 
     return c.json({
       action: 'added',
