@@ -910,7 +910,7 @@ app.get('/new-count', async (c) => {
     let query = supabase
       .from('posts')
       .select('id', { count: 'exact', head: true })
-      .gt('created_at', since)
+      .gt('sent_at', since)
 
     if (excludeEmail) {
       query = query.not('post_type', 'is', null).neq('post_type', 'email')

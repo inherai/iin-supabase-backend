@@ -110,22 +110,6 @@ app.get("/", async (c) => {
   return c.json(data ?? []);
 });
 
-// GET /api/connections/:id
-// Returns only the number of accepted connections for a specific profile user
-app.get("/:id", async (c) => {
-  const supabase = c.get("supabase");
-  const targetId = c.req.param("id");
-
-  const { count, error } = await supabase
-    .from("connections")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "accepted")
-    .or(`requester_id.eq.${targetId},receiver_id.eq.${targetId}`);
-
-  if (error) return c.json({ error: error.message }, 400);
-  return c.json({ count: count ?? 0 });
-});
-
 // GET /api/connections/accepted-ids
 // Returns: { ids: string[] } — all accepted connection user IDs for the current user (no pagination)
 app.get("/accepted-ids", async (c) => {
@@ -146,6 +130,22 @@ app.get("/accepted-ids", async (c) => {
   );
 
   return c.json({ ids });
+});
+
+// GET /api/connections/:id
+// Returns only the number of accepted connections for a specific profile user
+app.get("/:id", async (c) => {
+  const supabase = c.get("supabase");
+  const targetId = c.req.param("id");
+
+  const { count, error } = await supabase
+    .from("connections")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "accepted")
+    .or(`requester_id.eq.${targetId},receiver_id.eq.${targetId}`);
+
+  if (error) return c.json({ error: error.message }, 400);
+  return c.json({ count: count ?? 0 });
 });
 
 // POST /api/connections/batch-status
