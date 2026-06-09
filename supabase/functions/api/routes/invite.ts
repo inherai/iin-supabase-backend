@@ -153,6 +153,20 @@ app.post("/", async (c) => {
       return c.json({ error: "recipient already exists" }, 409);
     }
 
+    const { data: existingInvite, error: existingInviteError } = await supabase
+      .from("invites")
+      .select("id")
+      .eq("recipient_email", normalizedRecipientEmail)
+      .eq("status", "pending")
+      .maybeSingle();
+
+    if (existingInviteError) {
+      return c.json({ error: existingInviteError.message }, 500);
+    }
+    if (existingInvite) {
+      return c.json({ error: "recipient already invited" }, 409);
+    }
+
     // Gate check: account age, profile strength, activity score
     const { data: inviterData, error: inviterDataError } = await supabase
       .from("users")
