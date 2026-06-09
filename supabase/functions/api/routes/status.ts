@@ -16,18 +16,6 @@ app.get("/", async (c) => {
   const isRecruiter =
     String(user.app_metadata?.role ?? "").toLowerCase().trim() === "recruiters";
 
-  let postsQuery = supabase
-    .from("posts")
-    .select("id", { count: "exact", head: true })
-    .gt("sent_at", since)
-    .not("post_type", "is", null)
-    .neq("post_type", "email")
-    .neq("sender", user.email);
-
-  if (isRecruiter) {
-    postsQuery = postsQuery.neq("community_members_only", true);
-  }
-
   const [
     notificationsResult,
     connectionsResult,
@@ -65,17 +53,21 @@ app.get("/", async (c) => {
         return { count: count ?? 0 };
       }),
 
-    // New posts since session start (only if since param provided)
+    // New feed activity since session start — includes posts bumped by new comments
     since
-      ? postsQuery
-      : Promise.resolve({ count: 0 }),
+      ? supabase.rpc("count_new_feed_activity", {
+          p_since: since,
+          p_user_email: user.email,
+          p_is_recruiter: isRecruiter,
+        })
+      : Promise.resolve({ data: 0, error: null }),
   ]);
 
   return c.json({
     unread_notifications: notificationsResult.count ?? 0,
     pending_connections: connectionsResult.count ?? 0,
     unread_messages: messagesResult.count ?? 0,
-    new_posts: postsResult.count ?? 0,
+    new_posts: (postsResult.data as number) ?? 0,
   });
 });
 
