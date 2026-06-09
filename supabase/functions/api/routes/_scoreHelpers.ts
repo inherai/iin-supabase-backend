@@ -265,10 +265,10 @@ export async function calculateActivityScore(
     activeDaysRes,
   ] = await Promise.all([
     supabase.from('posts').select('id', { count: 'exact', head: true })
-      .eq('posted_by_uuid', userId).not('post_type', 'is', null).neq('post_type', 'email')
+      .eq('sender', userEmail).not('post_type', 'is', null).neq('post_type', 'email')
       .gte('sent_at', sevenDaysAgo),
     supabase.from('posts').select('id', { count: 'exact', head: true })
-      .eq('posted_by_uuid', userId).not('post_type', 'is', null).neq('post_type', 'email')
+      .eq('sender', userEmail).not('post_type', 'is', null).neq('post_type', 'email')
       .lt('sent_at', sevenDaysAgo).gte('sent_at', thirtyDaysAgo),
 
     supabase.from('comments').select('id, posts!inner(post_type)', { count: 'exact', head: true })
