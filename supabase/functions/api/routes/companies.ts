@@ -5,6 +5,9 @@ const app = new Hono()
 
 // GET /api/companies - companies list with pagination and search
 app.get('/', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
   const supabase = c.get('supabase')
 
   const page = parseInt(c.req.query('page') || '1')
@@ -97,6 +100,9 @@ app.get('/', async (c) => {
 
 // GET /api/companies/:id - חברה בודדת לפי ID
 app.get('/:id', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
   const supabase = c.get('supabase')
   const companyId = c.req.param('id')
   const companyIdValue = /^\d+$/.test(companyId) ? parseInt(companyId, 10) : companyId

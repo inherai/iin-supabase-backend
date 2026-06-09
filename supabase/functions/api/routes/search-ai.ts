@@ -144,6 +144,8 @@ app.post('/', async (c) => {
           .from('posts')
           .select('id, subject, message, sent_at, sender, attachments, community_members_only')
           .or(parts)
+          .not('post_type', 'is', null)
+          .neq('post_type', 'email')
           .limit(20);
       })()
     ]);
@@ -216,6 +218,12 @@ app.post('/', async (c) => {
           acc[p.id] = p.post_type;
           return acc;
         }, {} as Record<string, string>);
+
+        // exclude email/null post_type from both semantic and keyword results
+        finalItems = finalItems.filter((p: any) => {
+          const pt = postTypeMap[p.id];
+          return pt && pt !== 'email';
+        });
 
         if (commentsError) throw commentsError;
 
