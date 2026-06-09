@@ -82,6 +82,28 @@ app.get('/', async (c) => {
   return c.json({ pending, active, history })
 })
 
+// GET /api/profile-access-request/sent
+// Recruiter polls the statuses of requests they've sent
+app.get('/sent', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const isAdmin = user.app_metadata?.is_admin === true
+  const isRecruiter = user.app_metadata?.role === 'recruiters'
+  if (!isAdmin && !isRecruiter) return c.json({ error: 'Access denied' }, 403)
+
+  const supabaseAdmin = makeAdmin()
+
+  const { data: requests, error } = await supabaseAdmin
+    .from('profile_access_requests')
+    .select('id, candidate_id, status, approved_fields, updated_at')
+    .eq('recruiter_id', user.id)
+    .order('updated_at', { ascending: false })
+
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json(requests ?? [])
+})
+
 // POST /api/profile-access-request
 // Recruiter creates a pending request
 app.post('/', async (c) => {
