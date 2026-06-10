@@ -46,6 +46,30 @@ async function singleAuthor(admin: any, userId: string, isAnonymous: boolean) {
   return u ?? null
 }
 
+// ─── Counts (tab badges) ─────────────────────────────────────────────────────
+
+app.get('/:companyId/counts', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const supabase = c.get('supabase')
+  const companyId = parseInt(c.req.param('companyId'))
+
+  const [reviews, fit, salaries, interviews] = await Promise.all([
+    supabase.from('company_reviews').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    supabase.from('company_fit_ratings').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    supabase.from('company_salaries').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    supabase.from('company_interviews').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+  ])
+
+  return c.json({
+    reviews: reviews.count ?? 0,
+    fit: fit.count ?? 0,
+    salaries: salaries.count ?? 0,
+    interviews: interviews.count ?? 0,
+  })
+})
+
 // ─── My Contributions ────────────────────────────────────────────────────────
 
 app.get('/mine', async (c) => {
