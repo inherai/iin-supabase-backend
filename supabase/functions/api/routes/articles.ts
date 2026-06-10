@@ -62,11 +62,12 @@ async function enrichArticle(article: any, supabase: any) {
 
   // Fetch author info — user or company
   if (article.company_id) {
-    const { data: company } = await supabase
+    const { data: co } = await supabase
       .from('companies')
-      .select('id, name, logo_url')
+      .select('id, name, logo')
       .eq('id', article.company_id)
       .maybeSingle()
+    const company = co ? { id: co.id, name: co.name, logo_url: co.logo ?? null } : null
     return { ...article, company }
   }
 
