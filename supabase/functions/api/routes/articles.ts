@@ -71,11 +71,14 @@ async function enrichArticle(article: any, supabase: any) {
   }
 
   if (article.author_uuid) {
-    const { data: author } = await supabase
-      .from('users')
-      .select('id, first_name, last_name, profile_image_url, headline')
-      .eq('id', article.author_uuid)
+    const { data: user } = await supabase
+      .from('public_users_view')
+      .select('uuid, first_name, last_name, image, headline')
+      .eq('uuid', article.author_uuid)
       .maybeSingle()
+    const author = user
+      ? { id: user.uuid, first_name: user.first_name, last_name: user.last_name, profile_image_url: user.image, headline: user.headline }
+      : null
     return { ...article, author }
   }
 
@@ -122,12 +125,13 @@ app.get('/', async (c) => {
     if (error) throw error
 
     const hasMore = data.length > limit
-    const articles = hasMore ? data.slice(0, limit) : data
-    const last = articles[articles.length - 1]
+    const raw = hasMore ? data.slice(0, limit) : data
+    const last = raw[raw.length - 1]
     const nextCursor = hasMore && last
       ? `${last.published_at}__${last.id}`
       : null
 
+    const articles = await Promise.all(raw.map((a: any) => enrichArticle(a, supabase)))
     return c.json({ articles, nextCursor })
   } catch (err) {
     console.error('GET /articles error:', err)
@@ -181,7 +185,8 @@ app.get('/editors-picks', async (c) => {
       .limit(6)
 
     if (error) throw error
-    return c.json({ articles: data || [] })
+    const articles = await Promise.all((data || []).map((a: any) => enrichArticle(a, supabase)))
+    return c.json({ articles })
   } catch (err) {
     console.error('GET /articles/editors-picks error:', err)
     return c.json({ error: 'Internal server error' }, 500)
@@ -250,7 +255,7 @@ app.get('/user/:userId', async (c) => {
   const userId = c.req.param('userId')
 
   try {
-    const [articlesRes, profileRes, impressionsRes] = await Promise.all([
+    const [articlesRes, profileRes, impressionsRes, authorRes] = await Promise.all([
       supabase
         .from('articles')
         .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name')
@@ -276,6 +281,11 @@ app.get('/user/:userId', async (c) => {
             .is('deleted_at', null)
           ).data?.map((a: any) => a.id) || []
         ),
+      supabase
+        .from('public_users_view')
+        .select('uuid, first_name, last_name, image, headline')
+        .eq('uuid', userId)
+        .maybeSingle(),
     ])
 
     // Top skills from this author's articles
@@ -298,10 +308,18 @@ app.get('/user/:userId', async (c) => {
         .map(({ skill }) => skill)
     }
 
+    const u = authorRes.data
     return c.json({
       articles: articlesRes.data || [],
       writing_bio: profileRes.data?.writing_bio || null,
       top_skills: topSkills,
+      author: u ? {
+        id: u.uuid,
+        first_name: u.first_name,
+        last_name: u.last_name,
+        has_image: !!u.image,
+        headline: u.headline,
+      } : null,
       stats: {
         article_count: (articlesRes.data || []).length,
         total_views: (impressionsRes.data || []).length,
