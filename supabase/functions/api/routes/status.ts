@@ -37,21 +37,7 @@ app.get("/", async (c) => {
       .eq("status", "pending"),
 
     // Unread messages across all conversations
-    supabase
-      .from("conversations")
-      .select("id")
-      .or(`user1_id.eq.${user.id},user2_id.eq.${user.id}`)
-      .then(async ({ data: convs }) => {
-        if (!convs || convs.length === 0) return { count: 0 };
-        const convIds = convs.map((conv: any) => conv.id);
-        const { count } = await supabase
-          .from("messages")
-          .select("id", { count: "exact", head: true })
-          .in("conversation_id", convIds)
-          .eq("is_read", false)
-          .neq("sender_id", user.id);
-        return { count: count ?? 0 };
-      }),
+    supabase.rpc("count_unread_messages", { p_user_id: user.id }),
 
     // New feed activity since session start — includes posts bumped by new comments
     since
@@ -66,7 +52,7 @@ app.get("/", async (c) => {
   return c.json({
     unread_notifications: notificationsResult.count ?? 0,
     pending_connections: connectionsResult.count ?? 0,
-    unread_messages: messagesResult.count ?? 0,
+    unread_messages: (messagesResult.data as number) ?? 0,
     new_posts: (postsResult.data as number) ?? 0,
   });
 });
