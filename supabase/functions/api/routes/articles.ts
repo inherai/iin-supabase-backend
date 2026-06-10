@@ -64,10 +64,10 @@ async function enrichArticle(article: any, supabase: any) {
   if (article.company_id) {
     const { data: co } = await supabase
       .from('companies')
-      .select('id, name, logo')
+      .select('id, name, logo, tagline')
       .eq('id', article.company_id)
       .maybeSingle()
-    const company = co ? { id: co.id, name: co.name, logo_url: co.logo ?? null } : null
+    const company = co ? { id: co.id, name: co.name, logo_url: co.logo ?? null, tagline: co.tagline ?? null } : null
     return { ...article, company }
   }
 
