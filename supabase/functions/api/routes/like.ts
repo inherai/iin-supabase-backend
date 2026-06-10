@@ -128,8 +128,8 @@ app.get('/', async (c) => {
       return c.json({ error: 'Missing target_id or target_type' }, 400)
     }
 
-    if (!['post', 'comment'].includes(target_type)) {
-      return c.json({ error: 'Invalid target_type. Must be post or comment' }, 400)
+    if (!['post', 'comment', 'article'].includes(target_type)) {
+      return c.json({ error: 'Invalid target_type. Must be post, comment, or article' }, 400)
     }
 
     if (reaction_type && !VALID_REACTIONS.includes(reaction_type)) {
