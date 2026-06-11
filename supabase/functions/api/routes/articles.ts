@@ -523,6 +523,66 @@ app.get('/user/:userId', async (c) => {
   }
 })
 
+// ─── GET /articles/company/:companyId — published articles by a company ────────
+
+app.get('/company/:companyId', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const companyId = parseInt(c.req.param('companyId'))
+  if (isNaN(companyId)) return c.json({ error: 'Invalid company ID' }, 400)
+
+  try {
+    const [companyRes, articlesRes] = await Promise.all([
+      supabase.from('companies').select('id, name, logo, tagline').eq('id', companyId).single(),
+      supabase
+        .from('articles')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name')
+        .eq('company_id', companyId)
+        .eq('status', 'published')
+        .is('deleted_at', null)
+        .order('is_pinned', { ascending: false })
+        .order('published_at', { ascending: false }),
+    ])
+
+    if (!companyRes.data) return c.json({ error: 'Company not found' }, 404)
+
+    const articles = articlesRes.data || []
+    const articleIds = articles.map((a: any) => a.id)
+
+    const [skillRows, impressionsRes] = await Promise.all([
+      articleIds.length
+        ? supabase.from('article_skills').select('skill_id, skills(id, name)').in('article_id', articleIds)
+        : Promise.resolve({ data: [] }),
+      articleIds.length
+        ? supabase.from('article_impressions').select('id').in('article_id', articleIds)
+        : Promise.resolve({ data: [] }),
+    ])
+
+    const counts: Record<string, { skill: any; count: number }> = {}
+    for (const row of (skillRows.data || [])) {
+      const sid = row.skill_id
+      if (!counts[sid]) counts[sid] = { skill: row.skills, count: 0 }
+      counts[sid].count++
+    }
+    const topSkills = Object.values(counts)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5)
+      .map(({ skill }) => skill)
+
+    const co = companyRes.data
+    return c.json({
+      articles,
+      company: { id: co.id, name: co.name, logo_url: co.logo ?? null, tagline: co.tagline ?? null },
+      top_skills: topSkills,
+      stats: { article_count: articles.length, total_views: (impressionsRes.data || []).length },
+    })
+  } catch (err) {
+    console.error('GET /articles/company/:companyId error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 // ─── GET /articles/series/:authorId/:seriesName ───────────────────────────────
 
 app.get('/series/:authorId/:seriesName', async (c) => {
