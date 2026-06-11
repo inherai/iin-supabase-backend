@@ -456,7 +456,7 @@ app.get('/user/:userId', async (c) => {
       .is('deleted_at', null)
     const articleIds = (idRows || []).map((a: any) => a.id)
 
-    const [articlesRes, profileRes, impressionsRes, authorRes, coverRes] = await Promise.all([
+    const [articlesRes, profileRes, impressionsRes, authorRes, coverRes, followRes] = await Promise.all([
       supabase
         .from('articles')
         .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name')
@@ -483,6 +483,14 @@ app.get('/user/:userId', async (c) => {
         .select('cover_image_url')
         .eq('uuid', userId)
         .maybeSingle(),
+      supabase
+        .from('article_author_follows')
+        .select('follower_uuid')
+        .eq('author_uuid', userId)
+        .eq('follower_uuid', user.id)
+        .maybeSingle()
+        .then((r: any) => r)
+        .catch(() => ({ data: null })),
     ])
 
     // Count views per article for individual view_count
@@ -528,6 +536,7 @@ app.get('/user/:userId', async (c) => {
         headline: u.headline ?? null,
         cover_image_url: (coverRes.data as any)?.cover_image_url ?? null,
       } : null,
+      is_following: !!(followRes as any)?.data,
       stats: {
         article_count: articles.length,
         total_views: (impressionsRes.data || []).length,
@@ -535,6 +544,43 @@ app.get('/user/:userId', async (c) => {
     })
   } catch (err) {
     console.error('GET /articles/user/:userId error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── POST /articles/follow/:userId — follow an author ────────────────────────
+
+app.post('/follow/:userId', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const authorId = c.req.param('userId')
+  if (authorId === user.id) return c.json({ error: 'Cannot follow yourself' }, 400)
+  try {
+    await supabase.from('article_author_follows')
+      .upsert({ follower_uuid: user.id, author_uuid: authorId }, { onConflict: 'follower_uuid,author_uuid' })
+    return c.json({ is_following: true })
+  } catch (err) {
+    console.error('POST /articles/follow/:userId error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── DELETE /articles/follow/:userId — unfollow an author ────────────────────
+
+app.delete('/follow/:userId', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const authorId = c.req.param('userId')
+  try {
+    await supabase.from('article_author_follows')
+      .delete()
+      .eq('follower_uuid', user.id)
+      .eq('author_uuid', authorId)
+    return c.json({ is_following: false })
+  } catch (err) {
+    console.error('DELETE /articles/follow/:userId error:', err)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })
