@@ -447,7 +447,16 @@ app.get('/user/:userId', async (c) => {
   const userId = c.req.param('userId')
 
   try {
-    const [articlesRes, profileRes, impressionsRes, authorRes] = await Promise.all([
+    // Fetch article IDs first so all parallel queries can use them cleanly
+    const { data: idRows } = await supabase
+      .from('articles')
+      .select('id')
+      .eq('author_uuid', userId)
+      .eq('status', 'published')
+      .is('deleted_at', null)
+    const articleIds = (idRows || []).map((a: any) => a.id)
+
+    const [articlesRes, profileRes, impressionsRes, authorRes, coverRes] = await Promise.all([
       supabase
         .from('articles')
         .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name')
@@ -461,27 +470,33 @@ app.get('/user/:userId', async (c) => {
         .select('writing_bio')
         .eq('author_uuid', userId)
         .maybeSingle(),
-      supabase
-        .from('article_impressions')
-        .select('article_id')
-        .in('article_id',
-          (await supabase
-            .from('articles')
-            .select('id')
-            .eq('author_uuid', userId)
-            .eq('status', 'published')
-            .is('deleted_at', null)
-          ).data?.map((a: any) => a.id) || []
-        ),
+      articleIds.length
+        ? supabase.from('article_impressions').select('article_id').in('article_id', articleIds)
+        : Promise.resolve({ data: [] as any[] }),
       supabase
         .from('public_users_view')
         .select('uuid, first_name, last_name, image, headline')
         .eq('uuid', userId)
         .maybeSingle(),
+      supabase
+        .from('users')
+        .select('cover_image_url')
+        .eq('uuid', userId)
+        .maybeSingle(),
     ])
 
-    // Top skills from this author's articles
-    const articleIds = (articlesRes.data || []).map((a: any) => a.id)
+    // Count views per article for individual view_count
+    const viewsPerArticle: Record<string, number> = {}
+    for (const row of impressionsRes.data || []) {
+      viewsPerArticle[row.article_id] = (viewsPerArticle[row.article_id] || 0) + 1
+    }
+
+    const articles = (articlesRes.data || []).map((a: any) => ({
+      ...a,
+      view_count: viewsPerArticle[a.id] || 0,
+    }))
+
+    // Top skills with article count per skill
     let topSkills: any[] = []
     if (articleIds.length) {
       const { data: skillRows } = await supabase
@@ -496,13 +511,13 @@ app.get('/user/:userId', async (c) => {
       }
       topSkills = Object.values(counts)
         .sort((a, b) => b.count - a.count)
-        .slice(0, 5)
-        .map(({ skill }) => skill)
+        .slice(0, 6)
+        .map(({ skill, count }) => ({ ...skill, count }))
     }
 
     const u = authorRes.data
     return c.json({
-      articles: articlesRes.data || [],
+      articles,
       writing_bio: profileRes.data?.writing_bio || null,
       top_skills: topSkills,
       author: u ? {
@@ -510,10 +525,11 @@ app.get('/user/:userId', async (c) => {
         first_name: u.first_name,
         last_name: u.last_name,
         has_image: !!u.image,
-        headline: u.headline,
+        headline: u.headline ?? null,
+        cover_image_url: (coverRes.data as any)?.cover_image_url ?? null,
       } : null,
       stats: {
-        article_count: (articlesRes.data || []).length,
+        article_count: articles.length,
         total_views: (impressionsRes.data || []).length,
       },
     })
