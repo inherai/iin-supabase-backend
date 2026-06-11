@@ -285,9 +285,12 @@ app.get('/search', async (c) => {
   // Escape LIKE special characters so user input is treated as literal text
   const esc = q.replace(/[%_\\]/g, '\\$&')
 
+  // Split into words for multi-word name matching ("duallin management" → ["duallin","management"])
+  const words = esc.split(/\s+/).filter(Boolean)
+
   try {
-    // Run title/excerpt search and author name search in parallel
-    const [articleRes, authorRes, companyRes] = await Promise.all([
+    // Run all searches in parallel; author search runs one query per word (all parallel)
+    const [articleRes, authorWordResults, companyRes] = await Promise.all([
       supabase
         .from('articles')
         .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name')
@@ -297,12 +300,14 @@ app.get('/search', async (c) => {
         .order('published_at', { ascending: false })
         .limit(20),
 
-      // Search by author first_name / last_name
-      supabase
-        .from('public_users_view')
-        .select('uuid')
-        .or(`first_name.ilike.%${esc}%,last_name.ilike.%${esc}%`)
-        .limit(10),
+      // Each word must match first_name OR last_name; intersect results → handles "first last" queries
+      Promise.all(words.map(word =>
+        supabase
+          .from('public_users_view')
+          .select('uuid')
+          .or(`first_name.ilike.%${word}%,last_name.ilike.%${word}%`)
+          .limit(50)
+      )),
 
       // Search by company name
       supabase
@@ -312,8 +317,14 @@ app.get('/search', async (c) => {
         .limit(10),
     ])
 
-    // Collect extra article IDs from author / company matches
-    const authorIds  = (authorRes.data  || []).map((u: any) => u.uuid)
+    // Intersect word results: user must match every word in at least one name field
+    let authorIds: string[]
+    if (words.length >= 2) {
+      const sets = authorWordResults.map((r: any) => new Set((r.data || []).map((u: any) => u.uuid as string)))
+      authorIds = [...(sets[0] as Set<string>)].filter(id => sets.slice(1).every((s: Set<string>) => s.has(id)))
+    } else {
+      authorIds = (authorWordResults[0]?.data || []).map((u: any) => u.uuid)
+    }
     const companyIds = (companyRes.data || []).map((co: any) => co.id)
 
     let byAuthor: any[] = []
