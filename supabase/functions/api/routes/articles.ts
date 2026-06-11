@@ -92,12 +92,40 @@ app.get('/filter-tags', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
-  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 40)
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100)
+  const q = c.req.query('q')?.trim()
 
   try {
-    const { data, error } = await supabase.rpc('get_article_filter_tags', {
-      p_limit: limit,
-    })
+    if (q) {
+      // Search skills/interests by name — only those that appear on published articles
+      const [{ data: skillRows }, { data: interestRows }] = await Promise.all([
+        supabase
+          .from('article_skills')
+          .select('skills!inner(id, name)')
+          .ilike('skills.name', `%${q}%`)
+          .limit(limit),
+        supabase
+          .from('article_interests')
+          .select('interests!inner(id, name)')
+          .ilike('interests.name', `%${q}%`)
+          .limit(limit),
+      ])
+
+      const skillSet = new Map<number, any>()
+      for (const row of skillRows || []) {
+        const s = (row as any).skills
+        if (s) skillSet.set(s.id, { id: s.id, name: s.name, type: 'skill', article_count: 0, is_user_tag: false })
+      }
+      const interestSet = new Map<number, any>()
+      for (const row of interestRows || []) {
+        const i = (row as any).interests
+        if (i) interestSet.set(i.id, { id: i.id, name: i.name, type: 'interest', article_count: 0, is_user_tag: false })
+      }
+
+      return c.json({ tags: [...skillSet.values(), ...interestSet.values()] })
+    }
+
+    const { data, error } = await supabase.rpc('get_article_filter_tags', { p_limit: limit })
     if (error) throw error
     return c.json({ tags: data || [] })
   } catch (err) {
@@ -143,12 +171,72 @@ app.get('/', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
 
-  const skillId    = c.req.query('skill_id')
-  const interestId = c.req.query('interest_id')
-  const cursor     = c.req.query('cursor')          // format: "published_at__id"
-  const limit      = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  // Accept comma-separated IDs (new) or single IDs (backwards compat)
+  const skillIdsParam    = c.req.query('skill_ids')    || c.req.query('skill_id')
+  const interestIdsParam = c.req.query('interest_ids') || c.req.query('interest_id')
+  const cursor           = c.req.query('cursor')
+  const limit            = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+
+  const skillIds    = skillIdsParam    ? skillIdsParam.split(',').map(Number).filter(n => n > 0)    : []
+  const interestIds = interestIdsParam ? interestIdsParam.split(',').map(Number).filter(n => n > 0) : []
+  const totalTags   = skillIds.length + interestIds.length
 
   try {
+    // ── Multi-tag filter (2+ tags): OR logic, ordered by match count ──────────
+    if (totalTags >= 2) {
+      const [skillRowsRes, interestRowsRes] = await Promise.all([
+        skillIds.length
+          ? supabase.from('article_skills').select('article_id').in('skill_id', skillIds)
+          : { data: [] },
+        interestIds.length
+          ? supabase.from('article_interests').select('article_id').in('interest_id', interestIds)
+          : { data: [] },
+      ])
+
+      const matchCount: Record<string, number> = {}
+      for (const row of [...(skillRowsRes.data || []), ...(interestRowsRes.data || [])]) {
+        const aid = String(row.article_id)
+        matchCount[aid] = (matchCount[aid] || 0) + 1
+      }
+
+      const candidateIds = Object.keys(matchCount)
+      if (!candidateIds.length) return c.json({ articles: [], nextCursor: null })
+
+      const { data: allMatching, error: matchErr } = await supabase
+        .from('articles')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url, is_editors_pick')
+        .eq('status', 'published')
+        .is('deleted_at', null)
+        .in('id', candidateIds)
+
+      if (matchErr) throw matchErr
+
+      // Sort: most matching tags first, then newest
+      const sorted = (allMatching || []).sort((a: any, b: any) => {
+        const diff = (matchCount[String(b.id)] || 0) - (matchCount[String(a.id)] || 0)
+        if (diff !== 0) return diff
+        return new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
+      })
+
+      // Offset-based pagination (cursor = "o:N")
+      let startIdx = 0
+      if (cursor && cursor.startsWith('o:')) startIdx = parseInt(cursor.slice(2)) || 0
+
+      const page = sorted.slice(startIdx, startIdx + limit + 1)
+      const hasMore = page.length > limit
+      const raw = hasMore ? page.slice(0, limit) : page
+      const nextCursorVal = hasMore ? `o:${startIdx + limit}` : null
+
+      const articleIds = raw.map((a: any) => String(a.id))
+      const [enrichedArticles, tagsMap] = await Promise.all([
+        Promise.all(raw.map((a: any) => enrichArticle(a, supabase))),
+        batchFetchTags(articleIds, supabase),
+      ])
+      const articles = enrichedArticles.map((a: any) => ({ ...a, tags: tagsMap[a.id] || [] }))
+      return c.json({ articles, nextCursor: nextCursorVal })
+    }
+
+    // ── Single tag or no filter: efficient cursor-based path ──────────────────
     let query = supabase
       .from('articles')
       .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url, is_editors_pick')
@@ -158,27 +246,23 @@ app.get('/', async (c) => {
       .order('id', { ascending: false })
       .limit(limit + 1)
 
-    if (skillId) {
+    if (skillIds.length === 1) {
       const { data: tagIds } = await supabase
-        .from('article_skills')
-        .select('article_id')
-        .eq('skill_id', skillId)
+        .from('article_skills').select('article_id').eq('skill_id', skillIds[0])
       const ids = (tagIds || []).map((r: any) => r.article_id)
       if (!ids.length) return c.json({ articles: [], nextCursor: null })
       query = query.in('id', ids)
     }
 
-    if (interestId) {
+    if (interestIds.length === 1) {
       const { data: tagIds } = await supabase
-        .from('article_interests')
-        .select('article_id')
-        .eq('interest_id', interestId)
+        .from('article_interests').select('article_id').eq('interest_id', interestIds[0])
       const ids = (tagIds || []).map((r: any) => r.article_id)
       if (!ids.length) return c.json({ articles: [], nextCursor: null })
       query = query.in('id', ids)
     }
 
-    if (cursor) {
+    if (cursor && !cursor.startsWith('o:')) {
       const [cursorDate, cursorId] = cursor.split('__')
       query = query.or(`published_at.lt.${cursorDate},and(published_at.eq.${cursorDate},id.lt.${cursorId})`)
     }
@@ -189,9 +273,7 @@ app.get('/', async (c) => {
     const hasMore = data.length > limit
     const raw = hasMore ? data.slice(0, limit) : data
     const last = raw[raw.length - 1]
-    const nextCursor = hasMore && last
-      ? `${last.published_at}__${last.id}`
-      : null
+    const nextCursor = hasMore && last ? `${last.published_at}__${last.id}` : null
 
     const articleIds = raw.map((a: any) => String(a.id))
     const [enrichedArticles, tagsMap] = await Promise.all([
