@@ -86,6 +86,56 @@ async function enrichArticle(article: any, supabase: any) {
   return article
 }
 
+// ─── GET /articles/filter-tags — smart tag list for the filter bar ────────────
+
+app.get('/filter-tags', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 40)
+
+  try {
+    const { data, error } = await supabase.rpc('get_article_filter_tags', {
+      p_limit: limit,
+    })
+    if (error) throw error
+    return c.json({ tags: data || [] })
+  } catch (err) {
+    console.error('GET /articles/filter-tags error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── Helper: batch-fetch tags (skills + interests) for a list of article IDs ──
+
+async function batchFetchTags(articleIds: string[], supabase: any) {
+  if (!articleIds.length) return {}
+
+  const [{ data: skillRows }, { data: interestRows }] = await Promise.all([
+    supabase
+      .from('article_skills')
+      .select('article_id, skills(id, name)')
+      .in('article_id', articleIds),
+    supabase
+      .from('article_interests')
+      .select('article_id, interests(id, name)')
+      .in('article_id', articleIds),
+  ])
+
+  const map: Record<string, any[]> = {}
+  for (const row of skillRows || []) {
+    if (!row.skills) continue
+    if (!map[row.article_id]) map[row.article_id] = []
+    map[row.article_id].push({ id: (row.skills as any).id, name: (row.skills as any).name, type: 'skill' })
+  }
+  for (const row of interestRows || []) {
+    if (!row.interests) continue
+    if (!map[row.article_id]) map[row.article_id] = []
+    map[row.article_id].push({ id: (row.interests as any).id, name: (row.interests as any).name, type: 'interest' })
+  }
+  return map
+}
+
 // ─── GET /articles — published feed (cursor-based pagination) ─────────────────
 
 app.get('/', async (c) => {
@@ -93,9 +143,10 @@ app.get('/', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
 
-  const skillId  = c.req.query('skill_id')
-  const cursor   = c.req.query('cursor')          // format: "published_at__id"
-  const limit    = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const skillId    = c.req.query('skill_id')
+  const interestId = c.req.query('interest_id')
+  const cursor     = c.req.query('cursor')          // format: "published_at__id"
+  const limit      = Math.min(parseInt(c.req.query('limit') || '20'), 50)
 
   try {
     let query = supabase
@@ -108,11 +159,21 @@ app.get('/', async (c) => {
       .limit(limit + 1)
 
     if (skillId) {
-      const { data: articleIds } = await supabase
+      const { data: tagIds } = await supabase
         .from('article_skills')
         .select('article_id')
         .eq('skill_id', skillId)
-      const ids = (articleIds || []).map((r: any) => r.article_id)
+      const ids = (tagIds || []).map((r: any) => r.article_id)
+      if (!ids.length) return c.json({ articles: [], nextCursor: null })
+      query = query.in('id', ids)
+    }
+
+    if (interestId) {
+      const { data: tagIds } = await supabase
+        .from('article_interests')
+        .select('article_id')
+        .eq('interest_id', interestId)
+      const ids = (tagIds || []).map((r: any) => r.article_id)
       if (!ids.length) return c.json({ articles: [], nextCursor: null })
       query = query.in('id', ids)
     }
@@ -132,7 +193,13 @@ app.get('/', async (c) => {
       ? `${last.published_at}__${last.id}`
       : null
 
-    const articles = await Promise.all(raw.map((a: any) => enrichArticle(a, supabase)))
+    const articleIds = raw.map((a: any) => String(a.id))
+    const [enrichedArticles, tagsMap] = await Promise.all([
+      Promise.all(raw.map((a: any) => enrichArticle(a, supabase))),
+      batchFetchTags(articleIds, supabase),
+    ])
+    const articles = enrichedArticles.map((a: any) => ({ ...a, tags: tagsMap[a.id] || [] }))
+
     return c.json({ articles, nextCursor })
   } catch (err) {
     console.error('GET /articles error:', err)
@@ -430,12 +497,14 @@ app.get('/:id', async (c) => {
       return c.json({ error: 'Not found' }, 404)
     }
 
-    // Skills
-    const { data: skillRows } = await supabase
-      .from('article_skills')
-      .select('skill_id, skills(id, name)')
-      .eq('article_id', articleId)
-    const skills = (skillRows || []).map((r: any) => r.skills)
+    // Tags — skills + interests
+    const [{ data: skillRows }, { data: interestRows }] = await Promise.all([
+      supabase.from('article_skills').select('skill_id, skills(id, name)').eq('article_id', articleId),
+      supabase.from('article_interests').select('interest_id, interests(id, name)').eq('article_id', articleId),
+    ])
+    const skills = (skillRows || []).map((r: any) => ({ ...(r.skills as any), type: 'skill' })).filter(Boolean)
+    const interests = (interestRows || []).map((r: any) => ({ ...(r.interests as any), type: 'interest' })).filter(Boolean)
+    const tags = [...skills, ...interests]
 
     // Series navigation
     let seriesArticles: any[] = []
@@ -451,7 +520,7 @@ app.get('/:id', async (c) => {
       seriesArticles = data || []
     }
 
-    // Related articles (skill overlap)
+    // Related articles (skill + interest overlap)
     let related: any[] = []
     if (skills.length) {
       const skillIds = skills.map((s: any) => s.id)
@@ -497,7 +566,7 @@ app.get('/:id', async (c) => {
     const enriched = await enrichArticle(article, supabase)
 
     return c.json({
-      article: { ...enriched, skills, view_count: viewCount || 0 },
+      article: { ...enriched, skills, interests, tags, view_count: viewCount || 0 },
       series: seriesArticles,
       related,
       more_from_author: moreFromAuthor,
@@ -515,7 +584,7 @@ app.post('/', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
 
-  const { title = '', content = '', cover_image_url, company_id, skill_ids = [], series_name, series_order } = await c.req.json()
+  const { title = '', content = '', cover_image_url, company_id, skill_ids = [], interest_ids = [], series_name, series_order } = await c.req.json()
 
   const sanitized = sanitizeHtml(content)
   const plain = stripHtml(sanitized)
@@ -540,12 +609,18 @@ app.post('/', async (c) => {
 
     if (error) throw error
 
-    // Insert skills
+    const inserts: Promise<any>[] = []
     if (skill_ids.length && article) {
-      await supabase.from('article_skills').insert(
+      inserts.push(supabase.from('article_skills').insert(
         skill_ids.map((sid: number) => ({ article_id: article.id, skill_id: sid }))
-      )
+      ))
     }
+    if (interest_ids.length && article) {
+      inserts.push(supabase.from('article_interests').insert(
+        interest_ids.map((iid: number) => ({ article_id: article.id, interest_id: iid }))
+      ))
+    }
+    await Promise.all(inserts)
 
     return c.json({ article })
   } catch (err) {
@@ -562,7 +637,7 @@ app.put('/:id', async (c) => {
   const supabase = c.get('supabase')
   const articleId = c.req.param('id')
 
-  const { title, content, cover_image_url, company_id, skill_ids, series_name, series_order } = await c.req.json()
+  const { title, content, cover_image_url, company_id, skill_ids, interest_ids, series_name, series_order } = await c.req.json()
 
   try {
     // Verify ownership
@@ -600,15 +675,27 @@ app.put('/:id', async (c) => {
     const { error } = await supabase.from('articles').update(updates).eq('id', articleId)
     if (error) throw error
 
-    // Replace skills if provided
+    // Replace tags if provided
+    const tagUpdates: Promise<any>[] = []
     if (skill_ids !== undefined) {
-      await supabase.from('article_skills').delete().eq('article_id', articleId)
-      if (skill_ids.length) {
-        await supabase.from('article_skills').insert(
-          skill_ids.map((sid: number) => ({ article_id: articleId, skill_id: sid }))
+      tagUpdates.push(
+        supabase.from('article_skills').delete().eq('article_id', articleId).then(() =>
+          skill_ids.length
+            ? supabase.from('article_skills').insert(skill_ids.map((sid: number) => ({ article_id: articleId, skill_id: sid })))
+            : Promise.resolve()
         )
-      }
+      )
     }
+    if (interest_ids !== undefined) {
+      tagUpdates.push(
+        supabase.from('article_interests').delete().eq('article_id', articleId).then(() =>
+          interest_ids.length
+            ? supabase.from('article_interests').insert(interest_ids.map((iid: number) => ({ article_id: articleId, interest_id: iid })))
+            : Promise.resolve()
+        )
+      )
+    }
+    await Promise.all(tagUpdates)
 
     return c.json({ success: true })
   } catch (err) {

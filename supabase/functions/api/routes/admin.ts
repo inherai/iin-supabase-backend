@@ -591,7 +591,14 @@ app.post("/companies", async (c) => {
 
   if (!body.name) return c.json({ error: "name is required" }, 400);
 
-  const { id, created_at, ...insertData } = body;
+  const { id, created_at, owner_email, ...insertData } = body;
+
+  // Resolve owner_email → owner_uuid
+  if (owner_email) {
+    const { data: resolvedUuid, error: rpcError } = await db.rpc('get_uuid_by_email', { p_email: owner_email.trim() });
+    if (rpcError || !resolvedUuid) return c.json({ error: `User not found for email: ${owner_email}` }, 404);
+    insertData.owner_uuid = resolvedUuid;
+  }
 
   const { data, error } = await db
     .from("companies")
