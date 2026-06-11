@@ -56,11 +56,10 @@ function sanitizeHtml(html: string): string {
     })
 }
 
-/** Inline author join for articles list */
+/** Single-article enrich — used only when fetching one article */
 async function enrichArticle(article: any, supabase: any) {
   if (article.author_type === 'guest') return article
 
-  // Fetch author info — user or company
   if (article.company_id) {
     const { data: co } = await supabase
       .from('companies')
@@ -84,6 +83,50 @@ async function enrichArticle(article: any, supabase: any) {
   }
 
   return article
+}
+
+/**
+ * Batch enrich a list of articles — 2 DB queries regardless of list size.
+ * Replaces Promise.all(articles.map(enrichArticle)) which was N queries.
+ */
+async function batchEnrichArticles(articles: any[], supabase: any): Promise<any[]> {
+  if (!articles.length) return articles
+
+  const userUuids = [...new Set(
+    articles.filter(a => a.author_type !== 'guest' && a.author_uuid && !a.company_id)
+            .map(a => a.author_uuid)
+  )]
+  const companyIds = [...new Set(
+    articles.filter(a => a.company_id).map(a => a.company_id)
+  )]
+
+  const [usersRes, companiesRes] = await Promise.all([
+    userUuids.length
+      ? supabase.from('public_users_view').select('uuid, first_name, last_name, image, headline').in('uuid', userUuids)
+      : { data: [] },
+    companyIds.length
+      ? supabase.from('companies').select('id, name, logo, tagline').in('id', companyIds)
+      : { data: [] },
+  ])
+
+  const userMap = new Map<string, any>()
+  for (const u of usersRes.data || []) userMap.set(u.uuid, u)
+
+  const companyMap = new Map<number, any>()
+  for (const co of companiesRes.data || []) companyMap.set(co.id, co)
+
+  return articles.map(a => {
+    if (a.author_type === 'guest') return a
+    if (a.company_id) {
+      const co = companyMap.get(a.company_id)
+      return { ...a, company: co ? { id: co.id, name: co.name, logo_url: co.logo ?? null, tagline: co.tagline ?? null } : null }
+    }
+    if (a.author_uuid) {
+      const u = userMap.get(a.author_uuid)
+      return { ...a, author: u ? { id: u.uuid, first_name: u.first_name, last_name: u.last_name, profile_image_url: u.image, headline: u.headline } : null }
+    }
+    return a
+  })
 }
 
 // ─── GET /articles/filter-tags — smart tag list for the filter bar ────────────
@@ -168,14 +211,13 @@ async function batchFetchTags(articleIds: string[], supabase: any) {
   return map
 }
 
-// ─── GET /articles — published feed (cursor-based pagination) ─────────────────
+// ─── GET /articles — published feed (single-RPC, keyset pagination) ───────────
 
 app.get('/', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
 
-  // Accept comma-separated IDs (new) or single IDs (backwards compat)
   const skillIdsParam    = c.req.query('skill_ids')    || c.req.query('skill_id')
   const interestIdsParam = c.req.query('interest_ids') || c.req.query('interest_id')
   const cursor           = c.req.query('cursor')
@@ -183,105 +225,42 @@ app.get('/', async (c) => {
 
   const skillIds    = skillIdsParam    ? skillIdsParam.split(',').map(Number).filter(n => n > 0)    : []
   const interestIds = interestIdsParam ? interestIdsParam.split(',').map(Number).filter(n => n > 0) : []
-  const totalTags   = skillIds.length + interestIds.length
+
+  // Cursor format: "{match_count}__{published_at}__{uuid}"
+  let cursorMatch: number | null = null
+  let cursorDate:  string | null = null
+  let cursorId:    string | null = null
+  if (cursor) {
+    const parts = cursor.split('__')
+    if (parts.length === 3) {
+      cursorMatch = parseInt(parts[0])
+      cursorDate  = parts[1]
+      cursorId    = parts[2]
+    }
+  }
 
   try {
-    // ── Multi-tag filter (2+ tags): OR logic, ordered by match count ──────────
-    if (totalTags >= 2) {
-      const [skillRowsRes, interestRowsRes] = await Promise.all([
-        skillIds.length
-          ? supabase.from('article_skills').select('article_id').in('skill_id', skillIds)
-          : { data: [] },
-        interestIds.length
-          ? supabase.from('article_interests').select('article_id').in('interest_id', interestIds)
-          : { data: [] },
-      ])
+    const { data, error } = await supabase.rpc('get_articles_feed', {
+      p_skill_ids:    skillIds,
+      p_interest_ids: interestIds,
+      p_cursor_match: cursorMatch,
+      p_cursor_date:  cursorDate,
+      p_cursor_id:    cursorId,
+      p_limit:        limit,
+    })
 
-      const matchCount: Record<string, number> = {}
-      for (const row of [...(skillRowsRes.data || []), ...(interestRowsRes.data || [])]) {
-        const aid = String(row.article_id)
-        matchCount[aid] = (matchCount[aid] || 0) + 1
-      }
-
-      const candidateIds = Object.keys(matchCount)
-      if (!candidateIds.length) return c.json({ articles: [], nextCursor: null })
-
-      const { data: allMatching, error: matchErr } = await supabase
-        .from('articles')
-        .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url, is_editors_pick')
-        .eq('status', 'published')
-        .is('deleted_at', null)
-        .in('id', candidateIds)
-
-      if (matchErr) throw matchErr
-
-      // Sort: most matching tags first, then newest
-      const sorted = (allMatching || []).sort((a: any, b: any) => {
-        const diff = (matchCount[String(b.id)] || 0) - (matchCount[String(a.id)] || 0)
-        if (diff !== 0) return diff
-        return new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
-      })
-
-      // Offset-based pagination (cursor = "o:N")
-      let startIdx = 0
-      if (cursor && cursor.startsWith('o:')) startIdx = parseInt(cursor.slice(2)) || 0
-
-      const page = sorted.slice(startIdx, startIdx + limit + 1)
-      const hasMore = page.length > limit
-      const raw = hasMore ? page.slice(0, limit) : page
-      const nextCursorVal = hasMore ? `o:${startIdx + limit}` : null
-
-      const articleIds = raw.map((a: any) => String(a.id))
-      const [enrichedArticles, tagsMap] = await Promise.all([
-        Promise.all(raw.map((a: any) => enrichArticle(a, supabase))),
-        batchFetchTags(articleIds, supabase),
-      ])
-      const articles = enrichedArticles.map((a: any) => ({ ...a, tags: tagsMap[a.id] || [] }))
-      return c.json({ articles, nextCursor: nextCursorVal })
-    }
-
-    // ── Single tag or no filter: efficient cursor-based path ──────────────────
-    let query = supabase
-      .from('articles')
-      .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url, is_editors_pick')
-      .eq('status', 'published')
-      .is('deleted_at', null)
-      .order('published_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(limit + 1)
-
-    if (skillIds.length === 1) {
-      const { data: tagIds } = await supabase
-        .from('article_skills').select('article_id').eq('skill_id', skillIds[0])
-      const ids = (tagIds || []).map((r: any) => r.article_id)
-      if (!ids.length) return c.json({ articles: [], nextCursor: null })
-      query = query.in('id', ids)
-    }
-
-    if (interestIds.length === 1) {
-      const { data: tagIds } = await supabase
-        .from('article_interests').select('article_id').eq('interest_id', interestIds[0])
-      const ids = (tagIds || []).map((r: any) => r.article_id)
-      if (!ids.length) return c.json({ articles: [], nextCursor: null })
-      query = query.in('id', ids)
-    }
-
-    if (cursor && !cursor.startsWith('o:')) {
-      const [cursorDate, cursorId] = cursor.split('__')
-      query = query.or(`published_at.lt.${cursorDate},and(published_at.eq.${cursorDate},id.lt.${cursorId})`)
-    }
-
-    const { data, error } = await query
     if (error) throw error
 
-    const hasMore = data.length > limit
-    const raw = hasMore ? data.slice(0, limit) : data
-    const last = raw[raw.length - 1]
-    const nextCursor = hasMore && last ? `${last.published_at}__${last.id}` : null
+    const hasMore = (data || []).length > limit
+    const raw     = hasMore ? data.slice(0, limit) : (data || [])
+    const last    = raw[raw.length - 1]
+    const nextCursor = hasMore && last
+      ? `${last.match_count}__${last.published_at}__${last.id}`
+      : null
 
     const articleIds = raw.map((a: any) => String(a.id))
     const [enrichedArticles, tagsMap] = await Promise.all([
-      Promise.all(raw.map((a: any) => enrichArticle(a, supabase))),
+      batchEnrichArticles(raw, supabase),
       batchFetchTags(articleIds, supabase),
     ])
     const articles = enrichedArticles.map((a: any) => ({ ...a, tags: tagsMap[a.id] || [] }))
@@ -303,18 +282,66 @@ app.get('/search', async (c) => {
   const q = c.req.query('q')?.trim()
   if (!q) return c.json({ articles: [] })
 
-  try {
-    const { data, error } = await supabase
-      .from('articles')
-      .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name')
-      .eq('status', 'published')
-      .is('deleted_at', null)
-      .textSearch('title', q, { type: 'websearch', config: 'simple' })
-      .order('published_at', { ascending: false })
-      .limit(20)
+  // Escape LIKE special characters so user input is treated as literal text
+  const esc = q.replace(/[%_\\]/g, '\\$&')
 
-    if (error) throw error
-    return c.json({ articles: data || [] })
+  try {
+    // Run title/excerpt search and author name search in parallel
+    const [articleRes, authorRes, companyRes] = await Promise.all([
+      supabase
+        .from('articles')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name')
+        .eq('status', 'published')
+        .is('deleted_at', null)
+        .or(`title.ilike.%${esc}%,excerpt.ilike.%${esc}%`)
+        .order('published_at', { ascending: false })
+        .limit(20),
+
+      // Search by author first_name / last_name
+      supabase
+        .from('public_users_view')
+        .select('uuid')
+        .or(`first_name.ilike.%${esc}%,last_name.ilike.%${esc}%`)
+        .limit(10),
+
+      // Search by company name
+      supabase
+        .from('companies')
+        .select('id')
+        .ilike('name', `%${esc}%`)
+        .limit(10),
+    ])
+
+    // Collect extra article IDs from author / company matches
+    const authorIds  = (authorRes.data  || []).map((u: any) => u.uuid)
+    const companyIds = (companyRes.data || []).map((co: any) => co.id)
+
+    let byAuthor: any[] = []
+    if (authorIds.length || companyIds.length) {
+      const orClauses: string[] = []
+      if (authorIds.length)  orClauses.push(`author_uuid.in.(${authorIds.join(',')})`)
+      if (companyIds.length) orClauses.push(`company_id.in.(${companyIds.join(',')})`)
+
+      const { data } = await supabase
+        .from('articles')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name')
+        .eq('status', 'published')
+        .is('deleted_at', null)
+        .or(orClauses.join(','))
+        .order('published_at', { ascending: false })
+        .limit(20)
+      byAuthor = data || []
+    }
+
+    // Merge and deduplicate — title matches first, author matches appended
+    const seen = new Set<string>()
+    const merged: any[] = []
+    for (const a of [...(articleRes.data || []), ...byAuthor]) {
+      if (!seen.has(String(a.id))) { seen.add(String(a.id)); merged.push(a) }
+    }
+
+    const articles = await batchEnrichArticles(merged.slice(0, 20), supabase)
+    return c.json({ articles })
   } catch (err) {
     console.error('GET /articles/search error:', err)
     return c.json({ error: 'Internal server error' }, 500)
@@ -339,7 +366,7 @@ app.get('/editors-picks', async (c) => {
       .limit(6)
 
     if (error) throw error
-    const articles = await Promise.all((data || []).map((a: any) => enrichArticle(a, supabase)))
+    const articles = await batchEnrichArticles(data || [], supabase)
     return c.json({ articles })
   } catch (err) {
     console.error('GET /articles/editors-picks error:', err)
