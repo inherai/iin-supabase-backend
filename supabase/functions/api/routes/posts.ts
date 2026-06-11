@@ -817,6 +817,21 @@ if (targetUserId) {
       }))
     }
 
+    // Batch-fetch linked articles for posts that have one
+    const linkedArticleIds = [...new Set(
+      sourcePosts.map((p: any) => p.linked_article_id).filter(Boolean)
+    )] as string[]
+    const linkedArticlesById = new Map<string, any>()
+    if (linkedArticleIds.length > 0) {
+      const { data: linkedArticlesData } = await supabase
+        .from('articles')
+        .select('id, title, cover_image_url, excerpt, read_time')
+        .in('id', linkedArticleIds)
+        .eq('status', 'published')
+        .is('deleted_at', null)
+      ;(linkedArticlesData || []).forEach((a: any) => linkedArticlesById.set(String(a.id), a))
+    }
+
     const enrichedPosts = sourcePosts.map((post: any) => {
       const postLikes = allPostLikes?.filter((l: any) => l.target_id === post.id) || []
       const senderEmail = post.sender
@@ -872,6 +887,9 @@ if (targetUserId) {
         }))
 
       const { sender, ...postWithoutSender } = post
+      const linkedArticle = post.linked_article_id
+        ? linkedArticlesById.get(String(post.linked_article_id)) ?? null
+        : null
       return {
         ...postWithoutSender,
         ...(post.company_id ? { is_company_post: true } : {}),
@@ -887,6 +905,7 @@ if (targetUserId) {
         impressions_count: impressionCountMap.has(String(post.id))
           ? impressionCountMap.get(String(post.id))
           : undefined,
+        ...(linkedArticle ? { linked_article: linkedArticle } : {}),
       }
     })
 
@@ -1258,6 +1277,7 @@ app.post('/', async (c) => {
       const { subject, message, attachments, post_type } = body;
       const communityMembersOnlyInput = body.community_members_only ?? body.communityMembersOnly;
       const company_id = body.company_id ? Number(body.company_id) : null;
+      const linked_article_id = body.linked_article_id ? String(body.linked_article_id) : null;
 
       if (communityMembersOnlyInput !== undefined && typeof communityMembersOnlyInput !== 'boolean') {
         return c.json({ error: "community_members_only must be boolean" }, 400);
@@ -1293,7 +1313,8 @@ app.post('/', async (c) => {
         sent_at: new Date().toISOString(),
         post_type: post_type || 'discussion',
         community_members_only,
-        ...(company_id ? { company_id, posted_by_uuid: user.id } : { posted_by_uuid: user.id })
+        ...(company_id ? { company_id, posted_by_uuid: user.id } : { posted_by_uuid: user.id }),
+        ...(linked_article_id ? { linked_article_id } : {}),
       }).select().single();
 
       if (error) throw error;
@@ -1379,6 +1400,17 @@ app.post('/', async (c) => {
       if (post.company_id) {
         const { data: co } = await supabase.from('companies').select('id, name, logo').eq('id', post.company_id).maybeSingle();
         postCompanyAfterCreate = co;
+      }
+
+      // Fetch linked article data if present
+      let linkedArticleAfterCreate: any = null;
+      if (post.linked_article_id) {
+        const { data: la } = await supabase
+          .from('articles')
+          .select('id, title, cover_image_url, excerpt, read_time')
+          .eq('id', post.linked_article_id)
+          .maybeSingle();
+        linkedArticleAfterCreate = la ?? null;
       }
 
       const commentsEnriched = comments.map((comment: any) => {
@@ -1501,7 +1533,8 @@ app.post('/', async (c) => {
           user_reaction: userReactions[0] || null,
           is_liked: userReactions.length > 0,
           is_saved: !!savedRow,
-          saved_id: savedRow?.id ?? null
+          saved_id: savedRow?.id ?? null,
+          ...(linkedArticleAfterCreate ? { linked_article: linkedArticleAfterCreate } : {}),
         },
         mode: "app"
       });
