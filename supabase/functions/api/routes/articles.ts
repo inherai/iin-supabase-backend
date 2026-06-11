@@ -97,32 +97,36 @@ app.get('/filter-tags', async (c) => {
 
   try {
     if (q) {
-      // Search skills/interests by name — only those that appear on published articles
-      const [{ data: skillRows }, { data: interestRows }] = await Promise.all([
-        supabase
-          .from('article_skills')
-          .select('skills!inner(id, name)')
-          .ilike('skills.name', `%${q}%`)
-          .limit(limit),
-        supabase
-          .from('article_interests')
-          .select('interests!inner(id, name)')
-          .ilike('interests.name', `%${q}%`)
-          .limit(limit),
+      // Search the FULL skills + interests tables by name (not limited to tags on articles)
+      const [{ data: skillMatches }, { data: interestMatches }] = await Promise.all([
+        supabase.from('skills').select('id, name').ilike('name', `%${q}%`).order('name').limit(limit),
+        supabase.from('interests').select('id, name').ilike('name', `%${q}%`).order('name').limit(limit),
       ])
 
-      const skillSet = new Map<number, any>()
-      for (const row of skillRows || []) {
-        const s = (row as any).skills
-        if (s) skillSet.set(s.id, { id: s.id, name: s.name, type: 'skill', article_count: 0, is_user_tag: false })
-      }
-      const interestSet = new Map<number, any>()
-      for (const row of interestRows || []) {
-        const i = (row as any).interests
-        if (i) interestSet.set(i.id, { id: i.id, name: i.name, type: 'interest', article_count: 0, is_user_tag: false })
-      }
+      // Count how many published articles use each matched tag
+      const sIds = (skillMatches || []).map((s: any) => s.id)
+      const iIds = (interestMatches || []).map((i: any) => i.id)
 
-      return c.json({ tags: [...skillSet.values(), ...interestSet.values()] })
+      const [skillCountRes, interestCountRes] = await Promise.all([
+        sIds.length ? supabase.from('article_skills').select('skill_id').in('skill_id', sIds) : { data: [] },
+        iIds.length ? supabase.from('article_interests').select('interest_id').in('interest_id', iIds) : { data: [] },
+      ])
+
+      const sCount: Record<number, number> = {}
+      for (const r of skillCountRes.data || []) sCount[r.skill_id] = (sCount[r.skill_id] || 0) + 1
+      const iCount: Record<number, number> = {}
+      for (const r of interestCountRes.data || []) iCount[r.interest_id] = (iCount[r.interest_id] || 0) + 1
+
+      const tags = [
+        ...(skillMatches || []).map((s: any) => ({
+          id: s.id, name: s.name, type: 'skill', article_count: sCount[s.id] || 0, is_user_tag: false,
+        })),
+        ...(interestMatches || []).map((i: any) => ({
+          id: i.id, name: i.name, type: 'interest', article_count: iCount[i.id] || 0, is_user_tag: false,
+        })),
+      ].sort((a, b) => b.article_count - a.article_count)
+
+      return c.json({ tags })
     }
 
     const { data, error } = await supabase.rpc('get_article_filter_tags', { p_limit: limit })
