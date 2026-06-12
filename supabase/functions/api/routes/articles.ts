@@ -456,6 +456,11 @@ app.get('/user/:userId', async (c) => {
       .is('deleted_at', null)
     const articleIds = (idRows || []).map((a: any) => a.id)
 
+    // Non-owner visiting a page with no articles → 404 (don't expose empty profiles)
+    if (!articleIds.length && user.id !== userId) {
+      return c.json({ error: 'Author not found' }, 404)
+    }
+
     const [articlesRes, profileRes, impressionsRes, authorRes, coverRes, followRes] = await Promise.all([
       supabase
         .from('articles')
