@@ -767,6 +767,113 @@ app.put('/author-profile', async (c) => {
   }
 })
 
+// ─── GET /articles/authors — list authors with stats ─────────────────────────
+// sort=popular (by total views, then article count) | sort=new (by first published date)
+
+app.get('/authors', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+
+  const sort  = c.req.query('sort')  ?? 'popular'
+  const limit = Math.min(Number(c.req.query('limit') ?? '20'), 50)
+
+  try {
+    // Pull all published articles to aggregate per-author stats in-process
+    const { data: rows, error } = await supabase
+      .from('articles')
+      .select('id, author_uuid, published_at')
+      .eq('status', 'published')
+      .is('deleted_at', null)
+      .not('author_uuid', 'is', null)
+
+    if (error) throw error
+
+    // Group by author, track article→author for O(1) view-count lookup
+    const buckets: Record<string, {
+      articleIds: string[]
+      articleCount: number
+      firstPublished: string
+      totalViews: number
+    }> = {}
+    const articleToAuthor: Record<string, string> = {}
+
+    for (const a of rows || []) {
+      const uuid = String(a.author_uuid)
+      const aid  = String(a.id)
+      articleToAuthor[aid] = uuid
+      if (!buckets[uuid]) {
+        buckets[uuid] = { articleIds: [], articleCount: 0, firstPublished: a.published_at, totalViews: 0 }
+      }
+      buckets[uuid].articleIds.push(aid)
+      buckets[uuid].articleCount++
+      if (a.published_at < buckets[uuid].firstPublished) buckets[uuid].firstPublished = a.published_at
+    }
+
+    // Aggregate view counts across all articles
+    const allArticleIds = Object.keys(articleToAuthor)
+    if (allArticleIds.length) {
+      const { data: viewRows } = await supabase
+        .from('article_view_counts')
+        .select('article_id, view_count')
+        .in('article_id', allArticleIds)
+      for (const v of viewRows || []) {
+        const authorId = articleToAuthor[String(v.article_id)]
+        if (authorId) buckets[authorId].totalViews += v.view_count ?? 0
+      }
+    }
+
+    // Sort and take top N
+    const sorted = Object.entries(buckets).sort(([, a], [, b]) =>
+      sort === 'new'
+        ? new Date(b.firstPublished).getTime() - new Date(a.firstPublished).getTime()
+        : b.totalViews - a.totalViews || b.articleCount - a.articleCount
+    )
+    const top = sorted.slice(0, limit)
+    const topUuids = top.map(([uuid]) => uuid)
+    if (!topUuids.length) return c.json({ authors: [] })
+
+    // Fetch profiles + follower counts in parallel
+    const [profilesRes, followersRes] = await Promise.all([
+      supabase.from('public_users_view').select('uuid, first_name, last_name, image, headline').in('uuid', topUuids),
+      supabase.from('article_author_follows').select('author_uuid').in('author_uuid', topUuids),
+    ])
+
+    const profileMap: Record<string, any> = {}
+    for (const p of profilesRes.data || []) profileMap[p.uuid] = p
+
+    const followerCountMap: Record<string, number> = {}
+    for (const f of followersRes.data || []) {
+      followerCountMap[f.author_uuid] = (followerCountMap[f.author_uuid] || 0) + 1
+    }
+
+    const authors = top
+      .map(([uuid, b]) => {
+        const p = profileMap[uuid]
+        if (!p) return null
+        return {
+          id: uuid,
+          first_name: p.first_name,
+          last_name: p.last_name,
+          profile_image_url: p.image ?? null,
+          headline: p.headline ?? null,
+          first_published: b.firstPublished,
+          stats: {
+            article_count: b.articleCount,
+            total_views: b.totalViews,
+            follower_count: followerCountMap[uuid] || 0,
+          },
+        }
+      })
+      .filter(Boolean)
+
+    return c.json({ authors })
+  } catch (err) {
+    console.error('GET /articles/authors error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 // ─── GET /articles/:id — single article ──────────────────────────────────────
 
 app.get('/:id', async (c) => {
