@@ -601,7 +601,7 @@ app.get('/company/:companyId', async (c) => {
 
   try {
     const [companyRes, articlesRes] = await Promise.all([
-      supabase.from('companies').select('id, name, logo, tagline').eq('id', companyId).single(),
+      supabase.from('companies').select('id, name, logo, tagline, owner_uuid').eq('id', companyId).single(),
       supabase
         .from('articles')
         .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name')
@@ -615,6 +615,12 @@ app.get('/company/:companyId', async (c) => {
     if (!companyRes.data) return c.json({ error: 'Company not found' }, 404)
 
     const articles = articlesRes.data || []
+    const isOwner = companyRes.data.owner_uuid === user.id
+
+    // Non-owner visiting a company page with no articles → 404
+    if (!articles.length && !isOwner) {
+      return c.json({ error: 'Company not found' }, 404)
+    }
     const articleIds = articles.map((a: any) => a.id)
 
     const [skillRows, impressionsRes] = await Promise.all([
