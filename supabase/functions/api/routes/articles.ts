@@ -265,7 +265,7 @@ app.get('/', async (c) => {
       batchEnrichArticles(raw, supabase),
       batchFetchTags(articleIds, supabase),
       articleIds.length
-        ? supabase.from('article_impressions').select('article_id').in('article_id', articleIds)
+        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
         : { data: [] as any[] },
       authorUuids.length
         ? supabase.from('article_author_follows').select('author_uuid').in('author_uuid', authorUuids)
@@ -274,7 +274,7 @@ app.get('/', async (c) => {
 
     const viewCountMap: Record<string, number> = {}
     for (const row of impressionsRes.data || []) {
-      viewCountMap[row.article_id] = (viewCountMap[row.article_id] || 0) + 1
+      viewCountMap[row.article_id] = row.view_count ?? 0
     }
     const followerCountMap: Record<string, number> = {}
     for (const row of followersRes.data || []) {
