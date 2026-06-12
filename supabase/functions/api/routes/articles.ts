@@ -258,12 +258,35 @@ app.get('/', async (c) => {
       ? `${last.match_count}__${last.published_at}__${last.id}`
       : null
 
-    const articleIds = raw.map((a: any) => String(a.id))
-    const [enrichedArticles, tagsMap] = await Promise.all([
+    const articleIds  = raw.map((a: any) => String(a.id))
+    const authorUuids = [...new Set(raw.filter((a: any) => a.author_uuid).map((a: any) => String(a.author_uuid)))]
+
+    const [enrichedArticles, tagsMap, impressionsRes, followersRes] = await Promise.all([
       batchEnrichArticles(raw, supabase),
       batchFetchTags(articleIds, supabase),
+      articleIds.length
+        ? supabase.from('article_impressions').select('article_id').in('article_id', articleIds)
+        : { data: [] as any[] },
+      authorUuids.length
+        ? supabase.from('article_author_follows').select('author_uuid').in('author_uuid', authorUuids)
+        : { data: [] as any[] },
     ])
-    const articles = enrichedArticles.map((a: any) => ({ ...a, tags: tagsMap[a.id] || [] }))
+
+    const viewCountMap: Record<string, number> = {}
+    for (const row of impressionsRes.data || []) {
+      viewCountMap[row.article_id] = (viewCountMap[row.article_id] || 0) + 1
+    }
+    const followerCountMap: Record<string, number> = {}
+    for (const row of followersRes.data || []) {
+      followerCountMap[row.author_uuid] = (followerCountMap[row.author_uuid] || 0) + 1
+    }
+
+    const articles = enrichedArticles.map((a: any) => ({
+      ...a,
+      tags: tagsMap[a.id] || [],
+      view_count: viewCountMap[a.id] || 0,
+      ...(a.author ? { author: { ...a.author, follower_count: followerCountMap[a.author_uuid] || 0 } } : {}),
+    }))
 
     return c.json({ articles, nextCursor })
   } catch (err) {
