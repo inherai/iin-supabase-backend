@@ -484,10 +484,10 @@ app.get('/user/:userId', async (c) => {
       return c.json({ error: 'Author not found' }, 404)
     }
 
-    const [articlesRes, profileRes, impressionsRes, authorRes, coverRes, followRes] = await Promise.all([
+    const [articlesRes, profileRes, viewCountsRes, tagsMap, authorRes, coverRes, followRes, followerCountRes] = await Promise.all([
       supabase
         .from('articles')
-        .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name, is_editors_pick')
         .eq('author_uuid', userId)
         .eq('status', 'published')
         .is('deleted_at', null)
@@ -499,8 +499,9 @@ app.get('/user/:userId', async (c) => {
         .eq('author_uuid', userId)
         .maybeSingle(),
       articleIds.length
-        ? supabase.from('article_impressions').select('article_id').in('article_id', articleIds)
+        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
         : Promise.resolve({ data: [] as any[] }),
+      batchFetchTags(articleIds, supabase),
       supabase
         .from('public_users_view')
         .select('uuid, first_name, last_name, image, headline')
@@ -519,17 +520,21 @@ app.get('/user/:userId', async (c) => {
         .maybeSingle()
         .then((r: any) => r)
         .catch(() => ({ data: null })),
+      supabase
+        .from('article_author_follows')
+        .select('follower_uuid', { count: 'exact', head: true })
+        .eq('author_uuid', userId),
     ])
 
-    // Count views per article for individual view_count
-    const viewsPerArticle: Record<string, number> = {}
-    for (const row of impressionsRes.data || []) {
-      viewsPerArticle[row.article_id] = (viewsPerArticle[row.article_id] || 0) + 1
+    const viewCountMap: Record<string, number> = {}
+    for (const row of viewCountsRes.data || []) {
+      viewCountMap[row.article_id] = row.view_count ?? 0
     }
 
     const articles = (articlesRes.data || []).map((a: any) => ({
       ...a,
-      view_count: viewsPerArticle[a.id] || 0,
+      view_count: viewCountMap[a.id] || 0,
+      tags: tagsMap[a.id] || [],
     }))
 
     // Top skills with article count per skill
@@ -567,7 +572,8 @@ app.get('/user/:userId', async (c) => {
       is_following: !!(followRes as any)?.data,
       stats: {
         article_count: articles.length,
-        total_views: (impressionsRes.data || []).length,
+        total_views: Object.values(viewCountMap).reduce((s, v) => s + v, 0),
+        follower_count: (followerCountRes as any).count || 0,
       },
     })
   } catch (err) {
@@ -627,7 +633,7 @@ app.get('/company/:companyId', async (c) => {
       supabase.from('companies').select('id, name, logo, tagline, owner_uuid').eq('id', companyId).single(),
       supabase
         .from('articles')
-        .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name, is_editors_pick')
         .eq('company_id', companyId)
         .eq('status', 'published')
         .is('deleted_at', null)
@@ -646,14 +652,26 @@ app.get('/company/:companyId', async (c) => {
     }
     const articleIds = articles.map((a: any) => a.id)
 
-    const [skillRows, impressionsRes] = await Promise.all([
+    const [skillRows, viewCountsRes, tagsMap] = await Promise.all([
       articleIds.length
         ? supabase.from('article_skills').select('skill_id, skills(id, name)').in('article_id', articleIds)
         : Promise.resolve({ data: [] }),
       articleIds.length
-        ? supabase.from('article_impressions').select('id').in('article_id', articleIds)
-        : Promise.resolve({ data: [] }),
+        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        : Promise.resolve({ data: [] as any[] }),
+      batchFetchTags(articleIds, supabase),
     ])
+
+    const viewCountMap: Record<string, number> = {}
+    for (const row of (viewCountsRes.data || [])) {
+      viewCountMap[row.article_id] = row.view_count ?? 0
+    }
+
+    const enrichedArticles = articles.map((a: any) => ({
+      ...a,
+      view_count: viewCountMap[a.id] || 0,
+      tags: tagsMap[a.id] || [],
+    }))
 
     const counts: Record<string, { skill: any; count: number }> = {}
     for (const row of (skillRows.data || [])) {
@@ -668,10 +686,10 @@ app.get('/company/:companyId', async (c) => {
 
     const co = companyRes.data
     return c.json({
-      articles,
+      articles: enrichedArticles,
       company: { id: co.id, name: co.name, logo_url: co.logo ?? null, tagline: co.tagline ?? null },
       top_skills: topSkills,
-      stats: { article_count: articles.length, total_views: (impressionsRes.data || []).length },
+      stats: { article_count: articles.length, total_views: Object.values(viewCountMap).reduce((s, v) => s + v, 0) },
     })
   } catch (err) {
     console.error('GET /articles/company/:companyId error:', err)
