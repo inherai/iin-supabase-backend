@@ -382,7 +382,7 @@ app.get('/search', async (c) => {
   }
 })
 
-// ─── GET /articles/trending — top articles by views in the last 7 days ───────
+// ─── GET /articles/trending — top articles by views (7-day window, falls back to all-time) ──
 
 app.get('/trending', async (c) => {
   const user = c.get('user')
@@ -391,37 +391,65 @@ app.get('/trending', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') || '10'), 20)
 
   try {
-    // Count impressions from the last 7 days per article, join published articles
-    const { data, error } = await supabase
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+    // Count impressions per article in the last 7 days
+    const { data: impressionData } = await supabase
       .from('article_impressions')
-      .select('article_id, articles!inner(id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url)')
-      .gte('impression_date', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
-      .eq('articles.status', 'published')
-      .is('articles.deleted_at', null)
+      .select('article_id')
+      .gte('impression_date', sevenDaysAgo)
+
+    // Aggregate counts
+    const weekCountMap: Record<string, number> = {}
+    for (const row of impressionData || []) {
+      const id = String(row.article_id)
+      weekCountMap[id] = (weekCountMap[id] || 0) + 1
+    }
+
+    let articleIds: string[] = Object.entries(weekCountMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([id]) => id)
+
+    // Fallback: if fewer than 4 results from the last 7 days, use all-time view counts
+    if (articleIds.length < 4) {
+      const { data: allTimeData } = await supabase
+        .from('article_view_counts')
+        .select('article_id, view_count')
+        .order('view_count', { ascending: false })
+        .limit(limit)
+      const allTimeIds = (allTimeData || []).map((r: any) => String(r.article_id))
+      // Merge: week IDs first, then fill from all-time without duplicates
+      const merged = [...articleIds]
+      for (const id of allTimeIds) {
+        if (!merged.includes(id)) merged.push(id)
+        if (merged.length >= limit) break
+      }
+      articleIds = merged
+    }
+
+    if (!articleIds.length) return c.json({ articles: [] })
+
+    // Fetch the actual articles
+    const { data: raw, error } = await supabase
+      .from('articles')
+      .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
+      .eq('status', 'published')
+      .is('deleted_at', null)
+      .in('id', articleIds)
 
     if (error) throw error
 
-    // Aggregate view counts per article
-    const countMap: Record<string, { count: number; article: any }> = {}
-    for (const row of data || []) {
-      const art = (row as any).articles
-      if (!art) continue
-      const id = String(art.id)
-      if (!countMap[id]) countMap[id] = { count: 0, article: art }
-      countMap[id].count++
-    }
-
-    const sorted = Object.values(countMap)
-      .sort((a, b) => b.count - a.count)
-      .slice(0, limit)
-      .map(e => e.article)
+    // Re-sort to match our rank order
+    const idOrder = articleIds.map(String)
+    const sorted = (raw || []).sort((a: any, b: any) => idOrder.indexOf(String(a.id)) - idOrder.indexOf(String(b.id)))
 
     const enriched = await batchEnrichArticles(sorted, supabase)
-    const articleIds = enriched.map((a: any) => String(a.id))
+    const enrichedIds = enriched.map((a: any) => String(a.id))
     const [tagsMap, viewCountRes] = await Promise.all([
-      batchFetchTags(articleIds, supabase),
-      articleIds.length
-        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+      batchFetchTags(enrichedIds, supabase),
+      enrichedIds.length
+        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', enrichedIds)
         : { data: [] as any[] },
     ])
     const viewCountMap: Record<string, number> = {}
