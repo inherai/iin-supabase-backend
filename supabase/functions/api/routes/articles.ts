@@ -382,6 +382,126 @@ app.get('/search', async (c) => {
   }
 })
 
+// ─── GET /articles/trending — top articles by views in the last 7 days ───────
+
+app.get('/trending', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const limit = Math.min(parseInt(c.req.query('limit') || '10'), 20)
+
+  try {
+    // Count impressions from the last 7 days per article, join published articles
+    const { data, error } = await supabase
+      .from('article_impressions')
+      .select('article_id, articles!inner(id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url)')
+      .gte('impression_date', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+      .eq('articles.status', 'published')
+      .is('articles.deleted_at', null)
+
+    if (error) throw error
+
+    // Aggregate view counts per article
+    const countMap: Record<string, { count: number; article: any }> = {}
+    for (const row of data || []) {
+      const art = (row as any).articles
+      if (!art) continue
+      const id = String(art.id)
+      if (!countMap[id]) countMap[id] = { count: 0, article: art }
+      countMap[id].count++
+    }
+
+    const sorted = Object.values(countMap)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, limit)
+      .map(e => e.article)
+
+    const enriched = await batchEnrichArticles(sorted, supabase)
+    const articleIds = enriched.map((a: any) => String(a.id))
+    const [tagsMap, viewCountRes] = await Promise.all([
+      batchFetchTags(articleIds, supabase),
+      articleIds.length
+        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        : { data: [] as any[] },
+    ])
+    const viewCountMap: Record<string, number> = {}
+    for (const row of viewCountRes.data || []) viewCountMap[row.article_id] = row.view_count ?? 0
+
+    const articles = enriched.map((a: any) => ({
+      ...a,
+      tags: tagsMap[a.id] || [],
+      view_count: viewCountMap[a.id] || 0,
+    }))
+
+    return c.json({ articles })
+  } catch (err) {
+    console.error('GET /articles/trending error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── GET /articles/following — articles from followed authors + companies ─────
+
+app.get('/following', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const limit = Math.min(parseInt(c.req.query('limit') || '10'), 20)
+
+  try {
+    // Fetch who the user follows (authors + companies) in parallel
+    const [authorFollowsRes, companyFollowsRes] = await Promise.all([
+      supabase.from('article_author_follows').select('author_uuid').eq('follower_uuid', user.id),
+      supabase.from('article_company_follows').select('company_id').eq('follower_uuid', user.id),
+    ])
+
+    const authorIds  = (authorFollowsRes.data  || []).map((r: any) => r.author_uuid)
+    const companyIds = (companyFollowsRes.data || []).map((r: any) => r.company_id)
+
+    if (!authorIds.length && !companyIds.length) {
+      return c.json({ articles: [] })
+    }
+
+    // Fetch recent articles from followed authors and companies
+    const orFilters: string[] = []
+    if (authorIds.length)  orFilters.push(`author_uuid.in.(${authorIds.join(',')})`)
+    if (companyIds.length) orFilters.push(`company_id.in.(${companyIds.join(',')})`)
+
+    const { data, error } = await supabase
+      .from('articles')
+      .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
+      .eq('status', 'published')
+      .is('deleted_at', null)
+      .or(orFilters.join(','))
+      .order('published_at', { ascending: false })
+      .limit(limit)
+
+    if (error) throw error
+
+    const enriched = await batchEnrichArticles(data || [], supabase)
+    const articleIds = enriched.map((a: any) => String(a.id))
+    const [tagsMap, viewCountRes] = await Promise.all([
+      batchFetchTags(articleIds, supabase),
+      articleIds.length
+        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        : { data: [] as any[] },
+    ])
+    const viewCountMap: Record<string, number> = {}
+    for (const row of viewCountRes.data || []) viewCountMap[row.article_id] = row.view_count ?? 0
+
+    const articles = enriched.map((a: any) => ({
+      ...a,
+      tags: tagsMap[a.id] || [],
+      view_count: viewCountMap[a.id] || 0,
+    }))
+
+    return c.json({ articles })
+  } catch (err) {
+    console.error('GET /articles/following error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 // ─── GET /articles/editors-picks ─────────────────────────────────────────────
 
 app.get('/editors-picks', async (c) => {
