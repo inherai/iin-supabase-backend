@@ -530,6 +530,33 @@ app.get('/following', async (c) => {
   }
 })
 
+// ─── GET /articles/news — latest news-type articles ──────────────────────────
+
+app.get('/news', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const limit = Math.min(parseInt(c.req.query('limit') || '10'), 20)
+
+  try {
+    const { data, error } = await supabase
+      .from('articles')
+      .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
+      .eq('status', 'published')
+      .eq('article_type', 'news')
+      .is('deleted_at', null)
+      .order('published_at', { ascending: false })
+      .limit(limit)
+
+    if (error) throw error
+    const articles = await batchEnrichArticles(data || [], supabase)
+    return c.json({ articles })
+  } catch (err) {
+    console.error('GET /articles/news error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 // ─── GET /articles/editors-picks ─────────────────────────────────────────────
 
 app.get('/editors-picks', async (c) => {
@@ -1261,10 +1288,12 @@ app.post('/', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
 
-  const { title = '', content = '', cover_image_url, company_id, skill_ids = [], interest_ids = [], series_name, series_order } = await c.req.json()
+  const { title = '', content = '', cover_image_url, company_id, skill_ids = [], interest_ids = [], series_name, series_order, article_type } = await c.req.json()
 
   const sanitized = sanitizeHtml(content)
   const plain = stripHtml(sanitized)
+  const isAdmin = (user as any).app_metadata?.is_admin === true
+  const resolvedType = isAdmin && article_type === 'news' ? 'news' : 'article'
 
   try {
     const { data: article, error } = await supabase
@@ -1279,6 +1308,7 @@ app.post('/', async (c) => {
         cover_image_url: cover_image_url || null,
         series_name: series_name || null,
         series_order: series_order || null,
+        article_type: resolvedType,
         status: 'draft',
       })
       .select('id')
@@ -1314,7 +1344,7 @@ app.put('/:id', async (c) => {
   const supabase = c.get('supabase')
   const articleId = c.req.param('id')
 
-  const { title, content, cover_image_url, company_id, skill_ids, interest_ids, series_name, series_order } = await c.req.json()
+  const { title, content, cover_image_url, company_id, skill_ids, interest_ids, series_name, series_order, article_type } = await c.req.json()
 
   try {
     // Verify ownership
@@ -1338,6 +1368,8 @@ app.put('/:id', async (c) => {
 
     if (!isOwner) return c.json({ error: 'Forbidden' }, 403)
 
+    const isAdminUpdate = (user as any).app_metadata?.is_admin === true
+
     const updates: Record<string, any> = { updated_at: new Date().toISOString() }
     if (title !== undefined) updates.title = title
     if (content !== undefined) {
@@ -1348,6 +1380,9 @@ app.put('/:id', async (c) => {
     if (company_id !== undefined) updates.company_id = company_id || null
     if (series_name !== undefined) updates.series_name = series_name || null
     if (series_order !== undefined) updates.series_order = series_order || null
+    if (article_type !== undefined && isAdminUpdate) {
+      updates.article_type = article_type === 'news' ? 'news' : 'article'
+    }
 
     const { error } = await supabase.from('articles').update(updates).eq('id', articleId)
     if (error) throw error
