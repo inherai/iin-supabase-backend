@@ -619,6 +619,46 @@ app.delete('/follow/:userId', async (c) => {
   }
 })
 
+// ─── POST /articles/follow-company/:companyId — follow a company ─────────────
+
+app.post('/follow-company/:companyId', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const companyId = parseInt(c.req.param('companyId'))
+  if (isNaN(companyId)) return c.json({ error: 'Invalid company ID' }, 400)
+  try {
+    await supabase
+      .from('article_company_follows')
+      .upsert({ follower_uuid: user.id, company_id: companyId }, { onConflict: 'follower_uuid,company_id' })
+    return c.json({ is_following: true })
+  } catch (err) {
+    console.error('POST /articles/follow-company error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── DELETE /articles/follow-company/:companyId — unfollow a company ──────────
+
+app.delete('/follow-company/:companyId', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const companyId = parseInt(c.req.param('companyId'))
+  if (isNaN(companyId)) return c.json({ error: 'Invalid company ID' }, 400)
+  try {
+    await supabase
+      .from('article_company_follows')
+      .delete()
+      .eq('follower_uuid', user.id)
+      .eq('company_id', companyId)
+    return c.json({ is_following: false })
+  } catch (err) {
+    console.error('DELETE /articles/follow-company error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 // ─── GET /articles/company/:companyId — published articles by a company ────────
 
 app.get('/company/:companyId', async (c) => {
@@ -629,7 +669,7 @@ app.get('/company/:companyId', async (c) => {
   if (isNaN(companyId)) return c.json({ error: 'Invalid company ID' }, 400)
 
   try {
-    const [companyRes, articlesRes] = await Promise.all([
+    const [companyRes, articlesRes, followerCountRes, isFollowingRes] = await Promise.all([
       supabase.from('companies').select('id, name, logo, tagline, owner_uuid').eq('id', companyId).single(),
       supabase
         .from('articles')
@@ -639,6 +679,16 @@ app.get('/company/:companyId', async (c) => {
         .is('deleted_at', null)
         .order('is_pinned', { ascending: false })
         .order('published_at', { ascending: false }),
+      supabase
+        .from('article_company_follows')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', companyId),
+      supabase
+        .from('article_company_follows')
+        .select('company_id')
+        .eq('company_id', companyId)
+        .eq('follower_uuid', user.id)
+        .maybeSingle(),
     ])
 
     if (!companyRes.data) return c.json({ error: 'Company not found' }, 404)
@@ -684,12 +734,26 @@ app.get('/company/:companyId', async (c) => {
       .slice(0, 5)
       .map(({ skill }) => skill)
 
+    const firstPublished = articles.length > 0
+      ? articles.reduce((min: string | null, a: any) => {
+          if (!a.published_at) return min
+          if (!min) return a.published_at
+          return new Date(a.published_at) < new Date(min) ? a.published_at : min
+        }, null)
+      : null
+
     const co = companyRes.data
     return c.json({
       articles: enrichedArticles,
       company: { id: co.id, name: co.name, logo_url: co.logo ?? null, tagline: co.tagline ?? null },
       top_skills: topSkills,
-      stats: { article_count: articles.length, total_views: Object.values(viewCountMap).reduce((s, v) => s + v, 0) },
+      is_following: !!(isFollowingRes.data),
+      first_published: firstPublished,
+      stats: {
+        article_count: articles.length,
+        total_views: Object.values(viewCountMap).reduce((s, v) => s + v, 0),
+        follower_count: followerCountRes.count ?? 0,
+      },
     })
   } catch (err) {
     console.error('GET /articles/company/:companyId error:', err)
@@ -846,13 +910,11 @@ app.get('/authors', async (c) => {
     }
 
     // Also fetch companies that published articles
-    const { data: companyArticleRows, error: companyArticleErr } = await supabase
+    const { data: companyArticleRows } = await supabase
       .from('articles')
-      .select('company_id, published_at')
+      .select('id, company_id, published_at')
       .eq('status', 'published')
       .filter('company_id', 'not.is', null)
-
-    console.log('[authors] companyArticleRows count:', companyArticleRows?.length, 'error:', companyArticleErr?.message)
 
     const companyStatsMap: Record<number, { article_count: number; first_published: string }> = {}
     for (const a of companyArticleRows || []) {
@@ -869,23 +931,39 @@ app.get('/authors', async (c) => {
       )
       .map(([id]) => Number(id))
 
-    console.log('[authors] sortedCompanyIds:', sortedCompanyIds)
+    // Compute real view totals and follower counts for companies
+    const companyViewTotals: Record<number, number> = {}
+    const companyFollowerCounts: Record<number, number> = {}
 
     const companyAuthors: any[] = []
     if (sortedCompanyIds.length) {
-      const { data: companiesData, error: companiesErr } = await supabase
-        .from('companies')
-        .select('id, name, logo, tagline')
-        .in('id', sortedCompanyIds)
+      const companyArtIds = (companyArticleRows || []).map((a: any) => String(a.id))
+      const artToCompany: Record<string, number> = {}
+      for (const a of companyArticleRows || []) artToCompany[String(a.id)] = Number(a.company_id)
 
-      console.log('[authors] companiesData:', companiesData?.length, 'error:', companiesErr?.message)
+      const [{ data: companiesData }, viewCountsRes, followsRes] = await Promise.all([
+        supabase.from('companies').select('id, name, logo, tagline').in('id', sortedCompanyIds),
+        companyArtIds.length
+          ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', companyArtIds)
+          : Promise.resolve({ data: [] as any[] }),
+        supabase.from('article_company_follows').select('company_id').in('company_id', sortedCompanyIds),
+      ])
+
+      for (const row of (viewCountsRes.data || [])) {
+        const cid = artToCompany[String(row.article_id)]
+        if (cid) companyViewTotals[cid] = (companyViewTotals[cid] || 0) + (row.view_count || 0)
+      }
+      for (const row of (followsRes.data || [])) {
+        const cid = Number(row.company_id)
+        companyFollowerCounts[cid] = (companyFollowerCounts[cid] || 0) + 1
+      }
 
       const companyMap: Record<number, any> = {}
       for (const c of companiesData || []) companyMap[c.id] = c
 
       for (const cid of sortedCompanyIds) {
         const c = companyMap[cid]
-        if (!c) { console.log('[authors] no company found for id', cid, 'keys:', Object.keys(companyMap)); continue }
+        if (!c) continue
         companyAuthors.push({
           id: String(cid),
           type: 'company' as const,
@@ -895,13 +973,12 @@ app.get('/authors', async (c) => {
           first_published: companyStatsMap[cid].first_published,
           stats: {
             article_count: companyStatsMap[cid].article_count,
-            total_views: 0,
-            follower_count: 0,
+            total_views: companyViewTotals[cid] || 0,
+            follower_count: companyFollowerCounts[cid] || 0,
           },
         })
       }
     }
-    console.log('[authors] final companyAuthors count:', companyAuthors.length)
 
     // Interleave: every 3 users, insert 1 company (if available)
     const authors: any[] = []
