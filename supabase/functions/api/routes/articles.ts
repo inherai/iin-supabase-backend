@@ -779,89 +779,47 @@ app.get('/authors', async (c) => {
   const limit = Math.min(Number(c.req.query('limit') ?? '20'), 50)
 
   try {
-    // Pull all published articles to aggregate per-author stats in-process
-    const { data: rows, error } = await supabase
-      .from('articles')
-      .select('id, author_uuid, published_at')
-      .eq('status', 'published')
-      .is('deleted_at', null)
-      .not('author_uuid', 'is', null)
-
+    // All aggregation (article counts, total views, follower counts, sort) runs
+    // in Postgres via the get_top_authors RPC. Returns exactly `limit` rows.
+    // See migration add_authors_rpc.sql for the query + index rationale.
+    const { data: statsRows, error } = await supabase.rpc('get_top_authors', {
+      p_sort: sort,
+      p_limit: limit,
+    })
     if (error) throw error
+    if (!statsRows?.length) return c.json({ authors: [] })
 
-    // Group by author, track article→author for O(1) view-count lookup
-    const buckets: Record<string, {
-      articleIds: string[]
-      articleCount: number
-      firstPublished: string
-      totalViews: number
-    }> = {}
-    const articleToAuthor: Record<string, string> = {}
+    const topUuids = (statsRows as any[]).map((r: any) => String(r.author_uuid))
 
-    for (const a of rows || []) {
-      const uuid = String(a.author_uuid)
-      const aid  = String(a.id)
-      articleToAuthor[aid] = uuid
-      if (!buckets[uuid]) {
-        buckets[uuid] = { articleIds: [], articleCount: 0, firstPublished: a.published_at, totalViews: 0 }
-      }
-      buckets[uuid].articleIds.push(aid)
-      buckets[uuid].articleCount++
-      if (a.published_at < buckets[uuid].firstPublished) buckets[uuid].firstPublished = a.published_at
-    }
-
-    // Aggregate view counts across all articles
-    const allArticleIds = Object.keys(articleToAuthor)
-    if (allArticleIds.length) {
-      const { data: viewRows } = await supabase
-        .from('article_view_counts')
-        .select('article_id, view_count')
-        .in('article_id', allArticleIds)
-      for (const v of viewRows || []) {
-        const authorId = articleToAuthor[String(v.article_id)]
-        if (authorId) buckets[authorId].totalViews += v.view_count ?? 0
-      }
-    }
-
-    // Sort and take top N
-    const sorted = Object.entries(buckets).sort(([, a], [, b]) =>
-      sort === 'new'
-        ? new Date(b.firstPublished).getTime() - new Date(a.firstPublished).getTime()
-        : b.totalViews - a.totalViews || b.articleCount - a.articleCount
-    )
-    const top = sorted.slice(0, limit)
-    const topUuids = top.map(([uuid]) => uuid)
-    if (!topUuids.length) return c.json({ authors: [] })
-
-    // Fetch profiles + follower counts in parallel
-    const [profilesRes, followersRes] = await Promise.all([
-      supabase.from('public_users_view').select('uuid, first_name, last_name, image, headline').in('uuid', topUuids),
-      supabase.from('article_author_follows').select('author_uuid').in('author_uuid', topUuids),
-    ])
+    // Fetch display profiles for the top N authors (only N rows, never the whole table)
+    const { data: profiles } = await supabase
+      .from('public_users_view')
+      .select('uuid, first_name, last_name, image, headline')
+      .in('uuid', topUuids)
 
     const profileMap: Record<string, any> = {}
-    for (const p of profilesRes.data || []) profileMap[p.uuid] = p
+    for (const p of profiles || []) profileMap[p.uuid] = p
 
-    const followerCountMap: Record<string, number> = {}
-    for (const f of followersRes.data || []) {
-      followerCountMap[f.author_uuid] = (followerCountMap[f.author_uuid] || 0) + 1
-    }
+    const statsMap: Record<string, any> = {}
+    for (const s of statsRows as any[]) statsMap[String(s.author_uuid)] = s
 
-    const authors = top
-      .map(([uuid, b]) => {
+    // Preserve the RPC's sort order when building the response
+    const authors = topUuids
+      .map((uuid: string) => {
         const p = profileMap[uuid]
-        if (!p) return null
+        const s = statsMap[uuid]
+        if (!p || !s) return null
         return {
           id: uuid,
           first_name: p.first_name,
           last_name: p.last_name,
           profile_image_url: p.image ?? null,
           headline: p.headline ?? null,
-          first_published: b.firstPublished,
+          first_published: s.first_published,
           stats: {
-            article_count: b.articleCount,
-            total_views: b.totalViews,
-            follower_count: followerCountMap[uuid] || 0,
+            article_count: Number(s.article_count),
+            total_views:   Number(s.total_views),
+            follower_count: Number(s.follower_count),
           },
         }
       })
