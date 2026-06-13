@@ -792,13 +792,29 @@ app.get('/authors', async (c) => {
     const topUuids = (statsRows as any[]).map((r: any) => String(r.author_uuid))
 
     // Fetch display profiles for the top N authors (only N rows, never the whole table)
-    const { data: profiles } = await supabase
-      .from('public_users_view')
-      .select('uuid, first_name, last_name, image, headline')
-      .in('uuid', topUuids)
+    const [{ data: profiles }, { data: userCovers }, { data: bioProfiles }] = await Promise.all([
+      supabase
+        .from('public_users_view')
+        .select('uuid, first_name, last_name, image, headline')
+        .in('uuid', topUuids),
+      supabase
+        .from('users')
+        .select('uuid, cover_image_url')
+        .in('uuid', topUuids),
+      supabase
+        .from('article_author_profiles')
+        .select('author_uuid, writing_bio')
+        .in('author_uuid', topUuids),
+    ])
 
     const profileMap: Record<string, any> = {}
     for (const p of profiles || []) profileMap[p.uuid] = p
+
+    const coverMap: Record<string, string | null> = {}
+    for (const u of userCovers || []) coverMap[u.uuid] = u.cover_image_url ?? null
+
+    const bioMap: Record<string, string | null> = {}
+    for (const b of bioProfiles || []) bioMap[b.author_uuid] = b.writing_bio ?? null
 
     const statsMap: Record<string, any> = {}
     for (const s of statsRows as any[]) statsMap[String(s.author_uuid)] = s
@@ -814,7 +830,9 @@ app.get('/authors', async (c) => {
           first_name: p.first_name,
           last_name: p.last_name,
           profile_image_url: p.image ?? null,
+          cover_image_url: coverMap[uuid] ?? null,
           headline: p.headline ?? null,
+          writing_bio: bioMap[uuid] ?? null,
           first_published: s.first_published,
           stats: {
             article_count: Number(s.article_count),
