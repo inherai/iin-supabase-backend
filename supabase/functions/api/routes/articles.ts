@@ -820,13 +820,14 @@ app.get('/authors', async (c) => {
     for (const s of statsRows as any[]) statsMap[String(s.author_uuid)] = s
 
     // Preserve the RPC's sort order when building the response
-    const authors = topUuids
+    const userAuthors = topUuids
       .map((uuid: string) => {
         const p = profileMap[uuid]
         const s = statsMap[uuid]
         if (!p || !s) return null
         return {
           id: uuid,
+          type: 'user' as const,
           first_name: p.first_name,
           last_name: p.last_name,
           profile_image_url: p.image ?? null,
@@ -842,6 +843,69 @@ app.get('/authors', async (c) => {
         }
       })
       .filter(Boolean)
+
+    // Also fetch companies that published articles
+    const { data: companyArticleRows } = await supabase
+      .from('articles')
+      .select('company_id, published_at')
+      .eq('status', 'published')
+      .is('deleted_at', null)
+      .not('company_id', 'is', null)
+
+    const companyStatsMap: Record<number, { article_count: number; first_published: string }> = {}
+    for (const a of companyArticleRows || []) {
+      const cid = Number(a.company_id)
+      if (!companyStatsMap[cid]) companyStatsMap[cid] = { article_count: 0, first_published: a.published_at }
+      companyStatsMap[cid].article_count++
+      if (a.published_at < companyStatsMap[cid].first_published) companyStatsMap[cid].first_published = a.published_at
+    }
+
+    const sortedCompanyIds = Object.entries(companyStatsMap)
+      .sort(([, a], [, b]) => sort === 'new'
+        ? new Date(b.first_published).getTime() - new Date(a.first_published).getTime()
+        : b.article_count - a.article_count
+      )
+      .map(([id]) => Number(id))
+
+    const companyAuthors: any[] = []
+    if (sortedCompanyIds.length) {
+      const { data: companiesData } = await supabase
+        .from('companies')
+        .select('id, name, logo_url, tagline')
+        .in('id', sortedCompanyIds)
+
+      const companyMap: Record<number, any> = {}
+      for (const c of companiesData || []) companyMap[c.id] = c
+
+      for (const cid of sortedCompanyIds) {
+        const c = companyMap[cid]
+        if (!c) continue
+        companyAuthors.push({
+          id: String(cid),
+          type: 'company' as const,
+          name: c.name,
+          logo_url: c.logo_url ?? null,
+          tagline: c.tagline ?? null,
+          first_published: companyStatsMap[cid].first_published,
+          stats: {
+            article_count: companyStatsMap[cid].article_count,
+            total_views: 0,
+            follower_count: 0,
+          },
+        })
+      }
+    }
+
+    // Interleave: every 3 users, insert 1 company (if available)
+    const authors: any[] = []
+    let ci = 0
+    for (let i = 0; i < userAuthors.length; i++) {
+      authors.push(userAuthors[i])
+      if ((i + 1) % 3 === 0 && ci < companyAuthors.length) {
+        authors.push(companyAuthors[ci++])
+      }
+    }
+    while (ci < companyAuthors.length) authors.push(companyAuthors[ci++])
 
     return c.json({ authors })
   } catch (err) {
