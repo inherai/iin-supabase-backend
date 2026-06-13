@@ -846,12 +846,13 @@ app.get('/authors', async (c) => {
     }
 
     // Also fetch companies that published articles
-    const { data: companyArticleRows } = await supabase
+    const { data: companyArticleRows, error: companyArticleErr } = await supabase
       .from('articles')
       .select('company_id, published_at')
       .eq('status', 'published')
-      .is('deleted_at', null)
-      .not('company_id', 'is', null)
+      .filter('company_id', 'not.is', null)
+
+    console.log('[authors] companyArticleRows count:', companyArticleRows?.length, 'error:', companyArticleErr?.message)
 
     const companyStatsMap: Record<number, { article_count: number; first_published: string }> = {}
     for (const a of companyArticleRows || []) {
@@ -868,19 +869,23 @@ app.get('/authors', async (c) => {
       )
       .map(([id]) => Number(id))
 
+    console.log('[authors] sortedCompanyIds:', sortedCompanyIds)
+
     const companyAuthors: any[] = []
     if (sortedCompanyIds.length) {
-      const { data: companiesData } = await supabase
+      const { data: companiesData, error: companiesErr } = await supabase
         .from('companies')
         .select('id, name, logo_url, tagline')
         .in('id', sortedCompanyIds)
+
+      console.log('[authors] companiesData:', companiesData?.length, 'error:', companiesErr?.message)
 
       const companyMap: Record<number, any> = {}
       for (const c of companiesData || []) companyMap[c.id] = c
 
       for (const cid of sortedCompanyIds) {
         const c = companyMap[cid]
-        if (!c) continue
+        if (!c) { console.log('[authors] no company found for id', cid, 'keys:', Object.keys(companyMap)); continue }
         companyAuthors.push({
           id: String(cid),
           type: 'company' as const,
@@ -896,6 +901,7 @@ app.get('/authors', async (c) => {
         })
       }
     }
+    console.log('[authors] final companyAuthors count:', companyAuthors.length)
 
     // Interleave: every 3 users, insert 1 company (if available)
     const authors: any[] = []
