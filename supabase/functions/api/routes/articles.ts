@@ -181,6 +181,39 @@ app.get('/filter-tags', async (c) => {
   }
 })
 
+// ─── Helper: filter article IDs to only those matching given skill/interest IDs ─
+
+async function filterIdsByTags(
+  articleIds: string[],
+  skillIds: number[],
+  interestIds: number[],
+  supabase: any,
+): Promise<string[]> {
+  if (!skillIds.length && !interestIds.length) return articleIds
+  if (!articleIds.length) return []
+
+  const matchingIds = new Set<string>()
+
+  if (skillIds.length) {
+    const { data } = await supabase
+      .from('article_skills')
+      .select('article_id')
+      .in('article_id', articleIds)
+      .in('skill_id', skillIds)
+    for (const row of data || []) matchingIds.add(String(row.article_id))
+  }
+  if (interestIds.length) {
+    const { data } = await supabase
+      .from('article_interests')
+      .select('article_id')
+      .in('article_id', articleIds)
+      .in('interest_id', interestIds)
+    for (const row of data || []) matchingIds.add(String(row.article_id))
+  }
+
+  return articleIds.filter(id => matchingIds.has(id))
+}
+
 // ─── Helper: batch-fetch tags (skills + interests) for a list of article IDs ──
 
 async function batchFetchTags(articleIds: string[], supabase: any) {
@@ -389,6 +422,10 @@ app.get('/trending', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
   const limit = Math.min(parseInt(c.req.query('limit') || '10'), 20)
+  const skillIdsParam    = c.req.query('skill_ids')
+  const interestIdsParam = c.req.query('interest_ids')
+  const skillIds    = skillIdsParam    ? skillIdsParam.split(',').map(Number).filter(n => n > 0)    : []
+  const interestIds = interestIdsParam ? interestIdsParam.split(',').map(Number).filter(n => n > 0) : []
 
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -408,7 +445,7 @@ app.get('/trending', async (c) => {
 
     let articleIds: string[] = Object.entries(weekCountMap)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
+      .slice(0, limit * 3) // fetch more before filtering by tags
       .map(([id]) => id)
 
     // Fallback: if fewer than 4 results from the last 7 days, use all-time view counts
@@ -417,16 +454,19 @@ app.get('/trending', async (c) => {
         .from('article_view_counts')
         .select('article_id, view_count')
         .order('view_count', { ascending: false })
-        .limit(limit)
+        .limit(limit * 3)
       const allTimeIds = (allTimeData || []).map((r: any) => String(r.article_id))
-      // Merge: week IDs first, then fill from all-time without duplicates
       const merged = [...articleIds]
       for (const id of allTimeIds) {
         if (!merged.includes(id)) merged.push(id)
-        if (merged.length >= limit) break
+        if (merged.length >= limit * 3) break
       }
       articleIds = merged
     }
+
+    // Apply skill/interest filter before truncating to limit
+    articleIds = await filterIdsByTags(articleIds, skillIds, interestIds, supabase)
+    articleIds = articleIds.slice(0, limit)
 
     if (!articleIds.length) return c.json({ articles: [] })
 
@@ -475,6 +515,10 @@ app.get('/following', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
   const limit = Math.min(parseInt(c.req.query('limit') || '10'), 20)
+  const skillIdsParam    = c.req.query('skill_ids')
+  const interestIdsParam = c.req.query('interest_ids')
+  const skillIds    = skillIdsParam    ? skillIdsParam.split(',').map(Number).filter(n => n > 0)    : []
+  const interestIds = interestIdsParam ? interestIdsParam.split(',').map(Number).filter(n => n > 0) : []
 
   try {
     // Fetch who the user follows (authors + companies) in parallel
@@ -502,11 +546,18 @@ app.get('/following', async (c) => {
       .is('deleted_at', null)
       .or(orFilters.join(','))
       .order('published_at', { ascending: false })
-      .limit(limit)
+      .limit(skillIds.length || interestIds.length ? limit * 3 : limit)
 
     if (error) throw error
 
-    const enriched = await batchEnrichArticles(data || [], supabase)
+    let rawIds = (data || []).map((a: any) => String(a.id))
+    if (skillIds.length || interestIds.length) {
+      rawIds = await filterIdsByTags(rawIds, skillIds, interestIds, supabase)
+      rawIds = rawIds.slice(0, limit)
+    }
+    const filtered = (data || []).filter((a: any) => rawIds.includes(String(a.id)))
+
+    const enriched = await batchEnrichArticles(filtered, supabase)
     const articleIds = enriched.map((a: any) => String(a.id))
     const [tagsMap, viewCountRes] = await Promise.all([
       batchFetchTags(articleIds, supabase),
@@ -537,6 +588,10 @@ app.get('/news', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
   const limit = Math.min(parseInt(c.req.query('limit') || '10'), 20)
+  const skillIdsParam    = c.req.query('skill_ids')
+  const interestIdsParam = c.req.query('interest_ids')
+  const skillIds    = skillIdsParam    ? skillIdsParam.split(',').map(Number).filter(n => n > 0)    : []
+  const interestIds = interestIdsParam ? interestIdsParam.split(',').map(Number).filter(n => n > 0) : []
 
   try {
     const { data, error } = await supabase
@@ -546,10 +601,18 @@ app.get('/news', async (c) => {
       .eq('article_type', 'news')
       .is('deleted_at', null)
       .order('published_at', { ascending: false })
-      .limit(limit)
+      .limit(skillIds.length || interestIds.length ? limit * 3 : limit)
 
     if (error) throw error
-    const articles = await batchEnrichArticles(data || [], supabase)
+
+    let filtered = data || []
+    if (skillIds.length || interestIds.length) {
+      const rawIds = filtered.map((a: any) => String(a.id))
+      const kept = new Set(await filterIdsByTags(rawIds, skillIds, interestIds, supabase))
+      filtered = filtered.filter((a: any) => kept.has(String(a.id))).slice(0, limit)
+    }
+
+    const articles = await batchEnrichArticles(filtered, supabase)
     return c.json({ articles })
   } catch (err) {
     console.error('GET /articles/news error:', err)
