@@ -316,7 +316,7 @@ app.get('/search', async (c) => {
     const [articleRes, authorWordResults, companyRes] = await Promise.all([
       supabase
         .from('articles')
-        .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name')
         .eq('status', 'published')
         .is('deleted_at', null)
         .or(`title.ilike.%${esc}%,excerpt.ilike.%${esc}%`)
@@ -358,7 +358,7 @@ app.get('/search', async (c) => {
 
       const { data } = await supabase
         .from('articles')
-        .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name')
         .eq('status', 'published')
         .is('deleted_at', null)
         .or(orClauses.join(','))
@@ -433,7 +433,7 @@ app.get('/trending', async (c) => {
     // Fetch the actual articles
     const { data: raw, error } = await supabase
       .from('articles')
-      .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
+      .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
       .eq('status', 'published')
       .is('deleted_at', null)
       .in('id', articleIds)
@@ -497,7 +497,7 @@ app.get('/following', async (c) => {
 
     const { data, error } = await supabase
       .from('articles')
-      .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
+      .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
       .eq('status', 'published')
       .is('deleted_at', null)
       .or(orFilters.join(','))
@@ -541,7 +541,7 @@ app.get('/news', async (c) => {
   try {
     const { data, error } = await supabase
       .from('articles')
-      .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
+      .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
       .eq('status', 'published')
       .eq('article_type', 'news')
       .is('deleted_at', null)
@@ -567,7 +567,7 @@ app.get('/editors-picks', async (c) => {
   try {
     const { data, error } = await supabase
       .from('articles')
-      .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
+      .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
       .eq('status', 'published')
       .eq('is_editors_pick', true)
       .is('deleted_at', null)
@@ -662,7 +662,7 @@ app.get('/user/:userId', async (c) => {
     const [articlesRes, profileRes, viewCountsRes, tagsMap, authorRes, coverRes, followRes, followerCountRes] = await Promise.all([
       supabase
         .from('articles')
-        .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name, is_editors_pick')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, is_pinned, series_name, is_editors_pick')
         .eq('author_uuid', userId)
         .eq('status', 'published')
         .is('deleted_at', null)
@@ -848,7 +848,7 @@ app.get('/company/:companyId', async (c) => {
       supabase.from('companies').select('id, name, logo, tagline, owner_uuid').eq('id', companyId).single(),
       supabase
         .from('articles')
-        .select('id, title, excerpt, cover_image_url, read_time, published_at, is_pinned, series_name, is_editors_pick')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, is_pinned, series_name, is_editors_pick')
         .eq('company_id', companyId)
         .eq('status', 'published')
         .is('deleted_at', null)
@@ -1230,7 +1230,7 @@ app.get('/:id', async (c) => {
       const skillIds = skills.map((s: any) => s.id)
       const { data: relatedRows } = await supabase
         .from('articles')
-        .select('id, title, excerpt, cover_image_url, read_time, published_at, author_uuid, author_type, company_id, guest_author_name')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name')
         .eq('status', 'published')
         .is('deleted_at', null)
         .neq('id', articleId)
