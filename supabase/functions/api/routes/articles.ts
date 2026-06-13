@@ -875,7 +875,7 @@ app.get('/authors', async (c) => {
     if (sortedCompanyIds.length) {
       const { data: companiesData, error: companiesErr } = await supabase
         .from('companies')
-        .select('id, name, logo_url, tagline')
+        .select('id, name, logo, tagline')
         .in('id', sortedCompanyIds)
 
       console.log('[authors] companiesData:', companiesData?.length, 'error:', companiesErr?.message)
@@ -890,7 +890,7 @@ app.get('/authors', async (c) => {
           id: String(cid),
           type: 'company' as const,
           name: c.name,
-          logo_url: c.logo_url ?? null,
+          logo_url: c.logo ?? null,
           tagline: c.tagline ?? null,
           first_published: companyStatsMap[cid].first_published,
           stats: {
