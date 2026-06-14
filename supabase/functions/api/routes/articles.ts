@@ -1748,12 +1748,30 @@ app.get('/:id/comments', async (c) => {
   try {
     const { data, error } = await supabase
       .from('article_comments')
-      .select('id, content, created_at, author_uuid, users(id, first_name, last_name, profile_image_url)')
+      .select('id, content, created_at, author_uuid')
       .eq('article_id', articleId)
       .order('created_at', { ascending: true })
 
     if (error) throw error
-    return c.json({ comments: data || [] })
+
+    const authorUuids = [...new Set((data || []).map((c: any) => c.author_uuid))]
+    let userMap: Record<string, any> = {}
+    if (authorUuids.length) {
+      const { data: users } = await supabase
+        .from('public_users_view')
+        .select('uuid, first_name, last_name, image')
+        .in('uuid', authorUuids)
+      for (const u of users || []) {
+        userMap[u.uuid] = { id: u.uuid, first_name: u.first_name, last_name: u.last_name, profile_image_url: u.image || null }
+      }
+    }
+
+    const comments = (data || []).map((c: any) => ({
+      ...c,
+      users: userMap[c.author_uuid] || null,
+    }))
+
+    return c.json({ comments })
   } catch (err) {
     console.error('GET /articles/:id/comments error:', err)
     return c.json({ error: 'Internal server error' }, 500)
@@ -1780,6 +1798,17 @@ app.post('/:id/comments', async (c) => {
 
     if (error) throw error
 
+    // Enrich with user data
+    const { data: authorData } = await supabase
+      .from('public_users_view')
+      .select('uuid, first_name, last_name, image')
+      .eq('uuid', user.id)
+      .maybeSingle()
+    const enrichedComment = {
+      ...comment,
+      users: authorData ? { id: authorData.uuid, first_name: authorData.first_name, last_name: authorData.last_name, profile_image_url: authorData.image || null } : null,
+    }
+
     // Notify article author (skip self-comment)
     const { data: article } = await supabase
       .from('articles')
@@ -1797,7 +1826,7 @@ app.post('/:id/comments', async (c) => {
       })
     }
 
-    return c.json({ comment })
+    return c.json({ comment: enrichedComment })
   } catch (err) {
     console.error('POST /articles/:id/comments error:', err)
     return c.json({ error: 'Internal server error' }, 500)
