@@ -117,8 +117,9 @@ app.post("/", async (c) => {
       return c.json({ error: "Unauthorized" }, 401);
     }
 
+    const isAdmin = user.app_metadata?.is_admin === true;
     const inviterRole = user.app_metadata?.role;
-    if (inviterRole === "recruiters" || inviterRole === "feed_participant") {
+    if (!isAdmin && (inviterRole === "recruiters" || inviterRole === "feed_participant")) {
       return c.json({ error: "Forbidden" }, 403);
     }
 
@@ -165,6 +166,36 @@ app.post("/", async (c) => {
     }
     if (existingInvite) {
       return c.json({ error: "recipient already invited" }, 409);
+    }
+
+    if (isAdmin) {
+      const createdAt = new Date();
+      const expiresAt = new Date(createdAt);
+      expiresAt.setDate(expiresAt.getDate() + 7);
+      const tokenBytes = crypto.getRandomValues(new Uint8Array(16));
+      const token = Array.from(tokenBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+      const invitePayload = {
+        id: crypto.randomUUID(),
+        inviter_id: user.id,
+        token,
+        recipient_email: normalizedRecipientEmail,
+        personal_note: personalNote || null,
+        acquaintance_source: acquaintanceSource,
+        terms_accepted: true,
+        terms_accepted_at: createdAt.toISOString(),
+        status: "pending",
+        role: "community",
+        views_count: 0,
+        last_viewed_at: null,
+        created_at: createdAt.toISOString(),
+        expires_at: expiresAt.toISOString(),
+      };
+      const { data, error } = await supabase.from("invites").insert([invitePayload]).select("*").single();
+      if (error) return c.json({ error: error.message }, 400);
+      const { data: inviterProfile } = await supabase.from("users").select("first_name, last_name").eq("uuid", user.id).maybeSingle();
+      const inviterName = inviterProfile ? [inviterProfile.first_name, inviterProfile.last_name].filter(Boolean).join(" ") : "a duallin member";
+      sendInviteEmail({ to: normalizedRecipientEmail, inviterName, token, personalNote: personalNote || null, expiresAt: expiresAt.toISOString() }).catch((err) => { console.error("Failed to send invite email:", err.message); });
+      return c.json(data, 201);
     }
 
     // Gate check: account age, profile strength, activity score
