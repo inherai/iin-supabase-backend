@@ -367,6 +367,39 @@ app.get('/activity', async (c) => {
 })
 
 // --------------------------------------------------------------------
+// PATCH /api/me/companies/:id/bio — update tagline for an owned company
+// --------------------------------------------------------------------
+app.patch('/companies/:id/bio', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const companyId = parseInt(c.req.param('id'), 10)
+  if (isNaN(companyId)) return c.json({ error: 'Invalid company id' }, 400)
+
+  const { bio } = await c.req.json()
+  if (typeof bio !== 'string') return c.json({ error: 'bio must be a string' }, 400)
+
+  const supabase = c.get('supabase')
+
+  // Verify ownership
+  const { data: owned } = await supabase
+    .from('companies')
+    .select('id')
+    .eq('id', companyId)
+    .eq('owner_uuid', user.id)
+    .maybeSingle()
+
+  if (!owned) return c.json({ error: 'Not found or not authorized' }, 403)
+
+  const { error } = await supabase
+    .from('companies')
+    .update({ tagline: bio.trim() || null })
+    .eq('id', companyId)
+
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ success: true })
+})
+
 // GET /api/me/companies
 // Companies the current user owns (for compose-dialog identity switcher)
 // --------------------------------------------------------------------

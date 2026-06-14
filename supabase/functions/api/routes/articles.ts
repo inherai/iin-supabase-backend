@@ -332,6 +332,49 @@ app.get('/', async (c) => {
   }
 })
 
+// ─── GET /articles/latest — newest articles, pure date sort ──────────────────
+
+app.get('/latest', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+
+  try {
+    const { data, error } = await supabase
+      .from('articles')
+      .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
+      .eq('status', 'published')
+      .is('deleted_at', null)
+      .order('published_at', { ascending: false, nullsFirst: false })
+      .limit(limit)
+
+    if (error) throw error
+
+    const articles = await batchEnrichArticles(data || [], supabase)
+    const articleIds = (data || []).map((a: any) => String(a.id))
+    const [tagsMap, viewsRes] = await Promise.all([
+      batchFetchTags(articleIds, supabase),
+      articleIds.length
+        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        : { data: [] as any[] },
+    ])
+    const viewCountMap: Record<string, number> = {}
+    for (const row of viewsRes.data || []) viewCountMap[row.article_id] = row.view_count ?? 0
+
+    const enriched = articles.map((a: any) => ({
+      ...a,
+      tags: tagsMap[a.id] || [],
+      view_count: viewCountMap[a.id] || 0,
+    }))
+
+    return c.json({ articles: enriched })
+  } catch (err) {
+    console.error('GET /articles/latest error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 // ─── GET /articles/search ─────────────────────────────────────────────────────
 
 app.get('/search', async (c) => {
@@ -1474,6 +1517,7 @@ app.put('/:id', async (c) => {
     if (content !== undefined) {
       updates.content = sanitizeHtml(content)
       updates.content_plain = stripHtml(updates.content)
+      updates.read_time = Math.max(1, Math.ceil(wordCount(updates.content_plain) / 200))
     }
     if (cover_image_url !== undefined) updates.cover_image_url = cover_image_url
     if (company_id !== undefined) updates.company_id = company_id || null

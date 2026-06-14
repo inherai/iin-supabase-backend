@@ -5,9 +5,6 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const app = new Hono()
 
-// ====================================================================
-// קבועים (כפי שביקשת)
-// ====================================================================
 const FETCH_K_SQL = 60;
 const DECAY_DAYS = 90;
 const MAX_BONUS = 0.3;
@@ -19,105 +16,31 @@ function isRecruiterViewer(user: any): boolean {
   return role === RECRUITER_ROLE;
 }
 
-const SEARCH_INTENT_PROMPT = `
-Your task is to generate a concise and explicit search query for semantic retrieval.
-Instructions:
-- Analyze the user's input.
-- Do NOT answer the user.
-- Remove emotional language or urgency.
-- Output MUST be valid JSON ONLY: {"search_query": "<Hebrew query>"}
-`;
-
-const SYSTEM_PROMPT = `
-You are a knowledgeable and comprehensive community assistant.
-Your goal is to answer user questions based ONLY on the provided email snippets.
-
-Output Format:
-You MUST return a valid JSON object with the following structure:
-{
-  "answer": "The answer in Hebrew text only.",
-  "source_indices": [1, 5, 12] // An array of the SOURCE_INDEX numbers you used.
-}
-
-━━━━━━━━━━━━━━━━━━━━━━
-CORE BEHAVIOR RULES
-━━━━━━━━━━━━━━━━━━━━━━
-1. **Be Comprehensive:** Do NOT be concise. If the user asks a general question, extract ANY relevant advice, tips, or resources found in the sources.
-2. **Synthesize:** Combine partial pieces of information from different sources into a full answer.
-3. **Source of Truth:** Use ONLY the provided sources.
-4. **Meta-Information:** If absolutely no facts are found, summarize what users are *asking* about instead.
-
-━━━━━━━━━━━━━━━━━━━━━━
-RESPONSE GUIDELINES
-━━━━━━━━━━━━━━━━━━━━━━
-* Construct a helpful, detailed response.
-* If you find lists of resources (links, guides) in the sources, mention them in detail.
-* The "answer" field must be clean text only.
-* Never mention source numbers or citations inside "answer".
-* Do not write phrases like "מקור 5", "source 5", "[1]", or "(1)" inside "answer".
-`;
-
-function stripInlineCitations(answer: string): string {
-  return answer
-    .replace(/\s*[\(\[]?\s*(?:מקור(?:ות)?|source(?:s)?)\s+\d+(?:\s*,\s*(?:(?:מקור(?:ות)?|source(?:s)?)\s+)?\d+)*\s*[\)\]]?/gi, '')
-    .replace(/\s*\[\s*\d+(?:\s*,\s*\d+)*\s*\]/g, '')
-    .replace(/\s*\(\s*\d+(?:\s*,\s*\d+)*\s*\)/g, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\(\s*\)/g, '')
-    .trim();
-}
-
-// POST /api/searchAI
+// POST /api/search-ai
 app.post('/', async (c) => {
   try {
-    // אתחול OpenAI
     const openai = new OpenAI({ apiKey: Deno.env.get("TEST_OPENAI_API_KEY") });
-    
-    // קליינט אדמין - רק לחיפוש ווקטורי שדורש עקיפת הרשאות
+
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
-    
-    // קליינט של המשתמש המחובר - שומר על ה-auth.uid() לטובת ה-View!
+
     const supabaseUser = c.get('supabase');
     const currentUser = c.get('user');
     const viewerIsRecruiter = isRecruiterViewer(currentUser);
 
-    // קריאת ה-Body דרך Hono
     const { query: rawUserQuery } = await c.req.json();
 
     // =================================================================
-    // שלב 1: ניקוי השאילתה
+    // שלב 2: חיפוש וקטורי + keyword עם סף דינמי
     // =================================================================
-    let optimizedQuery = rawUserQuery;
-    try {
-      const intentChat = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: SEARCH_INTENT_PROMPT },
-          { role: "user", content: rawUserQuery }
-        ],
-        temperature: 0.2,
-        response_format: { type: "json_object" }
-      });
-      const jsonResponse = JSON.parse(intentChat.choices[0].message.content || "{}");
-      if (jsonResponse.search_query) optimizedQuery = jsonResponse.search_query;
-    } catch (e) {
-      console.error("Intent parsing failed");
-    }
-
-    console.log(`Original: ${rawUserQuery} | Optimized: ${optimizedQuery}`);
-
-    // =================================================================
-    // שלב 2: חיפוש ורטריב עם סף דינמי
-    // =================================================================
-    const wordCount = optimizedQuery.trim().split(/\s+/).length;
-    const dynamicThreshold = wordCount <= 1 ? 0.05 : STRICT_THRESHOLD; 
+    const wordCount = rawUserQuery.trim().split(/\s+/).length;
+    const dynamicThreshold = wordCount <= 1 ? 0.05 : STRICT_THRESHOLD;
 
     const emb = await openai.embeddings.create({
       model: "text-embedding-3-small",
-      input: optimizedQuery,
+      input: rawUserQuery,
     });
     const queryVector = emb.data[0].embedding;
 
@@ -128,17 +51,14 @@ app.post('/', async (c) => {
         match_limit: FETCH_K_SQL
       }).select('id, subject, message, sent_at, sender, attachments, community_members_only, similarity'),
       (() => {
-        // הסרת קידומות עבריות נפוצות (ל,ב,מ,ה,כ,ו,ש) לפני keyword search
         const HEBREW_PREFIXES = /^(שה|מה|לה|כש|וש|ומ|ול|וב|וכ|וה|של|שב|שמ|שכ|בה|כה|לכ|לב|מב|מל|מכ|ל|ב|מ|ה|כ|ו|ש)/;
         const stripPrefix = (w: string) => w.replace(HEBREW_PREFIXES, '') || w;
-        const words = optimizedQuery.trim().split(/\s+/)
+        const words = rawUserQuery.trim().split(/\s+/)
           .map(stripPrefix)
           .filter(w => w.length > 2);
-        // subject: OR בין שורשי המילים (כותרות קצרות = מעט רעש)
-        // message: הביטוי המלא בדיוק (מונע רעש ממילים נפוצות)
         const parts = [
           ...words.map(w => `subject.ilike.%${w}%`),
-          `message.ilike.%${optimizedQuery}%`
+          `message.ilike.%${rawUserQuery}%`
         ].join(',');
         return supabaseAdmin
           .from('posts')
@@ -172,14 +92,12 @@ app.post('/', async (c) => {
       const now = new Date();
       const scoredItems = mergedMatches.map((post: any) => {
         const postDateStr = post.sent_at;
-        let daysOld = 730; 
+        let daysOld = 730;
         if (postDateStr) {
           const diffTime = now.getTime() - new Date(postDateStr).getTime();
           daysOld = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
         }
-        
         const recencyBonus = MAX_BONUS * (1 / (1 + (daysOld / DECAY_DAYS)));
-        
         return {
           ...post,
           final_score: (post.similarity || 0) + recencyBonus,
@@ -187,7 +105,6 @@ app.post('/', async (c) => {
         };
       });
 
-      // מיון ראשוני לפי ציון משוקלל (תאריך + דמיון)
       scoredItems.sort((a: any, b: any) => b.final_score - a.final_score);
       finalItems = viewerIsRecruiter
         ? scoredItems.filter((p: any) => p.community_members_only !== true)
@@ -200,155 +117,96 @@ app.post('/', async (c) => {
     let enrichedItems: any[] = [];
 
     if (finalItems.length > 0) {
-        // 1. אוספים את כל ה-IDs והמיילים
-        const postIds = finalItems.map((p) => p.id);
-        const emailsToFetch = new Set<string>();
-        
-        finalItems.forEach((p: any) => {
-             if (p.sender) emailsToFetch.add(p.sender);
-        });
+      const postIds = finalItems.map((p) => p.id);
+      const emailsToFetch = new Set<string>();
 
-        // 2. שולפים post_type ותגובות במקביל
-        const [{ data: postTypes }, { data: comments, error: commentsError }] = await Promise.all([
-          supabaseUser.from('posts').select('id, post_type').in('id', postIds),
-          supabaseUser.from('comments').select('*').in('post_id', postIds).order('created_at', { ascending: true }).limit(200),
-        ]);
+      finalItems.forEach((p: any) => {
+        if (p.sender) emailsToFetch.add(p.sender);
+      });
 
-        const postTypeMap = (postTypes || []).reduce((acc: any, p: any) => {
-          acc[p.id] = p.post_type;
-          return acc;
-        }, {} as Record<string, string>);
+      const [{ data: postTypes }, { data: comments, error: commentsError }] = await Promise.all([
+        supabaseUser.from('posts').select('id, post_type').in('id', postIds),
+        supabaseUser.from('comments').select('*').in('post_id', postIds).order('created_at', { ascending: true }).limit(200),
+      ]);
 
-        // exclude email/null post_type from both semantic and keyword results
-        finalItems = finalItems.filter((p: any) => {
-          const pt = postTypeMap[p.id];
-          return pt && pt !== 'email';
-        });
+      const postTypeMap = (postTypes || []).reduce((acc: any, p: any) => {
+        acc[p.id] = p.post_type;
+        return acc;
+      }, {} as Record<string, string>);
 
-        if (commentsError) throw commentsError;
+      finalItems = finalItems.filter((p: any) => {
+        const pt = postTypeMap[p.id];
+        return pt && pt !== 'email';
+      });
 
-        const visibleComments = viewerIsRecruiter
-          ? (comments || []).filter((c: any) => c.community_members_only !== true)
-          : (comments || []);
+      if (commentsError) throw commentsError;
 
-        // מוסיפים את המיילים של המגיבים לרשימת המיילים לשליפה
-        visibleComments.forEach((c: any) => {
-            if (c.sender) emailsToFetch.add(c.sender);
-        });
+      const visibleComments = viewerIsRecruiter
+        ? (comments || []).filter((c: any) => c.community_members_only !== true)
+        : (comments || []);
 
-        // 3. שולפים משתמשים דרך המשתמש (כדי שה-View יידע מי מחפש!)
-        const { data: users, error: usersError } = await supabaseUser
-            .from('public_users_view')
-            .select('uuid, email, first_name, last_name, image, role, headline')
-            .in('email', Array.from(emailsToFetch));
+      visibleComments.forEach((c: any) => {
+        if (c.sender) emailsToFetch.add(c.sender);
+      });
 
-        if (usersError) throw usersError;
+      const { data: users, error: usersError } = await supabaseUser
+        .from('public_users_view')
+        .select('uuid, email, first_name, last_name, image, role, headline')
+        .in('email', Array.from(emailsToFetch));
 
-        // 4. יוצרים מפה של משתמשים
-        const usersMap = users?.reduce((acc: any, user: any) => {
-            if (user.email) {
-                const displayName = user.first_name
-                  ? (user.last_name ? `${user.first_name} ${user.last_name}` : user.first_name)
-                  : (user.email || 'Anonymous User');
+      if (usersError) throw usersError;
 
-                acc[user.email] = {
-                    uuid: user.uuid,
-                    email: user.email,
-                    name: displayName,
-                    first_name: user.first_name,
-                    last_name: user.last_name,
-                    image: user.image === 'true' ? true : null,
-                    role: user.role,
-                    headline: user.headline
-                };
-            }
-            return acc;
-        }, {} as Record<string, any>);
+      const usersMap = users?.reduce((acc: any, user: any) => {
+        if (user.email) {
+          const displayName = user.first_name
+            ? (user.last_name ? `${user.first_name} ${user.last_name}` : user.first_name)
+            : (user.email || 'Anonymous User');
+          acc[user.email] = {
+            uuid: user.uuid,
+            email: user.email,
+            name: displayName,
+            first_name: user.first_name,
+            last_name: user.last_name,
+            image: user.image === 'true' ? true : null,
+            role: user.role,
+            headline: user.headline
+          };
+        }
+        return acc;
+      }, {} as Record<string, any>);
 
-        const getAuthor = (email: string) => usersMap?.[email] || {
-            uuid: null, email: email, name: email || 'Unknown', first_name: email || 'Unknown', last_name: null, image: null, role: 'unknown'
+      const getAuthor = (email: string) => usersMap?.[email] || {
+        uuid: null, email: email, name: email || 'Unknown', first_name: email || 'Unknown', last_name: null, image: null, role: 'unknown'
+      };
+
+      const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
+        const commentWithAuthor = {
+          ...comment,
+          author: getAuthor(comment.sender)
         };
+        if (!acc[comment.post_id]) acc[comment.post_id] = [];
+        acc[comment.post_id].push(commentWithAuthor);
+        return acc;
+      }, {} as Record<string, any[]>);
 
-        // 5. מחברים משתמשים לתגובות ומסדרים לפי פוסט
-        const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
-            const commentWithAuthor = { 
-                ...comment, 
-                author: getAuthor(comment.sender) 
-            };
-            if (!acc[comment.post_id]) acc[comment.post_id] = [];
-            acc[comment.post_id].push(commentWithAuthor);
-            return acc;
-        }, {} as Record<string, any[]>);
-
-        // 6. יוצרים את האובייקטים הסופיים (פוסט + מחבר + תגובות)
-        enrichedItems = finalItems.map((post: any) => {
-            const { comments_text, similarity, final_score, days_old, ...restOfPost } = post;
-
-            return {
-                ...restOfPost,
-                post_type: postTypeMap[post.id] || null,
-                author: getAuthor(post.sender),
-                comments: commentsByPostId?.[post.id] || []
-            };
-        });
+      enrichedItems = finalItems.map((post: any) => {
+        const { comments_text, similarity, final_score, days_old, ...restOfPost } = post;
+        return {
+          ...restOfPost,
+          post_type: postTypeMap[post.id] || null,
+          author: getAuthor(post.sender),
+          comments: commentsByPostId?.[post.id] || []
+        };
+      });
     }
 
-    // =================================================================
-    // שלב 4: הכנת הקונטקסט (נשאר טקסט נקי למודל)
-    // =================================================================
-    const fullContext = enrichedItems.length > 0
-      ? enrichedItems.map((res: any, index: number) => {
-          return `SOURCE_INDEX: ${index + 1}\nתאריך: ${res.sent_at}\nנושא: ${res.subject}\nתוכן: ${res.message}`;
-        }).join("\n\n---\n\n")
-      : "No relevant information found.";
-
-    // =================================================================
-    // שלב 5: יצירת תשובה
-    // =================================================================
-      const chat = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `Context:\n${fullContext}\n\nQuestion: ${rawUserQuery}` }
-      ],
-      temperature: 0.4,
-      response_format: { type: "json_object" }
-    });
-
-    const content = chat.choices[0].message.content || "{}";
-    let parsedResult = { answer: "", source_indices: [] };
-    try { parsedResult = JSON.parse(content); } catch (e) {}
-
-    // =================================================================
-    // שלב 6: עיבוד סופי - החזרת אובייקטים מלאים למשתמש
-    // =================================================================
-    const cleanAnswer = stripInlineCitations(
-      parsedResult.answer || "לא נמצא מידע רלוונטי."
-    );
-    const indices: number[] = Array.isArray(parsedResult.source_indices) ? parsedResult.source_indices : [];
-    const usedIndicesSet = new Set<number>(indices.map((i: number) => i - 1));
-    
-    const usedItems: any[] = [];
-    const unusedItems: any[] = [];
-
-    enrichedItems.forEach((item, index) => {
-        if (usedIndicesSet.has(index)) {
-            usedItems.push(item);
-        } else {
-            unusedItems.push(item);
-        }
-    });
-
-    const reorderedAllSources = [...usedItems, ...unusedItems];
-
-    // =================================================================
-    // שלב 7: החזרה ללקוח (Hono JSON Response)
-    // =================================================================
     return c.json({
-      answer: cleanAnswer,
-      used_sources: usedItems,          
-      all_sources: reorderedAllSources, 
-      optimized_query: optimizedQuery
+      items: enrichedItems,
+      // backward compat — old frontend reads these fields
+      all_sources: enrichedItems,
+      used_sources: enrichedItems,
+      answer: '',
+      optimized_query: rawUserQuery,
     });
 
   } catch (err: any) {
