@@ -1095,7 +1095,7 @@ app.get('/authors', async (c) => {
     // Fetch user profiles (skip if no user authors)
     let userAuthors: any[] = []
     if (topUuids.length) {
-      const [{ data: profiles }, { data: userCovers }, { data: bioProfiles }] = await Promise.all([
+      const [{ data: profiles }, { data: userCovers }, { data: bioProfiles }, { data: soloArticleRows }] = await Promise.all([
         supabase
           .from('public_users_view')
           .select('uuid, first_name, last_name, image, headline')
@@ -1108,7 +1108,19 @@ app.get('/authors', async (c) => {
           .from('article_author_profiles')
           .select('author_uuid, writing_bio')
           .in('author_uuid', topUuids),
+        // Only users who wrote at least one article as themselves (not as company) should appear.
+        // If all their articles have company_id set, they appear as the company — not as a person.
+        supabase
+          .from('articles')
+          .select('author_uuid')
+          .eq('status', 'published')
+          .is('deleted_at', null)
+          .is('company_id', null)
+          .in('author_uuid', topUuids),
       ])
+
+      // Build set of UUIDs that have at least one personal article
+      const soloAuthorSet = new Set((soloArticleRows || []).map((r: any) => String(r.author_uuid)))
 
       const profileMap: Record<string, any> = {}
       for (const p of profiles || []) profileMap[p.uuid] = p
@@ -1123,6 +1135,7 @@ app.get('/authors', async (c) => {
       for (const s of statsRows as any[]) statsMap[String(s.author_uuid)] = s
 
       userAuthors = topUuids
+        .filter((uuid: string) => soloAuthorSet.has(uuid)) // exclude authors who only wrote as a company
         .map((uuid: string) => {
           const p = profileMap[uuid]
           const s = statsMap[uuid]
