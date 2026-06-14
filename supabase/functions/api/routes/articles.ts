@@ -479,7 +479,7 @@ app.get('/trending', async (c) => {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
     // Count impressions per article in the last 7 days
-    const { data: impressionData } = await supabase
+    const { data: impressionData } = await supabaseAdmin
       .from('article_impressions')
       .select('article_id')
       .gte('impression_date', sevenDaysAgo)
