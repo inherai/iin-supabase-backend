@@ -656,7 +656,7 @@ app.get('/my-articles', async (c) => {
   try {
     const { data, error } = await supabase
       .from('articles')
-      .select('id, title, status, cover_image_url, read_time, published_at, updated_at, is_pinned, series_name, series_order')
+      .select('id, title, status, cover_image_url, read_time, published_at, updated_at, is_pinned, series_name, series_order, company_id, companies(id, name, logo_url)')
       .eq('author_uuid', user.id)
       .is('deleted_at', null)
       .order('updated_at', { ascending: false })
@@ -709,12 +709,14 @@ app.get('/user/:userId', async (c) => {
 
   try {
     // Fetch article IDs first so all parallel queries can use them cleanly
+    // Only personal articles (company_id IS NULL) — company articles belong to the company page
     const { data: idRows } = await supabase
       .from('articles')
       .select('id')
       .eq('author_uuid', userId)
       .eq('status', 'published')
       .is('deleted_at', null)
+      .is('company_id', null)
     const articleIds = (idRows || []).map((a: any) => a.id)
 
     // Non-owner visiting a page with no articles → 404 (don't expose empty profiles)
@@ -729,6 +731,7 @@ app.get('/user/:userId', async (c) => {
         .eq('author_uuid', userId)
         .eq('status', 'published')
         .is('deleted_at', null)
+        .is('company_id', null)
         .order('is_pinned', { ascending: false })
         .order('published_at', { ascending: false }),
       supabase
