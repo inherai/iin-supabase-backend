@@ -656,7 +656,7 @@ app.get('/my-articles', async (c) => {
   try {
     const { data, error } = await supabase
       .from('articles')
-      .select('id, title, status, cover_image_url, read_time, published_at, updated_at, is_pinned, series_name, series_order, company_id, companies(id, name, logo_url)')
+      .select('id, title, status, cover_image_url, read_time, published_at, updated_at, is_pinned, series_name, series_order, company_id')
       .eq('author_uuid', user.id)
       .is('deleted_at', null)
       .order('updated_at', { ascending: false })
@@ -665,29 +665,40 @@ app.get('/my-articles', async (c) => {
 
     // Attach view counts and reaction/comment counts for analytics
     const articleIds = (data || []).map((a: any) => a.id)
+    const companyIds = [...new Set((data || []).filter((a: any) => a.company_id).map((a: any) => a.company_id))]
     let viewCounts: Record<string, number> = {}
     let commentCounts: Record<string, number> = {}
+    let companyMap: Record<number, { id: number; name: string; logo_url: string | null }> = {}
+
+    const fetchPromises: Promise<any>[] = []
 
     if (articleIds.length) {
-      const { data: impressions } = await supabase
-        .from('article_impressions')
-        .select('article_id')
-        .in('article_id', articleIds)
-      for (const row of impressions || []) {
-        viewCounts[row.article_id] = (viewCounts[row.article_id] || 0) + 1
-      }
-
-      const { data: comments } = await supabase
-        .from('article_comments')
-        .select('article_id')
-        .in('article_id', articleIds)
-      for (const row of comments || []) {
-        commentCounts[row.article_id] = (commentCounts[row.article_id] || 0) + 1
-      }
+      fetchPromises.push(
+        supabase.from('article_impressions').select('article_id').in('article_id', articleIds)
+          .then(({ data: rows }: any) => {
+            for (const row of rows || []) viewCounts[row.article_id] = (viewCounts[row.article_id] || 0) + 1
+          }),
+        supabase.from('article_comments').select('article_id').in('article_id', articleIds)
+          .then(({ data: rows }: any) => {
+            for (const row of rows || []) commentCounts[row.article_id] = (commentCounts[row.article_id] || 0) + 1
+          })
+      )
     }
+
+    if (companyIds.length) {
+      fetchPromises.push(
+        supabase.from('companies').select('id, name, logo_url').in('id', companyIds)
+          .then(({ data: rows }: any) => {
+            for (const c of rows || []) companyMap[c.id] = c
+          })
+      )
+    }
+
+    await Promise.all(fetchPromises)
 
     const enriched = (data || []).map((a: any) => ({
       ...a,
+      company: a.company_id ? (companyMap[a.company_id] || null) : null,
       view_count: viewCounts[a.id] || 0,
       comment_count: commentCounts[a.id] || 0,
     }))
