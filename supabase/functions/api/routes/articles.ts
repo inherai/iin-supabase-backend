@@ -1548,6 +1548,39 @@ app.post('/:id/publish', async (c) => {
   }
 })
 
+// ─── POST /articles/:id/unpublish ────────────────────────────────────────────
+
+app.post('/:id/unpublish', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+  const articleId = c.req.param('id')
+
+  try {
+    const { data: article, error: fetchErr } = await supabase
+      .from('articles')
+      .select('author_uuid, company_id')
+      .eq('id', articleId)
+      .single()
+
+    if (fetchErr || !article) return c.json({ error: 'Not found' }, 404)
+
+    const isOwner = article.author_uuid === user.id
+    if (!isOwner) return c.json({ error: 'Forbidden' }, 403)
+
+    const { error } = await supabase
+      .from('articles')
+      .update({ status: 'draft', published_at: null, updated_at: new Date().toISOString() })
+      .eq('id', articleId)
+
+    if (error) throw error
+    return c.json({ success: true })
+  } catch (err) {
+    console.error('POST /articles/:id/unpublish error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 // ─── POST /articles/:id/pin ───────────────────────────────────────────────────
 
 app.post('/:id/pin', async (c) => {
