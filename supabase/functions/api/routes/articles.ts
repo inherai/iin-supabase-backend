@@ -1405,7 +1405,7 @@ app.get('/:id', async (c) => {
     }
 
     // View count
-    const { count: viewCount } = await supabase
+    const { count: viewCount } = await supabaseAdmin
       .from('article_impressions')
       .select('*', { count: 'exact', head: true })
       .eq('article_id', articleId)
