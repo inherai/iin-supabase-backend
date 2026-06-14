@@ -687,9 +687,9 @@ app.get('/my-articles', async (c) => {
 
     if (companyIds.length) {
       fetchPromises.push(
-        supabase.from('companies').select('id, name, logo_url').in('id', companyIds)
+        supabase.from('companies').select('id, name, logo').in('id', companyIds)
           .then(({ data: rows }: any) => {
-            for (const c of rows || []) companyMap[c.id] = c
+            for (const c of rows || []) companyMap[c.id] = { ...c, logo_url: c.logo }
           })
       )
     }
