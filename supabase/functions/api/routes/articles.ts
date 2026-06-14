@@ -314,12 +314,16 @@ app.get('/', async (c) => {
       followerCountMap[row.author_uuid] = (followerCountMap[row.author_uuid] || 0) + 1
     }
 
-    const articles = enrichedArticles.map((a: any) => ({
-      ...a,
-      tags: tagsMap[a.id] || [],
-      view_count: viewCountMap[a.id] || 0,
-      ...(a.author ? { author: { ...a.author, follower_count: followerCountMap[a.author_uuid] || 0 } } : {}),
-    }))
+    const articles = enrichedArticles.map((a: any) => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { content, content_plain, ...rest } = a
+      return {
+        ...rest,
+        tags: tagsMap[a.id] || [],
+        view_count: viewCountMap[a.id] || 0,
+        ...(a.author ? { author: { ...a.author, follower_count: followerCountMap[a.author_uuid] || 0 } } : {}),
+      }
+    })
 
     return c.json({ articles, nextCursor })
   } catch (err) {
@@ -674,9 +678,9 @@ app.get('/my-articles', async (c) => {
 
     if (articleIds.length) {
       fetchPromises.push(
-        supabase.from('article_impressions').select('article_id').in('article_id', articleIds)
+        supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
           .then(({ data: rows }: any) => {
-            for (const row of rows || []) viewCounts[row.article_id] = (viewCounts[row.article_id] || 0) + 1
+            for (const row of rows || []) viewCounts[row.article_id] = row.view_count ?? 0
           }),
         supabase.from('article_comments').select('article_id').in('article_id', articleIds)
           .then(({ data: rows }: any) => {
