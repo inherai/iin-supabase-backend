@@ -1,5 +1,6 @@
 // supabase/functions/api/routes/articles.ts
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
+import { supabaseAdmin } from '../middleware.ts'
 
 const app = new Hono()
 
@@ -298,7 +299,7 @@ app.get('/', async (c) => {
       batchEnrichArticles(raw, supabase),
       batchFetchTags(articleIds, supabase),
       articleIds.length
-        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        ? supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
         : { data: [] as any[] },
       authorUuids.length
         ? supabase.from('article_author_follows').select('author_uuid').in('author_uuid', authorUuids)
@@ -356,7 +357,7 @@ app.get('/latest', async (c) => {
     const [tagsMap, viewsRes] = await Promise.all([
       batchFetchTags(articleIds, supabase),
       articleIds.length
-        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        ? supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
         : { data: [] as any[] },
     ])
     const viewCountMap: Record<string, number> = {}
@@ -497,7 +498,7 @@ app.get('/trending', async (c) => {
 
     // Fallback: if fewer than 4 results from the last 7 days, use all-time view counts
     if (articleIds.length < 4) {
-      const { data: allTimeData } = await supabase
+      const { data: allTimeData } = await supabaseAdmin
         .from('article_view_counts')
         .select('article_id, view_count')
         .order('view_count', { ascending: false })
@@ -536,7 +537,7 @@ app.get('/trending', async (c) => {
     const [tagsMap, viewCountRes] = await Promise.all([
       batchFetchTags(enrichedIds, supabase),
       enrichedIds.length
-        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', enrichedIds)
+        ? supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', enrichedIds)
         : { data: [] as any[] },
     ])
     const viewCountMap: Record<string, number> = {}
@@ -609,7 +610,7 @@ app.get('/following', async (c) => {
     const [tagsMap, viewCountRes] = await Promise.all([
       batchFetchTags(articleIds, supabase),
       articleIds.length
-        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        ? supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
         : { data: [] as any[] },
     ])
     const viewCountMap: Record<string, number> = {}
@@ -721,7 +722,7 @@ app.get('/my-articles', async (c) => {
 
     if (articleIds.length) {
       fetchPromises.push(
-        supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
           .then(({ data: rows }: any) => {
             for (const row of rows || []) viewCounts[row.article_id] = row.view_count ?? 0
           }),
@@ -798,7 +799,7 @@ app.get('/user/:userId', async (c) => {
         .eq('author_uuid', userId)
         .maybeSingle(),
       articleIds.length
-        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        ? supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
         : Promise.resolve({ data: [] as any[] }),
       batchFetchTags(articleIds, supabase),
       supabase
@@ -1006,7 +1007,7 @@ app.get('/company/:companyId', async (c) => {
         ? supabase.from('article_skills').select('skill_id, skills(id, name)').in('article_id', articleIds)
         : Promise.resolve({ data: [] }),
       articleIds.length
-        ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
+        ? supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
         : Promise.resolve({ data: [] as any[] }),
       batchFetchTags(articleIds, supabase),
     ])
@@ -1257,7 +1258,7 @@ app.get('/authors', async (c) => {
       const [{ data: companiesData }, viewCountsRes, followsRes] = await Promise.all([
         supabase.from('companies').select('id, name, logo, tagline').in('id', sortedCompanyIds),
         companyArtIds.length
-          ? supabase.from('article_view_counts').select('article_id, view_count').in('article_id', companyArtIds)
+          ? supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', companyArtIds)
           : Promise.resolve({ data: [] as any[] }),
         supabase.from('article_company_follows').select('company_id').in('company_id', sortedCompanyIds),
       ])
