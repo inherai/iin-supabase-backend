@@ -1147,11 +1147,12 @@ app.get('/authors', async (c) => {
         .filter(Boolean)
     }
 
-    // Also fetch companies that published articles
+    // Also fetch companies that published articles (exclude soft-deleted)
     const { data: companyArticleRows } = await supabase
       .from('articles')
       .select('id, company_id, published_at')
       .eq('status', 'published')
+      .is('deleted_at', null)
       .filter('company_id', 'not.is', null)
 
     const companyStatsMap: Record<number, { article_count: number; first_published: string }> = {}
@@ -1218,16 +1219,20 @@ app.get('/authors', async (c) => {
       }
     }
 
+    // Drop any author whose article_count reached 0 (safety net for edge cases)
+    const filteredUserAuthors    = userAuthors.filter((a: any)    => a.stats.article_count > 0)
+    const filteredCompanyAuthors = companyAuthors.filter((a: any) => a.stats.article_count > 0)
+
     // Interleave: every 3 users, insert 1 company (if available)
     const authors: any[] = []
     let ci = 0
-    for (let i = 0; i < userAuthors.length; i++) {
-      authors.push(userAuthors[i])
-      if ((i + 1) % 3 === 0 && ci < companyAuthors.length) {
-        authors.push(companyAuthors[ci++])
+    for (let i = 0; i < filteredUserAuthors.length; i++) {
+      authors.push(filteredUserAuthors[i])
+      if ((i + 1) % 3 === 0 && ci < filteredCompanyAuthors.length) {
+        authors.push(filteredCompanyAuthors[ci++])
       }
     }
-    while (ci < companyAuthors.length) authors.push(companyAuthors[ci++])
+    while (ci < filteredCompanyAuthors.length) authors.push(filteredCompanyAuthors[ci++])
 
     return c.json({ authors })
   } catch (err) {
