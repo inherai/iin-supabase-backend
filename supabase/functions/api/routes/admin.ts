@@ -752,12 +752,48 @@ Respond with raw JSON only, no markdown.`
   } as any);
 
   const raw = completion.choices[0]?.message?.content?.trim() ?? '';
+  let parsed: any;
   try {
-    const parsed = JSON.parse(raw);
-    return c.json(parsed);
+    parsed = JSON.parse(raw);
   } catch {
     return c.json({ error: 'Could not parse response', raw });
   }
+
+  if (parsed.error) return c.json(parsed);
+
+  // Normalize website URL to https
+  if (typeof parsed.website === 'string' && parsed.website.startsWith('http://')) {
+    parsed.website = parsed.website.replace('http://', 'https://');
+  }
+
+  // Search our DB using the official English name returned by GPT
+  const officialName: string = parsed.official_name || '';
+  let dbMatches: any[] = [];
+
+  if (officialName) {
+    // Try several keywords: full name, first meaningful word, last word
+    const words = officialName.split(/\s+/).filter((w: string) => w.length > 2);
+    const searchTerms = [...new Set([
+      officialName,
+      words[0],
+      words[words.length - 1],
+    ])].filter(Boolean);
+
+    const results = await Promise.all(
+      searchTerms.map((term: string) =>
+        db.from('companies').select('id, name, logo, website').ilike('name', `%${term}%`).limit(5)
+      )
+    );
+
+    const seen = new Set<number>();
+    for (const { data } of results) {
+      for (const c of data || []) {
+        if (!seen.has(c.id)) { seen.add(c.id); dbMatches.push(c); }
+      }
+    }
+  }
+
+  return c.json({ ...parsed, db_matches: dbMatches });
 });
 
 // POST /admin/company-requests/resolve — link requests to a company or dismiss them
