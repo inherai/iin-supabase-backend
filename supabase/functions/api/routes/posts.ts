@@ -1061,6 +1061,19 @@ app.get('/:id', async (c) => {
       postCompany = co
     }
 
+    // Fetch linked article if present
+    let linkedArticle: any = null
+    if (post.linked_article_id) {
+      const { data: article } = await supabase
+        .from('articles')
+        .select('id, title, cover_image_url, excerpt, read_time')
+        .eq('id', post.linked_article_id)
+        .eq('status', 'published')
+        .is('deleted_at', null)
+        .maybeSingle()
+      linkedArticle = article ?? null
+    }
+
     const allEnrichedComments = comments.map((comment: any) => {
       const senderEmail = comment.sender
       const profileData = usersByEmail.get(senderEmail?.toLowerCase())
@@ -1192,7 +1205,8 @@ app.get('/:id', async (c) => {
         user_reaction: userReactions[0] || null,
         is_liked: userReactions.length > 0,
         is_saved: !!savedRow,
-        saved_id: savedRow?.id ?? null
+        saved_id: savedRow?.id ?? null,
+        ...(linkedArticle ? { linked_article: linkedArticle } : {})
       }
     })
   } catch (err: any) {
