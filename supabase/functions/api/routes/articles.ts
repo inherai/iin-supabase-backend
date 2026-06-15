@@ -1878,13 +1878,15 @@ app.post('/:id/comments', async (c) => {
     }
 
     if (recipientId && recipientId !== user.id) {
-      await supabase.from('notifications').insert({
+      const { error: notifError } = await supabaseAdmin.from('notifications').insert({
         user_id: recipientId,
         actor_id: user.id,
         target_id: String(articleId),
         type: 'ARTICLE_COMMENT',
+        count: 1,
         is_read: false,
       })
+      if (notifError) console.error('[article_comment] failed to insert notification:', notifError.message)
     }
 
     return c.json({ comment: enrichedComment })
