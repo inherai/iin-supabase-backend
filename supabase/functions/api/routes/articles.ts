@@ -340,15 +340,20 @@ app.get('/latest', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const supabase = c.get('supabase')
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50)
+  const since = c.req.query('since')
 
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('articles')
       .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url')
       .eq('status', 'published')
       .is('deleted_at', null)
       .order('published_at', { ascending: false, nullsFirst: false })
       .limit(limit)
+
+    if (since) query = query.gte('published_at', since)
+
+    const { data, error } = await query
 
     if (error) throw error
 
