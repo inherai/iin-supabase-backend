@@ -741,15 +741,11 @@ app.post("/company-requests/search-online", async (c) => {
       model: "gpt-4o-search-preview",
       messages: [{
         role: "user",
-        content: `Find the official company info for "${companyName}". Return a JSON object with these fields only:
-- official_name: the exact official company name in English
-- website: official website URL (or null)
-- description: one sentence description in English
-- industry: main industry
-- country: country of headquarters
-- logo_url: direct URL to company logo image (or null)
-If the company cannot be identified confidently, return { "error": "not found" }.
-Respond with raw JSON only, no markdown.`
+        content: `Find all companies named "${companyName}".
+Return a JSON array of all matching companies (up to 5), ordered by global prominence.
+Each item: { "official_name": string, "website": string|null, "description": string, "industry": string, "country": string, "logo_url": string|null }
+If no company can be identified, return: { "error": "not found" }
+You MUST respond with raw JSON only — no markdown, no explanations, no text outside the JSON.`
       }],
     } as any);
   } catch (err: any) {
@@ -758,51 +754,52 @@ Respond with raw JSON only, no markdown.`
   }
 
   const raw = completion.choices[0]?.message?.content?.trim() ?? '';
-  // Strip markdown code fences if model returns them
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  // Extract JSON array or object from response
+  const jsonMatch = raw.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
   let parsed: any;
   try {
-    parsed = JSON.parse(cleaned);
+    if (!jsonMatch) throw new Error('no JSON found');
+    parsed = JSON.parse(jsonMatch[0]);
   } catch {
     console.error('[search-online] JSON parse failed, raw:', raw);
     return c.json({ error: 'Could not parse response', raw });
   }
 
-  if (parsed.error) return c.json(parsed);
+  // If error object returned
+  if (!Array.isArray(parsed) && parsed.error) return c.json(parsed);
 
-  // Normalize website URL to https
-  if (typeof parsed.website === 'string' && parsed.website.startsWith('http://')) {
-    parsed.website = parsed.website.replace('http://', 'https://');
-  }
+  // Normalize to array
+  const results: any[] = Array.isArray(parsed) ? parsed : [parsed];
 
-  // Search our DB using the official English name returned by GPT
-  const officialName: string = parsed.official_name || '';
-  let dbMatches: any[] = [];
-
-  if (officialName) {
-    // Try several keywords: full name, first meaningful word, last word
-    const words = officialName.split(/\s+/).filter((w: string) => w.length > 2);
-    const searchTerms = [...new Set([
-      officialName,
-      words[0],
-      words[words.length - 1],
-    ])].filter(Boolean);
-
-    const results = await Promise.all(
-      searchTerms.map((term: string) =>
-        db.from('companies').select('id, name, logo, website').ilike('name', `%${term}%`).limit(5)
-      )
-    );
-
-    const seen = new Set<number>();
-    for (const { data } of results) {
-      for (const c of data || []) {
-        if (!seen.has(c.id)) { seen.add(c.id); dbMatches.push(c); }
-      }
+  // Normalize website URLs to https
+  for (const item of results) {
+    if (typeof item.website === 'string' && item.website.startsWith('http://')) {
+      item.website = item.website.replace('http://', 'https://');
     }
   }
 
-  return c.json({ ...parsed, db_matches: dbMatches });
+  // Search our DB for each result's official name
+  const dbMatches: any[] = [];
+  const seen = new Set<number>();
+
+  for (const item of results) {
+    const officialName: string = item.official_name || '';
+    if (!officialName) continue;
+
+    const words = officialName.split(/\s+/).filter((w: string) => w.length > 2);
+    const searchTerms = [...new Set([officialName, words[0], words[words.length - 1]])].filter(Boolean);
+
+    await Promise.all(
+      searchTerms.map(async (term: string) => {
+        const { data } = await db.from('companies').select('id, name, logo, website').ilike('name', `%${term}%`).limit(5);
+        for (const co of data || []) {
+          if (!seen.has(co.id)) { seen.add(co.id); dbMatches.push(co); }
+        }
+      })
+    );
+  }
+
+  return c.json({ results, db_matches: dbMatches });
 });
 
 // POST /admin/company-requests/resolve — link requests to a company or dismiss them
