@@ -1858,37 +1858,6 @@ app.post('/:id/comments', async (c) => {
       users: authorData ? { id: authorData.uuid, first_name: authorData.first_name, last_name: authorData.last_name, profile_image_url: authorData.image || null } : null,
     }
 
-    // Notify article author (skip self-comment)
-    const { data: article } = await supabase
-      .from('articles')
-      .select('author_uuid, company_id')
-      .eq('id', articleId)
-      .maybeSingle()
-
-    let recipientId: string | null = article?.author_uuid ?? null
-
-    // For company articles, notify the company owner instead
-    if (!recipientId && article?.company_id) {
-      const { data: company } = await supabase
-        .from('companies')
-        .select('owner_uuid')
-        .eq('id', article.company_id)
-        .maybeSingle()
-      recipientId = company?.owner_uuid ?? null
-    }
-
-    if (recipientId && recipientId !== user.id) {
-      const { error: notifError } = await supabaseAdmin.from('notifications').insert({
-        user_id: recipientId,
-        actor_id: user.id,
-        target_id: String(articleId),
-        type: 'ARTICLE_COMMENT',
-        count: 1,
-        is_read: false,
-      })
-      if (notifError) console.error('[article_comment] failed to insert notification:', notifError.message)
-    }
-
     return c.json({ comment: enrichedComment })
   } catch (err) {
     console.error('POST /articles/:id/comments error:', err)
