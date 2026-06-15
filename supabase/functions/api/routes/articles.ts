@@ -1861,13 +1861,25 @@ app.post('/:id/comments', async (c) => {
     // Notify article author (skip self-comment)
     const { data: article } = await supabase
       .from('articles')
-      .select('author_uuid')
+      .select('author_uuid, company_id')
       .eq('id', articleId)
       .maybeSingle()
 
-    if (article?.author_uuid && article.author_uuid !== user.id) {
+    let recipientId: string | null = article?.author_uuid ?? null
+
+    // For company articles, notify the company owner instead
+    if (!recipientId && article?.company_id) {
+      const { data: company } = await supabase
+        .from('companies')
+        .select('owner_uuid')
+        .eq('id', article.company_id)
+        .maybeSingle()
+      recipientId = company?.owner_uuid ?? null
+    }
+
+    if (recipientId && recipientId !== user.id) {
       await supabase.from('notifications').insert({
-        user_id: article.author_uuid,
+        user_id: recipientId,
         actor_id: user.id,
         target_id: String(articleId),
         type: 'ARTICLE_COMMENT',
