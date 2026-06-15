@@ -115,6 +115,7 @@ app.post('/', async (c) => {
   // ---- Embedding phase ----
   if (isSemanticMode || isJdMode) {
     if (isJdMode && jdMode === 'job' && selectedJobId) {
+      let fetchedJob: { job_description_html: string; job_title: string } | null = null
       const { data: cached } = await supabaseAdmin
         .from('job_embeddings').select('embedding').eq('job_id', selectedJobId).single()
       if (cached) {
@@ -123,6 +124,7 @@ app.post('/', async (c) => {
         const { data: job } = await supabaseAdmin
           .from('open_position').select('job_description_html, job_title').eq('job_id', selectedJobId).single()
         if (!job) return c.json({ error: 'Job not found' }, 404)
+        fetchedJob = job
         const textToEmbed = stripHtml(job.job_description_html) + ' ' + job.job_title
         try {
           queryEmbedding = await getEmbedding(textToEmbed)
@@ -132,9 +134,10 @@ app.post('/', async (c) => {
         }
         jdSkills = await extractSkillsFromJd(textToEmbed)
       }
-      if (queryEmbedding && !jdSkills.length) {
-        const { data: job } = await supabaseAdmin
-          .from('open_position').select('job_description_html, job_title').eq('job_id', selectedJobId).single()
+      const hasNoSkills = !jdSkills.required.length && !jdSkills.preferred.length && !jdSkills.nice_to_have.length
+      if (queryEmbedding && hasNoSkills) {
+        const job = fetchedJob ?? (await supabaseAdmin
+          .from('open_position').select('job_description_html, job_title').eq('job_id', selectedJobId).single()).data
         if (job) jdSkills = await extractSkillsFromJd(stripHtml(job.job_description_html) + ' ' + job.job_title)
       }
     } else if (isJdMode && jdMode === 'text') {

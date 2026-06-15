@@ -639,19 +639,6 @@ if (targetUserId) {
 
     const postIds = sourcePosts.map((p: any) => p.id)
 
-    // get_stabilized_feed has a fixed RETURNS TABLE definition that predates company_id/posted_by_uuid.
-    // Fetch those two columns separately and merge so company post enrichment works correctly.
-    const { data: postExtraData } = await supabase
-      .from('posts')
-      .select('id, company_id, posted_by_uuid')
-      .in('id', postIds)
-    const postExtraMap = new Map((postExtraData || []).map((p: any) => [p.id, p]))
-    sourcePosts = sourcePosts.map((p: any) => ({
-      ...p,
-      company_id: postExtraMap.get(p.id)?.company_id ?? p.company_id ?? null,
-      posted_by_uuid: postExtraMap.get(p.id)?.posted_by_uuid ?? p.posted_by_uuid ?? null,
-    }))
-
     const { data: allPostLikes } = await supabase
       .from('likes')
       .select('target_id, user_id, reaction_type')
