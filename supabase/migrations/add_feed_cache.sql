@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS feed_cache (
   sent_at                timestamptz NOT NULL
 );
 
+ALTER TABLE public.feed_cache DISABLE ROW LEVEL SECURITY;
+GRANT SELECT ON TABLE public.feed_cache TO authenticated;
+GRANT SELECT ON TABLE public.feed_cache TO anon;
+
 CREATE INDEX IF NOT EXISTS idx_feed_cache_effective_date
   ON feed_cache(effective_date DESC);
 
