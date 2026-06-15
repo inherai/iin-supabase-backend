@@ -669,11 +669,18 @@ app.get("/company-requests", async (c) => {
 
   const { data: requests, error } = await db
     .from("company_requests")
-    .select("id, requested_name, requested_by, status, created_at, resolved_company_id, users!requested_by(first_name, last_name, email)")
+    .select("id, requested_name, requested_by, status, created_at, resolved_company_id")
     .eq("status", "pending")
     .order("created_at", { ascending: false });
 
   if (error) return c.json({ error: error.message }, 500);
+
+  // Resolve user info from public.users by UUID
+  const userIds = [...new Set((requests || []).map((r: any) => r.requested_by).filter(Boolean))];
+  const { data: usersData } = userIds.length > 0
+    ? await db.from("users").select("uuid, first_name, last_name, email").in("uuid", userIds)
+    : { data: [] };
+  const usersMap = new Map((usersData || []).map((u: any) => [u.uuid, u]));
 
   // Group by normalized name in JS
   const groups = new Map<string, { normalized: string; requests: any[] }>();
@@ -687,7 +694,7 @@ app.get("/company-requests", async (c) => {
       requested_name: req.requested_name,
       requested_by: req.requested_by,
       created_at: req.created_at,
-      user: (req as any).users ?? null,
+      user: usersMap.get(req.requested_by) ?? null,
     });
   }
 
