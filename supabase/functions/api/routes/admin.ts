@@ -1,6 +1,7 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { calculateProfileStrength, calculateActivityScore } from './_scoreHelpers.ts';
+import OpenAI from "https://esm.sh/openai@4";
 
 const app = new Hono();
 
@@ -732,14 +733,15 @@ app.post("/company-requests/search-online", async (c) => {
   const companyName = typeof body.name === 'string' ? body.name.trim() : '';
   if (!companyName) return c.json({ error: 'name is required' }, 400);
 
-  const OpenAI = (await import("https://esm.sh/openai@4")).default;
   const openai = new OpenAI({ apiKey: Deno.env.get("TEST_OPENAI_API_KEY") });
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-search-preview",
-    messages: [{
-      role: "user",
-      content: `Find the official company info for "${companyName}". Return a JSON object with these fields only:
+  let completion: any;
+  try {
+    completion = await openai.chat.completions.create({
+      model: "gpt-4o-search-preview",
+      messages: [{
+        role: "user",
+        content: `Find the official company info for "${companyName}". Return a JSON object with these fields only:
 - official_name: the exact official company name in English
 - website: official website URL (or null)
 - description: one sentence description in English
@@ -748,14 +750,21 @@ app.post("/company-requests/search-online", async (c) => {
 - logo_url: direct URL to company logo image (or null)
 If the company cannot be identified confidently, return { "error": "not found" }.
 Respond with raw JSON only, no markdown.`
-    }],
-  } as any);
+      }],
+    } as any);
+  } catch (err: any) {
+    console.error('[search-online] OpenAI error:', err?.message);
+    return c.json({ error: `OpenAI error: ${err?.message ?? 'unknown'}` }, 500);
+  }
 
   const raw = completion.choices[0]?.message?.content?.trim() ?? '';
+  // Strip markdown code fences if model returns them
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   let parsed: any;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(cleaned);
   } catch {
+    console.error('[search-online] JSON parse failed, raw:', raw);
     return c.json({ error: 'Could not parse response', raw });
   }
 
