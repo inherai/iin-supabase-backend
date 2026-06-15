@@ -168,4 +168,28 @@ app.get('/:id', async (c) => {
   })
 })
 
+// POST /api/companies/request — user requests a missing company to be added
+app.post('/request', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const supabase = c.get('supabase')
+  const body = await c.req.json().catch(() => ({}))
+  const name = typeof body.name === 'string' ? body.name.trim() : ''
+
+  if (!name) return c.json({ error: 'name is required' }, 400)
+  if (name.length > 200) return c.json({ error: 'name too long' }, 400)
+
+  const { error } = await supabase
+    .from('company_requests')
+    .upsert(
+      { requested_name: name, requested_by: user.id, status: 'pending' },
+      { onConflict: 'requested_by,lower(requested_name)', ignoreDuplicates: true }
+    )
+
+  if (error) return c.json({ error: error.message }, 400)
+
+  return c.json({ ok: true })
+})
+
 export default app

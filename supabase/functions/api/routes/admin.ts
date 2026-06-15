@@ -652,6 +652,188 @@ app.delete("/companies/:id", async (c) => {
   return c.json({ success: true });
 });
 
+// ==================== COMPANY REQUESTS ====================
+
+// Normalize a company name for grouping: lowercase, remove punctuation + common suffixes
+function normalizeCompanyName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\b(inc|ltd|llc|co|corp|gmbh|bv|sa|plc|בע"מ|בעמ|בע״מ|ישראל|israel)\b/g, '')
+    .replace(/[^a-z0-9֐-׿]/g, '')
+    .trim();
+}
+
+// GET /admin/company-requests — list pending requests grouped by similarity
+app.get("/company-requests", async (c) => {
+  const db = getAdminClient();
+
+  const { data: requests, error } = await db
+    .from("company_requests")
+    .select("id, requested_name, requested_by, status, created_at, resolved_company_id, users!requested_by(first_name, last_name, email)")
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  // Group by normalized name in JS
+  const groups = new Map<string, { normalized: string; requests: any[] }>();
+  for (const req of requests || []) {
+    const normalized = normalizeCompanyName(req.requested_name);
+    if (!groups.has(normalized)) {
+      groups.set(normalized, { normalized, requests: [] });
+    }
+    groups.get(normalized)!.requests.push({
+      id: req.id,
+      requested_name: req.requested_name,
+      requested_by: req.requested_by,
+      created_at: req.created_at,
+      user: (req as any).users ?? null,
+    });
+  }
+
+  // For each group, find similar companies in our DB using ilike on the most common name
+  const groupList = await Promise.all(
+    Array.from(groups.values()).map(async (group) => {
+      const representativeName = group.requests[0].requested_name;
+      // Try ilike match on first word (most likely the unique identifier)
+      const firstWord = representativeName.trim().split(/\s+/)[0];
+      const { data: suggestions } = await db
+        .from("companies")
+        .select("id, name, logo, website")
+        .ilike("name", `%${firstWord}%`)
+        .limit(3);
+
+      return {
+        normalized: group.normalized,
+        representative_name: representativeName,
+        requests: group.requests,
+        count: group.requests.length,
+        existing_suggestions: suggestions || [],
+      };
+    })
+  );
+
+  // Sort: largest groups first
+  groupList.sort((a, b) => b.count - a.count);
+
+  return c.json({ groups: groupList });
+});
+
+// POST /admin/company-requests/search-online — use GPT-4o to fetch company info from web
+app.post("/company-requests/search-online", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const companyName = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!companyName) return c.json({ error: 'name is required' }, 400);
+
+  const OpenAI = (await import("https://esm.sh/openai@4")).default;
+  const openai = new OpenAI({ apiKey: Deno.env.get("TEST_OPENAI_API_KEY") });
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-search-preview",
+    messages: [{
+      role: "user",
+      content: `Find the official company info for "${companyName}". Return a JSON object with these fields only:
+- official_name: the exact official company name in English
+- website: official website URL (or null)
+- description: one sentence description in English
+- industry: main industry
+- country: country of headquarters
+- logo_url: direct URL to company logo image (or null)
+If the company cannot be identified confidently, return { "error": "not found" }.
+Respond with raw JSON only, no markdown.`
+    }],
+  } as any);
+
+  const raw = completion.choices[0]?.message?.content?.trim() ?? '';
+  try {
+    const parsed = JSON.parse(raw);
+    return c.json(parsed);
+  } catch {
+    return c.json({ error: 'Could not parse response', raw });
+  }
+});
+
+// POST /admin/company-requests/resolve — link requests to a company or dismiss them
+app.post("/company-requests/resolve", async (c) => {
+  const db = getAdminClient();
+  const body = await c.req.json().catch(() => ({}));
+
+  // request_ids: number[]
+  // action: 'link' | 'dismiss'
+  // company_id?: number (required for 'link')
+  const { request_ids, action, company_id } = body;
+
+  if (!Array.isArray(request_ids) || request_ids.length === 0) {
+    return c.json({ error: 'request_ids is required' }, 400);
+  }
+  if (!['link', 'dismiss'].includes(action)) {
+    return c.json({ error: 'action must be link or dismiss' }, 400);
+  }
+  if (action === 'link' && !company_id) {
+    return c.json({ error: 'company_id is required for link action' }, 400);
+  }
+
+  const newStatus = action === 'link' ? 'resolved' : 'dismissed';
+
+  // Fetch the requests so we know which users + names are involved
+  const { data: requests, error: fetchErr } = await db
+    .from("company_requests")
+    .select("id, requested_name, requested_by")
+    .in("id", request_ids);
+
+  if (fetchErr) return c.json({ error: fetchErr.message }, 500);
+  if (!requests?.length) return c.json({ error: 'No requests found' }, 404);
+
+  // Mark requests as resolved/dismissed
+  const { error: updateErr } = await db
+    .from("company_requests")
+    .update({ status: newStatus, resolved_company_id: action === 'link' ? company_id : null })
+    .in("id", request_ids);
+
+  if (updateErr) return c.json({ error: updateErr.message }, 500);
+
+  // If linking: update matching experience entries for each user
+  if (action === 'link') {
+    const { data: company } = await db
+      .from("companies")
+      .select("id, name, logo, website")
+      .eq("id", company_id)
+      .maybeSingle();
+
+    if (company) {
+      const companyObj = { id: company.id, name: company.name, logo: company.logo ?? null, website: company.website ?? null };
+
+      await Promise.all(requests.map(async (req: any) => {
+        const { data: user } = await db
+          .from("users")
+          .select("uuid, experience")
+          .eq("uuid", req.requested_by)
+          .maybeSingle();
+
+        if (!user?.experience) return;
+
+        const requestedLower = req.requested_name.toLowerCase();
+        let changed = false;
+        const updatedExp = (user.experience as any[]).map((entry: any) => {
+          const companyField = entry.company;
+          // Only replace if it's a plain string matching the requested name
+          if (typeof companyField === 'string' && companyField.toLowerCase() === requestedLower) {
+            changed = true;
+            return { ...entry, company: companyObj };
+          }
+          return entry;
+        });
+
+        if (changed) {
+          await db.from("users").update({ experience: updatedExp }).eq("uuid", user.uuid);
+        }
+      }));
+    }
+  }
+
+  return c.json({ ok: true, updated: requests.length });
+});
+
 // ==================== JOBS ====================
 
 app.get("/jobs", async (c) => {
