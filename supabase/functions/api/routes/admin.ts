@@ -729,6 +729,7 @@ app.get("/company-requests", async (c) => {
 
 // POST /admin/company-requests/search-online — use GPT-4o to fetch company info from web
 app.post("/company-requests/search-online", async (c) => {
+  const db = getAdminClient();
   const body = await c.req.json().catch(() => ({}));
   const companyName = typeof body.name === 'string' ? body.name.trim() : '';
   if (!companyName) return c.json({ error: 'name is required' }, 400);
