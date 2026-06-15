@@ -132,13 +132,26 @@ app.post("/", async (c) => {
       return c.json({ error: "Company name is required for recruiter requests" }, 400);
     }
 
+    const normalizedEmail = body.email.trim().toLowerCase();
+
+    // Check for duplicates before inserting
+    const [{ data: existingUser }, { data: existingRequest }, { data: existingInvite }] = await Promise.all([
+      supabaseAdmin.from("users").select("uuid").eq("email", normalizedEmail).maybeSingle(),
+      supabaseAdmin.from("platform_join_requests").select("id").eq("email", normalizedEmail).maybeSingle(),
+      supabaseAdmin.from("invites").select("id").eq("recipient_email", normalizedEmail).eq("status", "pending").maybeSingle(),
+    ]);
+
+    if (existingUser) return c.json({ error: "existing_user" }, 409);
+    if (existingRequest) return c.json({ error: "existing_request" }, 409);
+    if (existingInvite) return c.json({ error: "existing_invite" }, 409);
+
     const r = body as RecruiterPayload;
     const ca = body as CandidatePayload;
 
     const { error: dbError } = await supabaseAdmin.from("platform_join_requests").insert({
       type: body.type,
       full_name: body.full_name.trim(),
-      email: body.email.trim().toLowerCase(),
+      email: normalizedEmail,
       phone: body.phone.trim(),
       message: body.message?.trim() || null,
       job_title: body.type === "candidate" ? ca.job_title?.trim() || null : null,
