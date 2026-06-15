@@ -32,7 +32,7 @@ app.get("/", async (c) => {
   )];
   const articleIds = [...new Set(
     notifications
-      .filter((n: any) => n.type === "ARTICLE_COMMENT" && n.target_id)
+      .filter((n: any) => ["ARTICLE_COMMENT", "ARTICLE_LIKE"].includes(n.type) && n.target_id)
       .map((n: any) => n.target_id)
   )];
 
@@ -71,7 +71,7 @@ app.get("/", async (c) => {
     posts: ["POST_LIKE", "POST_COMMENT", "MENTION", "REPLY"].includes(n.type) && n.target_id
       ? { subject: subjectMap.get(n.target_id) ?? undefined }
       : null,
-    articles: n.type === "ARTICLE_COMMENT" && n.target_id
+    articles: ["ARTICLE_COMMENT", "ARTICLE_LIKE"].includes(n.type) && n.target_id
       ? { title: articleTitleMap.get(n.target_id) ?? undefined }
       : null,
   }));
