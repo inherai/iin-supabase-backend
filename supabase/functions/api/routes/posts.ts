@@ -9,6 +9,18 @@ const app = new Hono()
 // 1. הגדרות ופונקציות עזר (Logic Helpers)
 // ====================================================================
 
+function plainTextLength(html: string): number {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .length;
+}
+
 function isQualityPost(message: string): boolean {
   if (!message) return false;
   const cleanMsg = message.toLowerCase().trim();
@@ -1302,6 +1314,8 @@ app.post('/', async (c) => {
       }
 
       if (!message) return c.json({ error: "Message is required" }, 400);
+      if (plainTextLength(message) > 3000) return c.json({ error: "Message too long" }, 400);
+      if (subject && subject.length > 150) return c.json({ error: "Subject too long" }, 400);
       const postId = crypto.randomUUID();
       const normalizedAttachments = normalizeAttachments(attachments);
 
@@ -1760,6 +1774,7 @@ app.post('/comments', async (c) => {
     if (!user) return c.json({ error: "Unauthorized" }, 401)
     if (!postId) return c.json({ error: "Post ID query param is required" }, 400)
     if (!message) return c.json({ error: "Message is required" }, 400)
+    if (plainTextLength(message) > 1000) return c.json({ error: "Message too long" }, 400)
     if (communityMembersOnlyInput !== undefined && typeof communityMembersOnlyInput !== 'boolean') {
       return c.json({ error: "community_members_only must be boolean" }, 400)
     }
