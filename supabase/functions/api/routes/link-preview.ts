@@ -61,18 +61,14 @@ app.get('/', async (c) => {
       signal: AbortSignal.timeout(6000),
     })
 
-    if (!res.ok) {
-      return c.json({ url, title: null, description: null, image: null, siteName: null })
-    }
+    if (!res.ok) throw new Error('non-2xx')
 
     const contentType = res.headers.get('content-type') ?? ''
-    if (!contentType.includes('text/html')) {
-      return c.json({ url, title: null, description: null, image: null, siteName: null })
-    }
+    if (!contentType.includes('text/html')) throw new Error('not-html')
 
     // Read only the first 50 KB — enough for <head>
     const reader = res.body?.getReader()
-    if (!reader) return c.json({ url, title: null, description: null, image: null, siteName: null })
+    if (!reader) throw new Error('no-reader')
 
     const chunks: Uint8Array[] = []
     let totalBytes = 0
@@ -96,31 +92,63 @@ app.get('/', async (c) => {
 
     const title = extractMeta(html, 'og:title') ?? extractTitle(html)
 
-    if (isBotChallengePage(html, title)) {
-      return c.json({ url, title: null, description: null, image: null, siteName: null })
+    if (!isBotChallengePage(html, title)) {
+      const ogImage = extractMeta(html, 'og:image')
+      let image = ogImage
+      if (image && !image.startsWith('http')) {
+        try {
+          const base = new URL(url)
+          image = new URL(image, base.origin).href
+        } catch {
+          image = null
+        }
+      }
+
+      return c.json({
+        url,
+        title,
+        description: extractMeta(html, 'og:description') ?? extractMeta(html, 'description'),
+        image,
+        siteName: extractMeta(html, 'og:site_name') ?? new URL(url).hostname.replace('www.', ''),
+      })
     }
 
-    const ogImage = extractMeta(html, 'og:image')
-    let image = ogImage
-    if (image && !image.startsWith('http')) {
-      try {
-        const base = new URL(url)
-        image = new URL(image, base.origin).href
-      } catch {
-        image = null
+    // Our scraper was blocked — fall through to Microlink
+  } catch {
+    // Network error or timeout — fall through to Microlink
+  }
+
+  // Fallback: Microlink (handles Cloudflare-protected sites via real browser rendering)
+  try {
+    const ml = await fetch(
+      `https://api.microlink.io/?url=${encodeURIComponent(url)}&meta=false`,
+      { signal: AbortSignal.timeout(8000) }
+    )
+    if (ml.ok) {
+      const { status, data } = await ml.json() as {
+        status: string
+        data: {
+          title?: string | null
+          description?: string | null
+          image?: { url?: string | null } | null
+          publisher?: string | null
+        }
+      }
+      if (status === 'success' && data) {
+        return c.json({
+          url,
+          title: data.title ?? null,
+          description: data.description ?? null,
+          image: data.image?.url ?? null,
+          siteName: data.publisher ?? new URL(url).hostname.replace('www.', ''),
+        })
       }
     }
-
-    return c.json({
-      url,
-      title,
-      description: extractMeta(html, 'og:description') ?? extractMeta(html, 'description'),
-      image,
-      siteName: extractMeta(html, 'og:site_name') ?? new URL(url).hostname.replace('www.', ''),
-    })
   } catch {
-    return c.json({ url, title: null, description: null, image: null, siteName: null })
+    // Microlink also failed
   }
+
+  return c.json({ url, title: null, description: null, image: null, siteName: null })
 })
 
 export default app
