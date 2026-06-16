@@ -121,8 +121,8 @@ app.get('/', async (c) => {
   // Fallback: Microlink (handles Cloudflare-protected sites via real browser rendering)
   try {
     const ml = await fetch(
-      `https://api.microlink.io/?url=${encodeURIComponent(url)}&meta=false`,
-      { signal: AbortSignal.timeout(8000) }
+      `https://api.microlink.io/?url=${encodeURIComponent(url)}`,
+      { signal: AbortSignal.timeout(10000) }
     )
     if (ml.ok) {
       const { status, data } = await ml.json() as {
@@ -148,7 +148,9 @@ app.get('/', async (c) => {
     // Microlink also failed
   }
 
-  return c.json({ url, title: null, description: null, image: null, siteName: null })
+  // Last resort: return domain only — frontend will show favicon + domain card
+  const hostname = (() => { try { return new URL(url).hostname.replace('www.', '') } catch { return null } })()
+  return c.json({ url, title: null, description: null, image: null, siteName: hostname })
 })
 
 export default app
