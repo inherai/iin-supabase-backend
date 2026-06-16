@@ -19,6 +19,28 @@ const extractTitle = (html: string): string | null => {
   return m?.[1]?.trim() ?? null
 }
 
+const BOT_CHALLENGE_PATTERNS = [
+  'attention required',
+  'just a moment',
+  'please wait',
+  'access denied',
+  'ddos protection',
+  'checking your browser',
+  'enable javascript and cookies',
+  'one more step',
+  'security check',
+  'verifying you are human',
+]
+
+function isBotChallengePage(html: string, title: string | null): boolean {
+  if (!title) return false
+  const lower = title.toLowerCase()
+  if (BOT_CHALLENGE_PATTERNS.some(p => lower.includes(p))) return true
+  // Cloudflare challenge pages always have both cf-ray meta and no real og:title
+  if (html.includes('cf-wrapper') || html.includes('cf_chl_')) return true
+  return false
+}
+
 // GET /api/link-preview?url=https://...
 app.get('/', async (c) => {
   const user = c.get('user')
@@ -32,11 +54,16 @@ app.get('/', async (c) => {
   try {
     const res = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; IINBot/1.0)',
-        Accept: 'text/html',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
       },
       signal: AbortSignal.timeout(6000),
     })
+
+    if (!res.ok) {
+      return c.json({ url, title: null, description: null, image: null, siteName: null })
+    }
 
     const contentType = res.headers.get('content-type') ?? ''
     if (!contentType.includes('text/html')) {
@@ -67,6 +94,12 @@ app.get('/', async (c) => {
       }, new Uint8Array())
     )
 
+    const title = extractMeta(html, 'og:title') ?? extractTitle(html)
+
+    if (isBotChallengePage(html, title)) {
+      return c.json({ url, title: null, description: null, image: null, siteName: null })
+    }
+
     const ogImage = extractMeta(html, 'og:image')
     let image = ogImage
     if (image && !image.startsWith('http')) {
@@ -80,7 +113,7 @@ app.get('/', async (c) => {
 
     return c.json({
       url,
-      title: extractMeta(html, 'og:title') ?? extractTitle(html),
+      title,
       description: extractMeta(html, 'og:description') ?? extractMeta(html, 'description'),
       image,
       siteName: extractMeta(html, 'og:site_name') ?? new URL(url).hostname.replace('www.', ''),
