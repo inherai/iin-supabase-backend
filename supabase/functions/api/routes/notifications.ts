@@ -68,10 +68,10 @@ app.get("/", async (c) => {
   const enriched = notifications.map((n: any) => ({
     ...n,
     users: n.actor_id ? { name: nameMap.get(n.actor_id) ?? "" } : undefined,
-    posts: ["POST_LIKE", "POST_COMMENT", "MENTION", "REPLY"].includes(n.type) && n.target_id
+    posts: ["POST_LIKE", "POST_COMMENT", "MENTION", "REPLY", "COMMENT_REACTION"].includes(n.type) && n.target_id
       ? { subject: subjectMap.get(n.target_id) ?? undefined }
       : null,
-    articles: ["ARTICLE_COMMENT", "ARTICLE_LIKE"].includes(n.type) && n.target_id
+    articles: ["ARTICLE_COMMENT", "ARTICLE_LIKE", "NEW_ARTICLE", "NEW_COMPANY_ARTICLE", "ARTICLE_COMMENT_REACTION"].includes(n.type) && n.target_id
       ? { title: articleTitleMap.get(n.target_id) ?? undefined }
       : null,
   }));
