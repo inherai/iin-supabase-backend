@@ -301,6 +301,16 @@ app.delete("/:id", async (c) => {
 
   if (deleteError) return c.json({ error: deleteError.message }, 400);
 
+  // If receiver is declining a pending request, clean up the CONN_REQ notification
+  if (isReceiver && connection.status === "pending") {
+    await supabase
+      .from("notifications")
+      .delete()
+      .eq("type", "CONN_REQ")
+      .eq("actor_id", connection.requester_id)
+      .eq("user_id", user.id);
+  }
+
   return c.json({ message: "Connection deleted" });
 });
 

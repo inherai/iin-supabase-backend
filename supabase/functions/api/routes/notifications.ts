@@ -39,7 +39,7 @@ app.get("/", async (c) => {
   // Fetch enrichment data in parallel
   const [actorsRes, postsRes, articlesRes] = await Promise.all([
     actorIds.length > 0
-      ? supabase.from("public_users_view").select("uuid, first_name, last_name").in("uuid", actorIds)
+      ? supabase.from("public_users_view").select("uuid, first_name, last_name, image").in("uuid", actorIds)
       : Promise.resolve({ data: [] }),
     postIds.length > 0
       ? supabase.from("posts").select("id, subject").in("id", postIds)
@@ -50,9 +50,11 @@ app.get("/", async (c) => {
   ]);
 
   const nameMap = new Map<string, string>();
+  const imageMap = new Map<string, string | null>();
   for (const u of (actorsRes.data ?? []) as any[]) {
     const name = [u.first_name, u.last_name].filter(Boolean).join(" ").trim();
     if (name) nameMap.set(u.uuid, name);
+    imageMap.set(u.uuid, u.image ?? null);
   }
 
   const subjectMap = new Map<string, string>();
@@ -67,7 +69,7 @@ app.get("/", async (c) => {
 
   const enriched = notifications.map((n: any) => ({
     ...n,
-    users: n.actor_id ? { name: nameMap.get(n.actor_id) ?? "" } : undefined,
+    users: n.actor_id ? { name: nameMap.get(n.actor_id) ?? "", has_image: imageMap.get(n.actor_id) ?? null } : undefined,
     posts: ["POST_LIKE", "POST_COMMENT", "MENTION", "REPLY", "COMMENT_REACTION"].includes(n.type) && n.target_id
       ? { subject: subjectMap.get(n.target_id) ?? undefined }
       : null,
