@@ -26,6 +26,27 @@ function buildExcerpt(plain: string, maxChars = 160): string {
   return plain.length <= maxChars ? plain : plain.slice(0, maxChars).trimEnd() + '…'
 }
 
+/**
+ * Company articles belong exclusively to the current company owner.
+ * Personal articles belong exclusively to the author.
+ * Returns true if the user may edit/publish/delete the article.
+ */
+async function canControlArticle(
+  article: { author_uuid: string; company_id: number | null },
+  userId: string
+): Promise<boolean> {
+  if (article.company_id) {
+    const { data } = await supabaseAdmin
+      .from('companies')
+      .select('id')
+      .eq('id', article.company_id)
+      .eq('owner_uuid', userId)
+      .maybeSingle()
+    return !!data
+  }
+  return article.author_uuid === userId
+}
+
 /** Allowlist-based HTML sanitizer — only TipTap schema elements pass through */
 function sanitizeHtml(html: string): string {
   const ALLOWED_TAGS = new Set([
@@ -707,12 +728,21 @@ app.get('/my-articles', async (c) => {
   const supabase = c.get('supabase')
 
   try {
-    const { data, error } = await supabase
+    const { data: ownedCompanies } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('owner_uuid', user.id)
+    const ownedCompanyIds = (ownedCompanies || []).map((c: any) => c.id)
+
+    const baseQuery = supabase
       .from('articles')
-      .select('id, title, status, cover_image_url, read_time, published_at, updated_at, is_pinned, series_name, series_order, company_id')
-      .eq('author_uuid', user.id)
+      .select('id, title, status, cover_image_url, read_time, published_at, updated_at, is_pinned, series_name, series_order, company_id, author_uuid')
       .is('deleted_at', null)
       .order('updated_at', { ascending: false })
+
+    const { data, error } = ownedCompanyIds.length > 0
+      ? await baseQuery.or(`author_uuid.eq.${user.id},company_id.in.(${ownedCompanyIds.join(',')})`)
+      : await baseQuery.eq('author_uuid', user.id)
 
     if (error) throw error
 
@@ -1368,8 +1398,9 @@ app.get('/:id', async (c) => {
       return c.json({ article: null, deleted: true }, 404)
     }
 
-    // Author can see their own drafts; others cannot
-    const isOwner = article.author_uuid === user.id
+    // Only the controller (author for personal, current company owner for company articles)
+    // can access drafts; published articles are visible to all
+    const isOwner = await canControlArticle(article, user.id)
     if (article.status === 'draft' && !isOwner) {
       return c.json({ error: 'Not found' }, 404)
     }
@@ -1419,13 +1450,25 @@ app.get('/:id', async (c) => {
       related = relatedRows || []
     }
 
-    // More from author
+    // More from company / author — company articles belong to the company, not the individual
     let moreFromAuthor: any[] = []
-    if (article.author_uuid) {
+    if (article.company_id) {
+      const { data } = await supabase
+        .from('articles')
+        .select('id, title, excerpt, cover_image_url, read_time, published_at')
+        .eq('company_id', article.company_id)
+        .eq('status', 'published')
+        .is('deleted_at', null)
+        .neq('id', articleId)
+        .order('published_at', { ascending: false })
+        .limit(3)
+      moreFromAuthor = data || []
+    } else if (article.author_uuid) {
       const { data } = await supabase
         .from('articles')
         .select('id, title, excerpt, cover_image_url, read_time, published_at')
         .eq('author_uuid', article.author_uuid)
+        .is('company_id', null)
         .eq('status', 'published')
         .is('deleted_at', null)
         .neq('id', articleId)
@@ -1462,6 +1505,16 @@ app.post('/', async (c) => {
   const supabase = c.get('supabase')
 
   const { title = '', content = '', cover_image_url, company_id, skill_ids = [], interest_ids = [], series_name, series_order, article_type } = await c.req.json()
+
+  if (company_id) {
+    const { data: company } = await supabaseAdmin
+      .from('companies')
+      .select('id, owner_uuid')
+      .eq('id', company_id)
+      .maybeSingle()
+    if (!company) return c.json({ error: 'Company not found' }, 404)
+    if (company.owner_uuid !== user.id) return c.json({ error: "You don't have permission to post on behalf of this company" }, 403)
+  }
 
   const sanitized = sanitizeHtml(content)
   const plain = stripHtml(sanitized)
@@ -1530,16 +1583,7 @@ app.put('/:id', async (c) => {
 
     if (!existing) return c.json({ error: 'Not found' }, 404)
 
-    const isOwner = existing.author_uuid === user.id ||
-      (existing.company_id && (await supabase
-        .from('companies')
-        .select('id')
-        .eq('id', existing.company_id)
-        .eq('owner_uuid', user.id)
-        .maybeSingle()
-      ).data)
-
-    if (!isOwner) return c.json({ error: 'Forbidden' }, 403)
+    if (!await canControlArticle(existing, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
     const isAdminUpdate = (user as any).app_metadata?.is_admin === true
 
@@ -1608,8 +1652,7 @@ app.post('/:id/publish', async (c) => {
 
     if (!article) return c.json({ error: 'Not found' }, 404)
 
-    const isOwner = article.author_uuid === user.id
-    if (!isOwner) return c.json({ error: 'Forbidden' }, 403)
+    if (!await canControlArticle(article, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
     if (article.status === 'published') return c.json({ success: true })
 
@@ -1713,8 +1756,7 @@ app.post('/:id/unpublish', async (c) => {
 
     if (fetchErr || !article) return c.json({ error: 'Not found' }, 404)
 
-    const isOwner = article.author_uuid === user.id
-    if (!isOwner) return c.json({ error: 'Forbidden' }, 403)
+    if (!await canControlArticle(article, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
     const { error } = await supabase
       .from('articles')
@@ -1740,19 +1782,19 @@ app.post('/:id/pin', async (c) => {
   try {
     const { data: article } = await supabase
       .from('articles')
-      .select('id, author_uuid, is_pinned')
+      .select('id, author_uuid, company_id, is_pinned')
       .eq('id', articleId)
       .maybeSingle()
 
-    if (!article || article.author_uuid !== user.id) return c.json({ error: 'Forbidden' }, 403)
+    if (!article) return c.json({ error: 'Not found' }, 404)
+    if (!await canControlArticle(article, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
-    // Unpin all other articles from this author first
+    // Unpin all other articles from the same entity (company or author)
     if (!article.is_pinned) {
-      await supabase
-        .from('articles')
-        .update({ is_pinned: false })
-        .eq('author_uuid', user.id)
-        .eq('is_pinned', true)
+      const unpinQuery = supabase.from('articles').update({ is_pinned: false }).eq('is_pinned', true)
+      await (article.company_id
+        ? unpinQuery.eq('company_id', article.company_id)
+        : unpinQuery.eq('author_uuid', article.author_uuid).is('company_id', null))
     }
 
     const { error } = await supabase
@@ -1814,11 +1856,12 @@ app.delete('/:id', async (c) => {
   try {
     const { data: article } = await supabase
       .from('articles')
-      .select('id, author_uuid')
+      .select('id, author_uuid, company_id')
       .eq('id', articleId)
       .maybeSingle()
 
-    if (!article || article.author_uuid !== user.id) return c.json({ error: 'Forbidden' }, 403)
+    if (!article) return c.json({ error: 'Not found' }, 404)
+    if (!await canControlArticle(article, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
     const { error } = await supabase
       .from('articles')
@@ -1845,7 +1888,7 @@ app.post('/:id/impression', async (c) => {
     // Verify article exists and is published
     const { data: article } = await supabase
       .from('articles')
-      .select('id, author_uuid')
+      .select('id, author_uuid, company_id')
       .eq('id', articleId)
       .eq('status', 'published')
       .is('deleted_at', null)
@@ -1853,8 +1896,8 @@ app.post('/:id/impression', async (c) => {
 
     if (!article) return c.json({ success: false })
 
-    // Don't count self-views
-    if (article.author_uuid === user.id) return c.json({ success: false })
+    // Don't count views from whoever controls the article (author for personal, company owner for company articles)
+    if (await canControlArticle(article, user.id)) return c.json({ success: false })
 
     const today = new Date().toISOString().slice(0, 10)
     await supabase
