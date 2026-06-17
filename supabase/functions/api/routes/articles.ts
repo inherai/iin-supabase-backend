@@ -740,9 +740,11 @@ app.get('/my-articles', async (c) => {
       .is('deleted_at', null)
       .order('updated_at', { ascending: false })
 
+    // Personal articles: authored by user AND not a company article
+    // Company articles: belonging to a company the user currently owns
     const { data, error } = ownedCompanyIds.length > 0
-      ? await baseQuery.or(`author_uuid.eq.${user.id},company_id.in.(${ownedCompanyIds.join(',')})`)
-      : await baseQuery.eq('author_uuid', user.id)
+      ? await baseQuery.or(`and(author_uuid.eq.${user.id},company_id.is.null),company_id.in.(${ownedCompanyIds.join(',')})`)
+      : await baseQuery.eq('author_uuid', user.id).is('company_id', null)
 
     if (error) throw error
 
