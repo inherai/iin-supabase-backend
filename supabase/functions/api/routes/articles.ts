@@ -38,7 +38,7 @@ function sanitizeHtml(html: string): string {
     a:    new Set(['href','target','rel']),
     img:  new Set(['src','alt','width','height']),
     div:  new Set(['data-youtube-video','data-pull-quote','class']),
-    span: new Set(['data-mention','data-id','class']),
+    span: new Set(['data-mention','data-id','data-user-id','class']),
     th:   new Set(['colspan','rowspan']),
     td:   new Set(['colspan','rowspan']),
     '*':  new Set(['class']),
@@ -1893,10 +1893,10 @@ app.get('/:id/comments', async (c) => {
     if (authorUuids.length) {
       const { data: users } = await supabase
         .from('public_users_view')
-        .select('uuid, first_name, last_name, image')
+        .select('uuid, first_name, last_name, image, headline')
         .in('uuid', authorUuids)
       for (const u of users || []) {
-        userMap[u.uuid] = { id: u.uuid, first_name: u.first_name, last_name: u.last_name, profile_image_url: u.image || null }
+        userMap[u.uuid] = { id: u.uuid, first_name: u.first_name, last_name: u.last_name, profile_image_url: u.image || null, headline: u.headline || null }
       }
     }
 
@@ -1914,6 +1914,12 @@ app.get('/:id/comments', async (c) => {
 
 // ─── POST /articles/:id/comments ─────────────────────────────────────────────
 
+function extractArticleCommentMentionIds(html: string): string[] {
+  const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+  const matches = [...html.matchAll(new RegExp(`data-user-id="(${uuidPattern})"`, 'gi'))].map(m => m[1]);
+  return [...new Set(matches)];
+}
+
 app.post('/:id/comments', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
@@ -1923,29 +1929,90 @@ app.post('/:id/comments', async (c) => {
   const { content } = await c.req.json()
   if (!content?.trim()) return c.json({ error: 'Content is required' }, 400)
 
+  const sanitizedContent = sanitizeHtml(content)
+
   try {
     const { data: comment, error } = await supabase
       .from('article_comments')
-      .insert({ article_id: articleId, author_uuid: user.id, content: content.trim() })
+      .insert({ article_id: articleId, author_uuid: user.id, content: sanitizedContent })
       .select('id, content, created_at, author_uuid')
       .single()
 
     if (error) throw error
 
-    // Enrich with user data
-    const { data: authorData } = await supabase
-      .from('public_users_view')
-      .select('uuid, first_name, last_name, image')
-      .eq('uuid', user.id)
-      .maybeSingle()
+    // Fetch article author + commenter data in parallel
+    const [articleRes, authorDataRes] = await Promise.all([
+      supabase.from('articles').select('author_uuid').eq('id', articleId).maybeSingle(),
+      supabase.from('public_users_view').select('uuid, first_name, last_name, image, headline').eq('uuid', user.id).maybeSingle(),
+    ])
+
+    const articleAuthorId: string | null = articleRes.data?.author_uuid ?? null
+    const authorData = authorDataRes.data
+
+    // Notify the article author about the new comment (skip if they wrote it themselves)
+    if (articleAuthorId && articleAuthorId !== user.id) {
+      await supabase.from('notifications').insert({
+        user_id: articleAuthorId,
+        actor_id: user.id,
+        target_id: articleId,
+        type: 'ARTICLE_COMMENT',
+        count: 1,
+        is_read: false,
+      })
+    }
+
+    // Notify mentioned users (exclude the commenter and the article author who already got ARTICLE_COMMENT)
+    const mentionedIds = extractArticleCommentMentionIds(sanitizedContent)
+    const excludeFromMention = [user.id, ...(articleAuthorId ? [articleAuthorId] : [])]
+    for (const mentionedId of mentionedIds) {
+      if (excludeFromMention.includes(mentionedId)) continue
+      await supabase.from('notifications').insert({
+        user_id: mentionedId,
+        actor_id: user.id,
+        target_id: articleId,
+        type: 'ARTICLE_MENTION',
+        count: 1,
+        is_read: false,
+      })
+    }
+
     const enrichedComment = {
       ...comment,
-      users: authorData ? { id: authorData.uuid, first_name: authorData.first_name, last_name: authorData.last_name, profile_image_url: authorData.image || null } : null,
+      users: authorData ? { id: authorData.uuid, first_name: authorData.first_name, last_name: authorData.last_name, profile_image_url: authorData.image || null, headline: authorData.headline || null } : null,
     }
 
     return c.json({ comment: enrichedComment })
   } catch (err) {
     console.error('POST /articles/:id/comments error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── PUT /articles/:id/comments/:commentId ───────────────────────────────────
+
+app.put('/:id/comments/:commentId', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+
+  const { content } = await c.req.json()
+  if (!content?.trim()) return c.json({ error: 'Content is required' }, 400)
+
+  const sanitizedContent = sanitizeHtml(content)
+
+  try {
+    const { data: comment, error } = await supabase
+      .from('article_comments')
+      .update({ content: sanitizedContent })
+      .eq('id', c.req.param('commentId'))
+      .eq('author_uuid', user.id)
+      .select('id, content, created_at, author_uuid')
+      .single()
+
+    if (error) throw error
+    return c.json({ comment })
+  } catch (err) {
+    console.error('PUT /articles/:id/comments/:commentId error:', err)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })
