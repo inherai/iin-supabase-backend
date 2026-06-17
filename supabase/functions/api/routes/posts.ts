@@ -287,25 +287,19 @@ function extractMentionedUserIds(message: string): string[] {
 }
 
 async function insertMentionNotifications(
-  _supabase: any,
+  supabase: any,
   message: string,
   actorId: string,
   targetId: string,
+  excludeIds: string[] = [],
 ) {
   const mentionedIds = extractMentionedUserIds(message);
   if (mentionedIds.length === 0) return;
 
-  // Must use service-role client — the caller's JWT only permits
-  // inserting rows where user_id = auth.uid(), but here we need to
-  // insert notifications for the *mentioned* user (a different uid).
-  const supabaseAdmin = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-  );
-
   for (const mentionedId of mentionedIds) {
     if (mentionedId === actorId) continue;
-    const { error } = await supabaseAdmin.from('notifications').insert({
+    if (excludeIds.includes(mentionedId)) continue;
+    const { error } = await supabase.from('notifications').insert({
       user_id: mentionedId,
       actor_id: actorId,
       target_id: targetId,
@@ -326,13 +320,9 @@ function buildCompanyAuthor(company: { name: string; logo?: string | null }) {
   }
 }
 
-async function insertReplyNotification(actorId: string, parentCommentAuthorId: string, postId: string) {
+async function insertReplyNotification(supabase: any, actorId: string, parentCommentAuthorId: string, postId: string) {
   if (actorId === parentCommentAuthorId) return;
-  const supabaseAdmin = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-  );
-  const { error } = await supabaseAdmin.from('notifications').insert({
+  const { error } = await supabase.from('notifications').insert({
     user_id: parentCommentAuthorId,
     actor_id: actorId,
     target_id: postId,
@@ -1823,10 +1813,11 @@ app.post('/comments', async (c) => {
 
     if (commentError) throw commentError
 
-    await insertMentionNotifications(supabase, message, user.id, postId)
+    await insertMentionNotifications(supabase, message, user.id, postId,
+      parentCommentAuthorId ? [parentCommentAuthorId] : [])
 
     if (parentCommentAuthorId) {
-      await insertReplyNotification(user.id, parentCommentAuthorId, postId)
+      await insertReplyNotification(supabase, user.id, parentCommentAuthorId, postId)
     }
 
     // 2. שליפת ה-uuid וה-first_name, last_name מטבלת public_users_view לפי המייל

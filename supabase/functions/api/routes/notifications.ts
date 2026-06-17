@@ -27,12 +27,12 @@ app.get("/", async (c) => {
   const actorIds = [...new Set(notifications.map((n: any) => n.actor_id).filter(Boolean))];
   const postIds = [...new Set(
     notifications
-      .filter((n: any) => ["POST_LIKE", "POST_COMMENT", "MENTION", "REPLY"].includes(n.type) && n.target_id)
+      .filter((n: any) => ["POST_LIKE", "POST_COMMENT", "MENTION", "REPLY", "COMMENT_REACTION"].includes(n.type) && n.target_id)
       .map((n: any) => n.target_id)
   )];
   const articleIds = [...new Set(
     notifications
-      .filter((n: any) => ["ARTICLE_COMMENT", "ARTICLE_LIKE"].includes(n.type) && n.target_id)
+      .filter((n: any) => ["ARTICLE_COMMENT", "ARTICLE_LIKE", "NEW_ARTICLE", "NEW_COMPANY_ARTICLE", "ARTICLE_COMMENT_REACTION"].includes(n.type) && n.target_id)
       .map((n: any) => n.target_id)
   )];
 

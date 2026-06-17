@@ -896,8 +896,33 @@ app.post('/follow/:userId', async (c) => {
   const authorId = c.req.param('userId')
   if (authorId === user.id) return c.json({ error: 'Cannot follow yourself' }, 400)
   try {
+    const { data: existing } = await supabase
+      .from('article_author_follows')
+      .select('follower_uuid')
+      .eq('follower_uuid', user.id)
+      .eq('author_uuid', authorId)
+      .maybeSingle()
+
+    const isNewFollow = !existing
+
     await supabase.from('article_author_follows')
       .upsert({ follower_uuid: user.id, author_uuid: authorId }, { onConflict: 'follower_uuid,author_uuid' })
+
+    if (isNewFollow) {
+      try {
+        await supabase.from('notifications').insert({
+          user_id: authorId,
+          actor_id: user.id,
+          target_id: null,
+          type: 'FOLLOW',
+          count: 1,
+          is_read: false,
+        })
+      } catch (e) {
+        console.error('[FOLLOW] notification insert failed:', e)
+      }
+    }
+
     return c.json({ is_following: true })
   } catch (err) {
     console.error('POST /articles/follow/:userId error:', err)
@@ -1609,6 +1634,61 @@ app.post('/:id/publish', async (c) => {
       .eq('id', articleId)
 
     if (error) throw error
+
+    // Notify author's personal followers
+    const { data: authorFollowers } = await supabase
+      .from('article_author_follows')
+      .select('follower_uuid')
+      .eq('author_uuid', article.author_uuid)
+
+    const authorFollowerIds = new Set((authorFollowers ?? []).map((f: any) => f.follower_uuid))
+
+    const authorNotifications = (authorFollowers ?? [])
+      .filter((f: any) => f.follower_uuid !== user.id)
+      .map((f: any) => ({
+        user_id: f.follower_uuid,
+        actor_id: user.id,
+        target_id: articleId,
+        type: 'NEW_ARTICLE',
+        count: 1,
+        is_read: false,
+      }))
+
+    try {
+      if (authorNotifications.length > 0) {
+        await supabase.from('notifications').insert(authorNotifications)
+      }
+    } catch (e) {
+      console.error('[NEW_ARTICLE] notification insert failed:', e)
+    }
+
+    // Notify company followers (excluding those already notified as author followers)
+    if (article.company_id) {
+      const { data: companyFollowers } = await supabase
+        .from('article_company_follows')
+        .select('follower_uuid')
+        .eq('company_id', article.company_id)
+
+      const companyNotifications = (companyFollowers ?? [])
+        .filter((f: any) => f.follower_uuid !== user.id && !authorFollowerIds.has(f.follower_uuid))
+        .map((f: any) => ({
+          user_id: f.follower_uuid,
+          actor_id: user.id,
+          target_id: articleId,
+          type: 'NEW_COMPANY_ARTICLE',
+          count: 1,
+          is_read: false,
+        }))
+
+      try {
+        if (companyNotifications.length > 0) {
+          await supabase.from('notifications').insert(companyNotifications)
+        }
+      } catch (e) {
+        console.error('[NEW_COMPANY_ARTICLE] notification insert failed:', e)
+      }
+    }
+
     return c.json({ success: true })
   } catch (err) {
     console.error('POST /articles/:id/publish error:', err)

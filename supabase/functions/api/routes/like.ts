@@ -94,12 +94,60 @@ app.post('/', async (c) => {
 
     if (insertError) throw insertError
 
+    if (target_type === 'comment') {
+      try {
+        const { data: postComment } = await supabase
+          .from('comments')
+          .select('sender, post_id')
+          .eq('id', target_id)
+          .maybeSingle()
+
+        if (postComment) {
+          const { data: commentAuthor } = await supabase
+            .from('public_users_view')
+            .select('uuid')
+            .eq('email', postComment.sender)
+            .maybeSingle()
+
+          if (commentAuthor && commentAuthor.uuid !== user.id) {
+            await supabase.from('notifications').insert({
+              user_id: commentAuthor.uuid,
+              actor_id: user.id,
+              target_id: postComment.post_id,
+              type: 'COMMENT_REACTION',
+              count: 1,
+              is_read: false,
+            })
+          }
+        } else {
+          const { data: articleComment } = await supabase
+            .from('article_comments')
+            .select('author_uuid, article_id')
+            .eq('id', target_id)
+            .maybeSingle()
+
+          if (articleComment && articleComment.author_uuid !== user.id) {
+            await supabase.from('notifications').insert({
+              user_id: articleComment.author_uuid,
+              actor_id: user.id,
+              target_id: articleComment.article_id,
+              type: 'ARTICLE_COMMENT_REACTION',
+              count: 1,
+              is_read: false,
+            })
+          }
+        }
+      } catch (e) {
+        console.error('[COMMENT_REACTION] notification insert failed:', e)
+      }
+    }
+
     return c.json({
       action: 'added',
       target_id,
       target_type,
       reaction_type,
-      data: insertData 
+      data: insertData
     }, 201)
 
   } catch (err) {
