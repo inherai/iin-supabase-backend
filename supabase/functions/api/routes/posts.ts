@@ -978,11 +978,7 @@ app.get('/scheduled', async (c) => {
 
     const { data, error } = await supabase
       .from('scheduled_posts')
-      .select(`
-        id, subject, message, post_type, scheduled_at, attachments,
-        community_members_only, company_id, linked_article_id, created_at,
-        articles:linked_article_id (id, title, cover_image_url, excerpt, read_time)
-      `)
+      .select('id, subject, message, post_type, scheduled_at, attachments, community_members_only, company_id, linked_article_id, created_at')
       .order('scheduled_at', { ascending: true })
 
     if (error) throw error
