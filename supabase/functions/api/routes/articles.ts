@@ -2046,16 +2046,17 @@ app.put('/:id/comments/:commentId', async (c) => {
   const sanitizedContent = sanitizeHtml(content)
 
   try {
-    const { data: comment, error } = await supabase
+    const { data: rows, error } = await supabase
       .from('article_comments')
       .update({ content: sanitizedContent })
       .eq('id', c.req.param('commentId'))
       .eq('author_uuid', user.id)
       .select('id, content, created_at, author_uuid')
-      .single()
 
     if (error) throw error
-    return c.json({ comment })
+    if (!rows || rows.length === 0) return c.json({ error: 'Comment not found or unauthorized' }, 404)
+
+    return c.json({ comment: rows[0] })
   } catch (err) {
     console.error('PUT /articles/:id/comments/:commentId error:', err)
     return c.json({ error: 'Internal server error' }, 500)
