@@ -967,6 +967,226 @@ app.post('/admin/backfill-vectors', async (c) => {
   return c.json({ success: true, updated: ids.length })
 })
 
+// ====================================================================
+// SCHEDULED POSTS — GET / PUT / DELETE (must be before /:id)
+// ====================================================================
+
+app.get('/scheduled', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+    const { data, error } = await supabaseAdmin
+      .from('scheduled_posts')
+      .select(`
+        id, subject, message, post_type, scheduled_at, attachments,
+        community_members_only, company_id, linked_article_id, created_at,
+        articles:linked_article_id (id, title, cover_image_url, excerpt, read_time)
+      `)
+      .eq('posted_by_uuid', user.id)
+      .order('scheduled_at', { ascending: true })
+
+    if (error) throw error
+    return c.json({ data: data ?? [] })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.put('/scheduled/:id', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+    const scheduledPostId = c.req.param('id')
+    let body: any
+    try { body = await c.req.json() } catch { return c.json({ error: 'Invalid JSON' }, 400) }
+
+    const { data: existing, error: fetchError } = await supabaseAdmin
+      .from('scheduled_posts')
+      .select('attachments, posted_by_uuid')
+      .eq('id', scheduledPostId)
+      .single()
+
+    if (fetchError?.code === 'PGRST116' || !existing) {
+      return c.json({ error: 'This post has already been published or does not exist' }, 404)
+    }
+    if (fetchError) throw fetchError
+    if (existing.posted_by_uuid !== user.id) {
+      return c.json({ error: 'You do not have permission to edit this post' }, 403)
+    }
+
+    const updateData: any = {}
+    if (body.message !== undefined) {
+      if (plainTextLength(body.message) > 3000) return c.json({ error: 'Message too long' }, 400)
+      updateData.message = body.message
+    }
+    if (body.subject !== undefined) {
+      if (body.subject.length > 150) return c.json({ error: 'Subject too long' }, 400)
+      updateData.subject = body.subject
+    }
+    if (body.post_type !== undefined) updateData.post_type = body.post_type
+    if (body.community_members_only !== undefined) updateData.community_members_only = body.community_members_only
+    if (body.scheduled_at !== undefined) {
+      const newDate = new Date(body.scheduled_at)
+      if (isNaN(newDate.getTime()) || newDate <= new Date()) {
+        return c.json({ error: 'scheduled_at must be a valid future timestamp' }, 400)
+      }
+      updateData.scheduled_at = newDate.toISOString()
+    }
+
+    // Attachment cleanup — remove storage files no longer referenced
+    let filesToDelete: string[] = []
+    if (body.attachments !== undefined) {
+      const normalizedNew = normalizeAttachments(body.attachments) || []
+      const cleanedNew = normalizedNew.map((a: any) => {
+        if (!a || typeof a === 'string') return a
+        const p = toStoragePath(a)
+        if (p) return { ...a, localPath: p }
+        return a
+      })
+      updateData.attachments = cleanedNew
+      const newIdentifiers = cleanedNew.map((a: any) => toStoragePath(a)).filter(Boolean) as string[]
+      if (newIdentifiers.length > 0) {
+        for (const oldAtt of (existing.attachments || [])) {
+          const oldPath = toStoragePath(oldAtt)
+          if (oldPath && !newIdentifiers.includes(oldPath)) filesToDelete.push(oldPath)
+        }
+      }
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('scheduled_posts').update(updateData).eq('id', scheduledPostId).select().single()
+    if (error) throw error
+
+    if (filesToDelete.length > 0) {
+      const supabase = c.get('supabase')
+      const { error: storageErr } = await supabase.storage.from('attachments').remove(filesToDelete)
+      if (storageErr) console.error('Failed to delete old files from storage:', storageErr)
+    }
+
+    return c.json({ success: true, data })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+app.delete('/scheduled/:id', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+    const scheduledPostId = c.req.param('id')
+
+    const { data: existing, error: fetchError } = await supabaseAdmin
+      .from('scheduled_posts')
+      .select('attachments, posted_by_uuid')
+      .eq('id', scheduledPostId)
+      .single()
+
+    if (fetchError?.code === 'PGRST116' || !existing) {
+      return c.json({ error: 'Scheduled post not found' }, 404)
+    }
+    if (fetchError) throw fetchError
+    if (existing.posted_by_uuid !== user.id) {
+      return c.json({ error: 'You do not have permission to delete this post' }, 403)
+    }
+
+    const { error } = await supabaseAdmin
+      .from('scheduled_posts').delete().eq('id', scheduledPostId)
+    if (error) throw error
+
+    // Delete attachment files from Storage
+    const attachmentPaths = (existing.attachments || [])
+      .map((a: any) => {
+        if (typeof a === 'string') return null
+        if (a.localPath) return a.localPath
+        if (a.url) {
+          const parts = a.url.split('/attachments/')
+          return parts.length > 1 ? parts[1] : null
+        }
+        return null
+      })
+      .filter(Boolean) as string[]
+
+    if (attachmentPaths.length > 0) {
+      const supabase = c.get('supabase')
+      const { error: storageErr } = await supabase.storage.from('attachments').remove(attachmentPaths)
+      if (storageErr) console.error('Failed to delete scheduled post files from storage:', storageErr)
+    }
+
+    return c.json({ success: true })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+// ====================================================================
+// PUBLISH SCHEDULED — internal endpoint called by cron Edge Function
+// ====================================================================
+
+app.post('/publish-scheduled', async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization')
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    if (!authHeader || authHeader !== `Bearer ${serviceRoleKey}`) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
+    let body: any
+    try { body = await c.req.json() } catch { return c.json({ error: 'Invalid JSON' }, 400) }
+
+    const { scheduled_post_id } = body
+    if (!scheduled_post_id) return c.json({ error: 'scheduled_post_id is required' }, 400)
+
+    const { data: sp, error: fetchErr } = await supabaseAdmin
+      .from('scheduled_posts')
+      .select('*')
+      .eq('id', scheduled_post_id)
+      .single()
+
+    if (fetchErr?.code === 'PGRST116' || !sp) {
+      return c.json({ skipped: true, reason: 'already published or not found' })
+    }
+    if (fetchErr) throw fetchErr
+
+    // 1. Insert into posts — ON CONFLICT DO NOTHING handles duplicate cron runs
+    const { error: insertError } = await supabaseAdmin
+      .from('posts')
+      .insert({
+        id: sp.id,
+        sender: sp.sender,
+        subject: sp.subject,
+        message: sp.message,
+        attachments: sp.attachments,
+        sent_at: sp.scheduled_at,
+        post_type: sp.post_type,
+        community_members_only: sp.community_members_only,
+        ...(sp.company_id ? { company_id: sp.company_id, posted_by_uuid: sp.posted_by_uuid } : { posted_by_uuid: sp.posted_by_uuid }),
+        ...(sp.linked_article_id ? { linked_article_id: sp.linked_article_id } : {}),
+      })
+      .select()
+      .single()
+
+    // Duplicate key = already published (concurrent cron run) — still clean up
+    if (insertError && insertError.code !== '23505') throw insertError
+
+    // 2. Mention notifications — sent at actual publish time
+    await insertMentionNotifications(supabaseAdmin, sp.message, sp.posted_by_uuid, sp.id)
+
+    // 3. Vector embedding (fire-and-forget)
+    updatePostVector(sp.id)
+
+    // 4. Delete from scheduled_posts
+    await supabaseAdmin.from('scheduled_posts').delete().eq('id', sp.id)
+
+    return c.json({ success: true })
+  } catch (err: any) {
+    console.error('[publish-scheduled] error:', err.message)
+    return c.json({ error: err.message }, 500)
+  }
+})
+
 app.get('/:id', async (c) => {
   try {
     const supabase = c.get('supabase')
@@ -1306,6 +1526,52 @@ app.post('/', async (c) => {
       if (!message) return c.json({ error: "Message is required" }, 400);
       if (plainTextLength(message) > 3000) return c.json({ error: "Message too long" }, 400);
       if (subject && subject.length > 150) return c.json({ error: "Subject too long" }, 400);
+
+      // ── Scheduled post path ──────────────────────────────────────────
+      const scheduled_at_raw = body.scheduled_at
+      if (scheduled_at_raw) {
+        const scheduledDate = new Date(scheduled_at_raw)
+        if (isNaN(scheduledDate.getTime()) || scheduledDate <= new Date()) {
+          return c.json({ error: "scheduled_at must be a valid future timestamp" }, 400)
+        }
+        const threeMonthsFromNow = new Date()
+        threeMonthsFromNow.setMonth(threeMonthsFromNow.getMonth() + 3)
+        if (scheduledDate > threeMonthsFromNow) {
+          return c.json({ error: "scheduled_at cannot be more than 3 months in the future" }, 400)
+        }
+
+        const { count: scheduledCount } = await supabaseAdmin
+          .from('scheduled_posts')
+          .select('id', { count: 'exact', head: true })
+          .eq('posted_by_uuid', user.id)
+        if ((scheduledCount ?? 0) >= 5) {
+          return c.json({ error: "You've reached the 5 scheduled posts limit" }, 400)
+        }
+
+        const scheduledPostId = crypto.randomUUID()
+        const normalizedScheduledAttachments = normalizeAttachments(attachments)
+        const { data: scheduledData, error: scheduledError } = await supabaseAdmin
+          .from('scheduled_posts')
+          .insert({
+            id: scheduledPostId,
+            sender: user.email,
+            subject: subject || "",
+            message,
+            attachments: normalizedScheduledAttachments,
+            post_type: post_type || 'discussion',
+            community_members_only,
+            company_id: company_id ?? null,
+            posted_by_uuid: user.id,
+            linked_article_id: linked_article_id ?? null,
+            scheduled_at: scheduledDate.toISOString(),
+          })
+          .select()
+          .single()
+        if (scheduledError) throw scheduledError
+        return c.json({ scheduled: true, data: scheduledData })
+      }
+      // ── End scheduled post path ──────────────────────────────────────
+
       const postId = crypto.randomUUID();
       const normalizedAttachments = normalizeAttachments(attachments);
 

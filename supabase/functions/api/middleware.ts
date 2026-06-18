@@ -79,6 +79,12 @@ export const authMiddleware = async (c: Context, next: Next) => {
     return await next();
   }
 
+  // Internal cron endpoint — authenticated via service role key inside the handler
+  if (c.req.path === '/api/posts/publish-scheduled') {
+    return await next();
+  }
+  }
+
   const authHeader = c.req.header('Authorization');
 
   // --- עצירה מוקדמת: אין טוקן בכלל ---
