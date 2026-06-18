@@ -83,7 +83,6 @@ export const authMiddleware = async (c: Context, next: Next) => {
   if (c.req.path === '/api/posts/publish-scheduled') {
     return await next();
   }
-  }
 
   const authHeader = c.req.header('Authorization');
 
