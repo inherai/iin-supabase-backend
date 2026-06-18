@@ -679,9 +679,17 @@ async function handleRankedFeed(c: any) {
         (l: any) => l.user_id && connectedUuids.has(l.user_id) && l.created_at && l.created_at > baseline
       ).length
 
+      // if already seen: count only new engagement since last visit; otherwise full history
+      const effectiveComments = lastSeenAt
+        ? postComments.filter((cm: any) => cm.created_at > lastSeenAt).length
+        : postComments.length
+      const effectiveLikes = lastSeenAt
+        ? postLikes.filter((l: any) => l.created_at && l.created_at > lastSeenAt).length
+        : postLikes.length
+
       const totalEngagement =
-        postComments.length * FEED_SCORE.commentWeight +
-        postLikes.length * FEED_SCORE.likeWeight
+        effectiveComments * FEED_SCORE.commentWeight +
+        effectiveLikes * FEED_SCORE.likeWeight
 
       const networkBoost =
         networkCommentCount * FEED_SCORE.networkCommentBoost +
@@ -1554,6 +1562,8 @@ app.post('/publish-scheduled', async (c) => {
 
     const { scheduled_post_id } = body
     if (!scheduled_post_id) return c.json({ error: 'scheduled_post_id is required' }, 400)
+
+    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
     const { data: sp, error: fetchErr } = await supabaseAdmin
       .from('scheduled_posts')
