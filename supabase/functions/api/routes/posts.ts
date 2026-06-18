@@ -334,6 +334,430 @@ async function insertReplyNotification(supabase: any, actorId: string, parentCom
 }
 
 // ====================================================================
+// Feed Ranking v2 — completely separate handler, existing flow untouched
+// Activated only when ?feed_ranking=v2 is present
+// ====================================================================
+
+async function handleRankedFeed(c: any) {
+  const supabase = c.get('supabase')
+  const currentUser = c.get('user')
+  const current_user_uuid = currentUser?.id
+  const viewerIsRecruiter = isRecruiterViewer(currentUser)
+
+  const last_effective_date = c.req.query('last_effective_date')
+  const last_id = c.req.query('last_id')
+  const session_start = c.req.query('session_start') || new Date().toISOString()
+  const targetUserId = c.req.query('userid')
+  const excludeEmail = c.req.query('exclude_email') === 'true'
+
+  let filterEmail: string | null = null
+  if (targetUserId) {
+    const { data: email, error: emailError } = await supabase
+      .rpc('get_user_email_by_uuid', { p_uuid: targetUserId })
+    if (emailError || !email) {
+      return c.json({ data: [], meta: { next_cursor: null } })
+    }
+    filterEmail = email
+  }
+
+  const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
+    p_session_start: session_start,
+    p_last_effective_date: last_effective_date || null,
+    p_last_id: last_id || null,
+    p_limit: 50,
+    p_filter_email: filterEmail
+  })
+
+  if (postsError) {
+    console.error('[ranked-feed] get_stabilized_feed error:', postsError.message)
+    return c.json({ data: [], meta: { next_cursor: null } })
+  }
+  if (!posts || posts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
+
+  const visiblePosts = viewerIsRecruiter
+    ? posts.filter((p: any) => p.community_members_only !== true)
+    : posts
+
+  if (visiblePosts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
+
+  let lastBatchTail = visiblePosts[visiblePosts.length - 1]
+  let cursorForPagination = lastBatchTail ? {
+    last_effective_date: lastBatchTail.effective_sort_date,
+    last_id: lastBatchTail.id,
+    session_start: session_start
+  } : null
+
+  let sourcePosts = (excludeEmail && !targetUserId)
+    ? visiblePosts.filter((p: any) => p.post_type !== null && p.post_type !== 'email')
+    : visiblePosts
+
+  if (excludeEmail && !targetUserId) {
+    const TARGET = 50
+    const MAX_EXTRA = 10
+    let extraFetches = 0
+
+    while (sourcePosts.length < TARGET && cursorForPagination && extraFetches < MAX_EXTRA) {
+      extraFetches++
+      const { data: morePosts } = await supabase.rpc('get_stabilized_feed', {
+        p_session_start: session_start,
+        p_last_effective_date: cursorForPagination.last_effective_date,
+        p_last_id: cursorForPagination.last_id,
+        p_limit: 50,
+        p_filter_email: filterEmail
+      })
+
+      if (!morePosts || morePosts.length === 0) { cursorForPagination = null; break }
+
+      const moreVisible = viewerIsRecruiter
+        ? morePosts.filter((p: any) => p.community_members_only !== true)
+        : morePosts
+
+      sourcePosts = [
+        ...sourcePosts,
+        ...moreVisible.filter((p: any) => p.post_type !== null && p.post_type !== 'email')
+      ]
+
+      const tail = moreVisible[moreVisible.length - 1]
+      cursorForPagination = tail ? {
+        last_effective_date: tail.effective_sort_date,
+        last_id: tail.id,
+        session_start: session_start
+      } : null
+    }
+  }
+
+  if (sourcePosts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
+
+  const postIds = sourcePosts.map((p: any) => p.id)
+
+  const [commentsRes, postLikesRes, impressionsRes, connectionsRes] = await Promise.all([
+    supabase
+      .from('comments')
+      .select('*')
+      .in('post_id', postIds)
+      .lte('created_at', session_start)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('likes')
+      .select('target_id, user_id, reaction_type, created_at')
+      .in('target_id', postIds),
+    current_user_uuid
+      ? supabase
+          .from('post_impressions')
+          .select('post_id, last_seen_at')
+          .eq('user_id', current_user_uuid)
+          .in('post_id', postIds)
+      : Promise.resolve({ data: [] }),
+    current_user_uuid
+      ? supabase
+          .from('connections')
+          .select('requester_id, receiver_id')
+          .or(`requester_id.eq.${current_user_uuid},receiver_id.eq.${current_user_uuid}`)
+          .eq('status', 'accepted')
+      : Promise.resolve({ data: [] })
+  ])
+
+  const allPostLikes = postLikesRes.data || []
+
+  const lastSeenMap: Record<string, string | null> = Object.fromEntries(
+    (impressionsRes.data || []).map((i: any) => [String(i.post_id), i.last_seen_at ?? null])
+  )
+
+  const connectedUuids = new Set<string>(
+    (connectionsRes.data || []).map((conn: any) =>
+      conn.requester_id === current_user_uuid ? conn.receiver_id : conn.requester_id
+    ).filter(Boolean)
+  )
+
+  const visibleComments = viewerIsRecruiter
+    ? (commentsRes.data || []).filter((cm: any) => cm.community_members_only !== true)
+    : (commentsRes.data || [])
+
+  const commentIds = visibleComments.map((cm: any) => cm.id.toString())
+  const { data: allCommentLikes } = commentIds.length > 0
+    ? await supabase.from('likes').select('target_id, user_id, reaction_type').in('target_id', commentIds)
+    : { data: [] }
+
+  const emailsToFetch = new Set<string>()
+  sourcePosts.forEach((p: any) => { if (p.sender) emailsToFetch.add(p.sender) })
+  visibleComments.forEach((cm: any) => { if (cm.sender) emailsToFetch.add(cm.sender) })
+
+  const uniqueEmails = Array.from(emailsToFetch)
+  const PROJECT_URL = Deno.env.get('SUPABASE_URL')
+  const PROFILE_API_URL = `${PROJECT_URL}/functions/v1/api/profile/feed`
+  const profileRes = await fetch(PROFILE_API_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': c.req.header('Authorization') || '',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ emails: uniqueEmails })
+  })
+  if (!profileRes.ok) {
+    console.error('[ranked-feed] Failed to fetch profiles:', await profileRes.text())
+    return c.json({ error: 'Failed to fetch user profiles' }, 500)
+  }
+
+  const enrichedUsers = await profileRes.json()
+  const usersByEmail = new Map()
+  const usersByUuid = new Map()
+  enrichedUsers.forEach((u: any) => {
+    if (u._internal_email_lookup) usersByEmail.set(u._internal_email_lookup, u)
+    if (u.uuid) usersByUuid.set(u.uuid, u)
+  })
+
+  const viewerProfile = current_user_uuid ? usersByUuid.get(current_user_uuid) : null
+  const viewerEmail: string | null = viewerProfile?._internal_email_lookup?.toLowerCase() ?? null
+  const authoredPostIds = viewerEmail
+    ? sourcePosts
+        .filter((p: any) => (p.sender || '').toLowerCase() === viewerEmail)
+        .map((p: any) => String(p.id))
+    : []
+
+  const impressionCountMap = new Map<string, number>()
+  if (authoredPostIds.length > 0) {
+    const supabaseAdminForCounts = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    )
+    const { data: impData } = await supabaseAdminForCounts
+      .rpc('get_impression_counts', { p_post_ids: authoredPostIds })
+    ;(impData || []).forEach((row: any) =>
+      impressionCountMap.set(String(row.post_id), Number(row.impression_count))
+    )
+  }
+
+  const companyIdsInFeed = [...new Set(sourcePosts.map((p: any) => p.company_id).filter(Boolean))] as number[]
+  const companiesById = new Map<number, any>()
+  if (companyIdsInFeed.length > 0) {
+    const { data: companiesData } = await supabase.from('companies').select('id, name, logo').in('id', companyIdsInFeed)
+    ;(companiesData || []).forEach((co: any) => companiesById.set(Number(co.id), co))
+  }
+
+  const linkedArticleIds = [...new Set(sourcePosts.map((p: any) => p.linked_article_id).filter(Boolean))] as string[]
+  const linkedArticlesById = new Map<string, any>()
+  if (linkedArticleIds.length > 0) {
+    const { data: linkedArticlesData } = await supabase
+      .from('articles')
+      .select('id, title, cover_image_url, excerpt, read_time')
+      .in('id', linkedArticleIds)
+      .eq('status', 'published')
+      .is('deleted_at', null)
+    ;(linkedArticlesData || []).forEach((a: any) => linkedArticlesById.set(String(a.id), a))
+  }
+
+  const enrichedCommentsList = visibleComments.map((comment: any) => {
+    const senderEmail = comment.sender
+    const profileData = usersByEmail.get(senderEmail?.toLowerCase())
+    let author
+    if (profileData) {
+      const isAnonymous = profileData.is_anonymous === true
+      const { _internal_email_lookup, email: _commentAuthorEmail, ...cleanProfile } = profileData
+      author = { ...cleanProfile, first_name: cleanProfile.first_name, last_name: cleanProfile.last_name, is_anonymous: isAnonymous }
+    } else {
+      author = { first_name: senderEmail, last_name: null, image: null, is_anonymous: false }
+    }
+    const commentLikes = (allCommentLikes || []).filter((l: any) => l.target_id === comment.id.toString())
+    const reactionCounts = commentLikes.reduce((acc: any, like: any) => {
+      const type = like.reaction_type || 'like'; acc[type] = (acc[type] || 0) + 1; return acc
+    }, {})
+    const userReactions = commentLikes
+      .filter((l: any) => l.user_id === current_user_uuid || l.user_uuid === current_user_uuid)
+      .map((l: any) => l.reaction_type)
+    const seenCRU = new Set<string>()
+    const reactionUsers = commentLikes
+      .filter((l: any) => {
+        const uid = l?.user_id
+        if (uid === null || uid === undefined) return false
+        const s = String(uid)
+        if (seenCRU.has(s)) return false
+        seenCRU.add(s); return true
+      })
+      .map((l: any) => ({ user_id: String(l.user_id), reaction_type: l.reaction_type || 'like' }))
+    const { sender: _cs, ...commentWithoutSender } = comment
+    return {
+      ...commentWithoutSender,
+      attachments: normalizeAttachments(comment.attachments),
+      author,
+      likes_count: commentLikes.length,
+      reaction_users: reactionUsers,
+      reaction_counts: reactionCounts,
+      user_reactions: userReactions,
+      user_reaction: userReactions[0] || null,
+      is_liked: userReactions.length > 0
+    }
+  })
+
+  const topLevelByPostId: any = {}
+  const repliesByParentId: any = {}
+  for (const cm of enrichedCommentsList) {
+    if (cm.parent_comment_id) {
+      const pid = String(cm.parent_comment_id)
+      if (!repliesByParentId[pid]) repliesByParentId[pid] = []
+      repliesByParentId[pid].push(cm)
+    } else {
+      if (!topLevelByPostId[cm.post_id]) topLevelByPostId[cm.post_id] = []
+      topLevelByPostId[cm.post_id].push(cm)
+    }
+  }
+  const commentsByPostId: any = {}
+  for (const pid of Object.keys(topLevelByPostId)) {
+    commentsByPostId[pid] = topLevelByPostId[pid].map((cm: any) => ({
+      ...cm,
+      replies: repliesByParentId[String(cm.id)] || []
+    }))
+  }
+
+  const FEED_SCORE = {
+    gravity: 1.2,
+    commentWeight: 2,
+    likeWeight: 1,
+    networkCommentBoost: 5,
+    networkLikeBoost: 1,
+    connectionPostBoost: 20,
+    tier1WindowMs: 30 * 60 * 1000,
+  }
+
+  // tier-1 cutoff: absolute timestamp 30 minutes ago
+  const recentActivityCutoff = new Date(Date.now() - FEED_SCORE.tier1WindowMs).toISOString()
+
+  const isProfileFeed = !!targetUserId
+
+  const scoredPosts = sourcePosts.map((post: any) => {
+    const postLikes = allPostLikes.filter((l: any) => l.target_id === post.id)
+    const postComments = visibleComments.filter((cm: any) => cm.post_id === post.id)
+    const senderEmail = post.sender
+    const profileData = usersByEmail.get(senderEmail?.toLowerCase())
+
+    let postAuthor
+    if (post.company_id && companiesById.has(Number(post.company_id))) {
+      postAuthor = buildCompanyAuthor(companiesById.get(Number(post.company_id))!)
+    } else if (profileData) {
+      const isAnonymous = profileData.is_anonymous === true
+      const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData
+      postAuthor = { ...cleanProfile, first_name: cleanProfile.first_name, last_name: cleanProfile.last_name, is_anonymous: isAnonymous }
+    } else {
+      postAuthor = { first_name: senderEmail, last_name: null, image: null, is_anonymous: false }
+    }
+
+    const reactionCounts = postLikes.reduce((acc: any, like: any) => {
+      const type = like.reaction_type || 'like'; acc[type] = (acc[type] || 0) + 1; return acc
+    }, {})
+    const userReactions = postLikes
+      .filter((l: any) => l.user_id === current_user_uuid || l.user_uuid === current_user_uuid)
+      .map((l: any) => l.reaction_type)
+    const seenPRU = new Set<string>()
+    const reactionUsers = postLikes
+      .filter((l: any) => {
+        const uid = l?.user_id
+        if (uid === null || uid === undefined) return false
+        const s = String(uid)
+        if (seenPRU.has(s)) return false
+        seenPRU.add(s); return true
+      })
+      .map((l: any) => ({ user_id: String(l.user_id), reaction_type: l.reaction_type || 'like' }))
+
+    const { sender: _ps, ...postWithoutSender } = post
+    const linkedArticle = post.linked_article_id
+      ? linkedArticlesById.get(String(post.linked_article_id)) ?? null
+      : null
+
+    let _score = 0
+    const v2: Record<string, any> = {}
+
+    if (!isProfileFeed) {
+      const lastSeenAt: string | null = lastSeenMap[String(post.id)] ?? null
+      const baseline = lastSeenAt ?? session_start
+      const sentAt: string = post.sent_at ?? post.effective_sort_date ?? new Date().toISOString()
+      const hoursSincePosted = Math.max(0, (Date.now() - new Date(sentAt).getTime()) / 3_600_000)
+
+      const networkCommentCount = postComments.filter(
+        (cm: any) => cm.posted_by_uuid && connectedUuids.has(cm.posted_by_uuid) && cm.created_at > baseline
+      ).length
+
+      const networkLikeCount = postLikes.filter(
+        (l: any) => l.user_id && connectedUuids.has(l.user_id) && l.created_at && l.created_at > baseline
+      ).length
+
+      const totalEngagement =
+        postComments.length * FEED_SCORE.commentWeight +
+        postLikes.length * FEED_SCORE.likeWeight
+
+      const networkBoost =
+        networkCommentCount * FEED_SCORE.networkCommentBoost +
+        networkLikeCount * FEED_SCORE.networkLikeBoost
+
+      const connectionPostBoost =
+        post.posted_by_uuid && connectedUuids.has(post.posted_by_uuid)
+          ? FEED_SCORE.connectionPostBoost
+          : 0
+
+      const rawScore =
+        (1 + totalEngagement + networkBoost + connectionPostBoost) /
+        Math.pow(hoursSincePosted + 2, FEED_SCORE.gravity)
+
+      // smooth freshness decay: ×2.5 at 0h → ×1.0 at 1h, flat afterwards
+      const freshnessBoost = 1 + 1.5 * Math.max(0, 1 - hoursSincePosted)
+      _score = isNaN(rawScore) ? 0 : rawScore * freshnessBoost
+
+      const recentComments = postComments.filter((cm: any) => cm.created_at > baseline)
+      const recentNetworkCommenters = recentComments
+        .filter((cm: any) => cm.posted_by_uuid && connectedUuids.has(cm.posted_by_uuid))
+        .slice(0, 2)
+        .map((cm: any) => {
+          const cp = usersByUuid.get(cm.posted_by_uuid) ?? usersByEmail.get((cm.sender || '').toLowerCase())
+          const name = cp
+            ? `${cp.first_name ?? ''} ${cp.last_name ?? ''}`.trim()
+            : cm.sender_name ?? 'משתמש'
+          return { name: name || 'משתמש', uuid: cm.posted_by_uuid }
+        })
+
+      const sentAtMs = new Date(sentAt).getTime()
+      const isNewPost = !lastSeenAt && (Date.now() - sentAtMs) < 86_400_000
+      v2.is_new_post = isNewPost
+      v2.new_comments_count = recentComments.length
+      v2.network_commenters = recentNetworkCommenters
+      v2.has_last_seen_data = lastSeenAt !== null
+      // tier-1 flag: new post OR comment in last 30 min — used only for sort, not sent to client
+      v2._tier1 = isNewPost || postComments.some(
+        (cm: any) => cm.created_at > recentActivityCutoff
+      )
+    }
+
+    return {
+      ...postWithoutSender,
+      ...(post.company_id ? { is_company_post: true } : {}),
+      attachments: normalizeAttachments(post.attachments),
+      author: postAuthor,
+      comments: commentsByPostId[post.id] || [],
+      likes_count: postLikes.length,
+      reaction_users: reactionUsers,
+      reaction_counts: reactionCounts,
+      user_reactions: userReactions,
+      user_reaction: userReactions[0] || null,
+      is_liked: userReactions.length > 0,
+      impressions_count: impressionCountMap.has(String(post.id))
+        ? impressionCountMap.get(String(post.id))
+        : undefined,
+      ...(linkedArticle ? { linked_article: linkedArticle } : {}),
+      ...v2,
+      _score,
+    }
+  })
+
+  if (!isProfileFeed) {
+    scoredPosts.sort((a: any, b: any) => {
+      if (a._tier1 !== b._tier1) return a._tier1 ? -1 : 1
+      return (b._score ?? 0) - (a._score ?? 0)
+    })
+  }
+
+  const postsToReturn = scoredPosts.map(({ _score, _tier1, ...p }: any) => p)
+
+  return c.json({ data: postsToReturn, meta: { next_cursor: cursorForPagination, count: postsToReturn.length } })
+}
+
+// ====================================================================
 // 2. נתיבי API
 // ====================================================================
 
@@ -570,6 +994,11 @@ if (targetUserId) {
       return c.json({ data: apEnrichedPosts, meta: { next_cursor: activityNextCursor } })
     }
     // ---- End activity filter path ----
+
+    // Feature flag: v2 ranked feed (hermetically separate, no effect on existing flow)
+    if (c.req.query('feed_ranking') === 'v2') {
+      return handleRankedFeed(c)
+    }
 
     const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
       p_session_start: session_start,
@@ -2322,12 +2751,20 @@ app.post('/:id/impression', async (c) => {
     }
 
     const today = new Date().toISOString().slice(0, 10)
-    await supabaseAdmin
+    const impressionResult = await supabase
       .from('post_impressions')
       .upsert(
-        { post_id: postId, user_id: user.id, impression_date: today },
-        { onConflict: 'post_id,user_id,impression_date', ignoreDuplicates: true }
+        {
+          post_id: postId,
+          user_id: user.id,
+          impression_date: today,
+          last_seen_at: new Date().toISOString()
+        },
+        { onConflict: 'post_id,user_id,impression_date', ignoreDuplicates: false }
       )
+    if (impressionResult.error) {
+      console.error('[impression] upsert error:', impressionResult.error.message)
+    }
 
     return c.json({ ok: true })
   } catch {
