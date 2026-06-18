@@ -973,17 +973,16 @@ app.post('/admin/backfill-vectors', async (c) => {
 
 app.get('/scheduled', async (c) => {
   try {
-    const user = c.get('user')
-    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+    const supabase = c.get('supabase')
+    if (!supabase) return c.json({ error: 'Unauthorized' }, 401)
 
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabase
       .from('scheduled_posts')
       .select(`
         id, subject, message, post_type, scheduled_at, attachments,
         community_members_only, company_id, linked_article_id, created_at,
         articles:linked_article_id (id, title, cover_image_url, excerpt, read_time)
       `)
-      .eq('posted_by_uuid', user.id)
       .order('scheduled_at', { ascending: true })
 
     if (error) throw error
@@ -995,16 +994,16 @@ app.get('/scheduled', async (c) => {
 
 app.put('/scheduled/:id', async (c) => {
   try {
-    const user = c.get('user')
-    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+    const supabase = c.get('supabase')
+    if (!supabase) return c.json({ error: 'Unauthorized' }, 401)
 
     const scheduledPostId = c.req.param('id')
     let body: any
     try { body = await c.req.json() } catch { return c.json({ error: 'Invalid JSON' }, 400) }
 
-    const { data: existing, error: fetchError } = await supabaseAdmin
+    const { data: existing, error: fetchError } = await supabase
       .from('scheduled_posts')
-      .select('attachments, posted_by_uuid')
+      .select('attachments')
       .eq('id', scheduledPostId)
       .single()
 
@@ -1012,9 +1011,6 @@ app.put('/scheduled/:id', async (c) => {
       return c.json({ error: 'This post has already been published or does not exist' }, 404)
     }
     if (fetchError) throw fetchError
-    if (existing.posted_by_uuid !== user.id) {
-      return c.json({ error: 'You do not have permission to edit this post' }, 403)
-    }
 
     const updateData: any = {}
     if (body.message !== undefined) {
@@ -1055,12 +1051,11 @@ app.put('/scheduled/:id', async (c) => {
       }
     }
 
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabase
       .from('scheduled_posts').update(updateData).eq('id', scheduledPostId).select().single()
     if (error) throw error
 
     if (filesToDelete.length > 0) {
-      const supabase = c.get('supabase')
       const { error: storageErr } = await supabase.storage.from('attachments').remove(filesToDelete)
       if (storageErr) console.error('Failed to delete old files from storage:', storageErr)
     }
@@ -1073,14 +1068,14 @@ app.put('/scheduled/:id', async (c) => {
 
 app.delete('/scheduled/:id', async (c) => {
   try {
-    const user = c.get('user')
-    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+    const supabase = c.get('supabase')
+    if (!supabase) return c.json({ error: 'Unauthorized' }, 401)
 
     const scheduledPostId = c.req.param('id')
 
-    const { data: existing, error: fetchError } = await supabaseAdmin
+    const { data: existing, error: fetchError } = await supabase
       .from('scheduled_posts')
-      .select('attachments, posted_by_uuid')
+      .select('attachments')
       .eq('id', scheduledPostId)
       .single()
 
@@ -1088,11 +1083,8 @@ app.delete('/scheduled/:id', async (c) => {
       return c.json({ error: 'Scheduled post not found' }, 404)
     }
     if (fetchError) throw fetchError
-    if (existing.posted_by_uuid !== user.id) {
-      return c.json({ error: 'You do not have permission to delete this post' }, 403)
-    }
 
-    const { error } = await supabaseAdmin
+    const { error } = await supabase
       .from('scheduled_posts').delete().eq('id', scheduledPostId)
     if (error) throw error
 
@@ -1110,7 +1102,6 @@ app.delete('/scheduled/:id', async (c) => {
       .filter(Boolean) as string[]
 
     if (attachmentPaths.length > 0) {
-      const supabase = c.get('supabase')
       const { error: storageErr } = await supabase.storage.from('attachments').remove(attachmentPaths)
       if (storageErr) console.error('Failed to delete scheduled post files from storage:', storageErr)
     }
