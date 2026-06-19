@@ -609,13 +609,19 @@ async function handleRankedFeed(c: any) {
   }
 
   const FEED_SCORE = {
-    gravity: 1.2,
     commentWeight: 2,
     likeWeight: 1,
     networkCommentBoost: 5,
     networkLikeBoost: 1,
     connectionPostBoost: 10,
     tier1WindowMs: 30 * 60 * 1000,
+    // gravity split — total = 1.2 in both cases
+    // seen post:   activityAge dominates, light post-age penalty
+    seenActivityAgePower: 1.0,
+    seenPostAgePower: 0.2,
+    // unseen post: postAge dominates, activity recency still matters
+    unseenPostAgePower: 0.8,
+    unseenActivityAgePower: 0.4,
   }
 
   // tier-1 cutoff: absolute timestamp 30 minutes ago
@@ -713,11 +719,11 @@ async function handleRankedFeed(c: any) {
           ? FEED_SCORE.connectionPostBoost
           : 0
 
-      // split gravity: activity recency (1.0) + post age penalty (0.2) = 1.2 total
-      // old posts still penalized by age even when they have new activity
       const rawScore =
         (1 + totalEngagement + networkBoost + connectionPostBoost) /
-        (Math.pow(hoursForGravity + 2, 1.0) * Math.pow(hoursSincePosted + 2, 0.2))
+        (lastSeenAt !== null
+          ? Math.pow(hoursForGravity + 2, FEED_SCORE.seenActivityAgePower) * Math.pow(hoursSincePosted + 2, FEED_SCORE.seenPostAgePower)
+          : Math.pow(hoursSincePosted + 2, FEED_SCORE.unseenPostAgePower) * Math.pow(hoursForGravity + 2, FEED_SCORE.unseenActivityAgePower))
 
       // smooth freshness decay based on post age: ×2.5 at 0h → ×1.0 at 1h, flat afterwards
       const freshnessBoost = 1 + 1.5 * Math.max(0, 1 - hoursSincePosted)
