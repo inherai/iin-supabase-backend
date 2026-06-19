@@ -2764,6 +2764,7 @@ app.post('/:id/impression', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ ok: true })
 
+    const supabase = c.get('supabase')
     const postId = String(c.req.param('id'))
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL')!,
