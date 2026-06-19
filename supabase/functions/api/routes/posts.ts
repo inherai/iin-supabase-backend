@@ -614,7 +614,7 @@ async function handleRankedFeed(c: any) {
     likeWeight: 1,
     networkCommentBoost: 5,
     networkLikeBoost: 1,
-    connectionPostBoost: 20,
+    connectionPostBoost: 10,
     tier1WindowMs: 30 * 60 * 1000,
   }
 
@@ -680,12 +680,25 @@ async function handleRankedFeed(c: any) {
       ).length
 
       // if already seen: count only new engagement since last visit; otherwise full history
-      const effectiveComments = lastSeenAt
-        ? postComments.filter((cm: any) => cm.created_at > lastSeenAt).length
-        : postComments.length
-      const effectiveLikes = lastSeenAt
-        ? postLikes.filter((l: any) => l.created_at && l.created_at > lastSeenAt).length
-        : postLikes.length
+      const effectiveCommentList: any[] = lastSeenAt
+        ? postComments.filter((cm: any) => cm.created_at > lastSeenAt)
+        : [...postComments]
+      const effectiveLikeList: any[] = lastSeenAt
+        ? postLikes.filter((l: any) => l.created_at && l.created_at > lastSeenAt)
+        : postLikes.filter((l: any) => l.created_at)
+
+      const effectiveComments = effectiveCommentList.length
+      const effectiveLikes = effectiveLikeList.length
+
+      // gravity uses time of most recent effective activity — not post age
+      // so an old post with a new comment scores by comment freshness, not post age
+      const effectiveTimes: number[] = [
+        ...effectiveCommentList.map((cm: any) => new Date(cm.created_at).getTime()).filter((t: number) => !isNaN(t)),
+        ...effectiveLikeList.map((l: any) => new Date(l.created_at).getTime()).filter((t: number) => !isNaN(t)),
+      ]
+      const hoursForGravity = effectiveTimes.length > 0
+        ? Math.max(0, (Date.now() - Math.max(...effectiveTimes)) / 3_600_000)
+        : hoursSincePosted
 
       const totalEngagement =
         effectiveComments * FEED_SCORE.commentWeight +
@@ -700,11 +713,13 @@ async function handleRankedFeed(c: any) {
           ? FEED_SCORE.connectionPostBoost
           : 0
 
+      // split gravity: activity recency (1.0) + post age penalty (0.2) = 1.2 total
+      // old posts still penalized by age even when they have new activity
       const rawScore =
         (1 + totalEngagement + networkBoost + connectionPostBoost) /
-        Math.pow(hoursSincePosted + 2, FEED_SCORE.gravity)
+        (Math.pow(hoursForGravity + 2, 1.0) * Math.pow(hoursSincePosted + 2, 0.2))
 
-      // smooth freshness decay: ×2.5 at 0h → ×1.0 at 1h, flat afterwards
+      // smooth freshness decay based on post age: ×2.5 at 0h → ×1.0 at 1h, flat afterwards
       const freshnessBoost = 1 + 1.5 * Math.max(0, 1 - hoursSincePosted)
       _score = isNaN(rawScore) ? 0 : rawScore * freshnessBoost
 
