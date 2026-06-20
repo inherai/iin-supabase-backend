@@ -774,7 +774,7 @@ async function handleRankedFeed(c: any) {
       v2.network_commenters = recentNetworkCommenters
       v2.has_last_seen_data = effectiveLastSeen !== null
       // tier-1 flag: new post OR comment in last 30 min — used only for sort, not sent to client
-      v2._tier1 = isNewPost || postComments.some(
+      v2._tier1 = hoursSincePosted < 0.5 || isNewPost || postComments.some(
         (cm: any) => cm.created_at > recentActivityCutoff
       )
     }
