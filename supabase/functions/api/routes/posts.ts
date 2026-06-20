@@ -631,6 +631,10 @@ async function handleRankedFeed(c: any) {
     networkLikeBoost: 1,
     connectionPostBoost: 10,
     tier1WindowMs: 30 * 60 * 1000,
+    // exposure boost: פוסט שטרם צבר מספיק חשיפות מקבל boost יורד בהדרגה
+    lowExposureWindowHours: 24,  // חלון 24ש — פוסט לילי מקבל הגנה עד שהקהל מתעורר
+    lowExposureThreshold: 80,    // median ב-3 שעות = 57, P75 = 76 → 80 = "חשיפה הוגנת"
+    lowExposureBoost: 1.8,       // מקסימום boost (ב-0 impressions)
     // gravity split — total = 1.2 in both cases
     // seen post:   activityAge dominates, light post-age penalty
     seenActivityAgePower: 1.0,
@@ -747,7 +751,16 @@ async function handleRankedFeed(c: any) {
 
       // smooth freshness decay based on post age: ×2.5 at 0h → ×1.0 at 1h, flat afterwards
       const freshnessBoost = 1 + 1.5 * Math.max(0, 1 - hoursSincePosted)
-      _score = isNaN(rawScore) ? 0 : rawScore * freshnessBoost
+
+      // exposure boost: נכנס רק אחרי Tier 1 (30 דק') ועד 24 שעות
+      // מונע כפילות עם freshness×2.5 בדקות הראשונות
+      const hoursTier1 = FEED_SCORE.tier1WindowMs / 3_600_000
+      const impressionsCount = impressionCountMap.get(String(post.id)) ?? 0
+      const exposureBoost = (hoursSincePosted >= hoursTier1 && hoursSincePosted < FEED_SCORE.lowExposureWindowHours)
+        ? 1 + (FEED_SCORE.lowExposureBoost - 1) * Math.max(0, 1 - impressionsCount / FEED_SCORE.lowExposureThreshold)
+        : 1.0
+
+      _score = isNaN(rawScore) ? 0 : rawScore * freshnessBoost * exposureBoost
 
       const recentComments = postComments.filter((cm: any) => cm.created_at > baseline)
       const recentNetworkCommenters = recentComments
