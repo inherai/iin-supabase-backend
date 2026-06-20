@@ -430,7 +430,9 @@ async function handleRankedFeed(c: any) {
 
   const postIds = sourcePosts.map((p: any) => p.id)
 
-  const [commentsRes, postLikesRes, impressionsRes, connectionsRes] = await Promise.all([
+  const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+
+  const [commentsRes, postLikesRes, impressionsRes, connectionsRes, authUserRes] = await Promise.all([
     supabase
       .from('comments')
       .select('*')
@@ -454,8 +456,22 @@ async function handleRankedFeed(c: any) {
           .select('requester_id, receiver_id')
           .or(`requester_id.eq.${current_user_uuid},receiver_id.eq.${current_user_uuid}`)
           .eq('status', 'accepted')
-      : Promise.resolve({ data: [] })
+      : Promise.resolve({ data: [] }),
+    current_user_uuid
+      ? supabaseAdmin.from('user_activity').select('last_feed_visit_at').eq('user_id', current_user_uuid).maybeSingle()
+      : Promise.resolve({ data: null })
   ])
+
+  // last-visit baseline: cap at 48h — returning users after long absence get a fresh start
+  const MAX_LOOKBACK_MS = 48 * 3_600_000
+  const lookbackFloor = new Date(Date.now() - MAX_LOOKBACK_MS).toISOString()
+  const rawLastVisit = authUserRes?.data?.last_feed_visit_at ?? null
+  const cappedLastLoginAt: string | null = rawLastVisit && rawLastVisit > lookbackFloor ? rawLastVisit : null
+
+  // fire-and-forget: רק בטעינת פיד ראשונה (לא pagination)
+  if (current_user_uuid && !last_effective_date && !last_id) {
+    supabaseAdmin.rpc('record_feed_visit', { p_user_id: current_user_uuid })
+  }
 
   const allPostLikes = postLikesRes.data || []
 
@@ -673,24 +689,28 @@ async function handleRankedFeed(c: any) {
 
     if (!isProfileFeed) {
       const lastSeenAt: string | null = lastSeenMap[String(post.id)] ?? null
-      const baseline = lastSeenAt ?? session_start
+      // effectiveLastSeen: actual impression → capped last-login → null (cold start)
+      const effectiveLastSeen: string | null = lastSeenAt ?? cappedLastLoginAt
+      const baseline = effectiveLastSeen ?? session_start
       const sentAt: string = post.sent_at ?? post.effective_sort_date ?? new Date().toISOString()
       const hoursSincePosted = Math.max(0, (Date.now() - new Date(sentAt).getTime()) / 3_600_000)
 
-      const networkCommentCount = postComments.filter(
-        (cm: any) => cm.posted_by_uuid && connectedUuids.has(cm.posted_by_uuid) && cm.created_at > baseline
-      ).length
+      // comments table has no posted_by_uuid — look up UUID from sender email via usersByEmail
+      const networkCommentCount = postComments.filter((cm: any) => {
+        const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
+        return uuid && connectedUuids.has(uuid) && cm.created_at > baseline
+      }).length
 
       const networkLikeCount = postLikes.filter(
         (l: any) => l.user_id && connectedUuids.has(l.user_id) && l.created_at && l.created_at > baseline
       ).length
 
       // if already seen: count only new engagement since last visit; otherwise full history
-      const effectiveCommentList: any[] = lastSeenAt
-        ? postComments.filter((cm: any) => cm.created_at > lastSeenAt)
+      const effectiveCommentList: any[] = effectiveLastSeen
+        ? postComments.filter((cm: any) => cm.created_at > effectiveLastSeen)
         : [...postComments]
-      const effectiveLikeList: any[] = lastSeenAt
-        ? postLikes.filter((l: any) => l.created_at && l.created_at > lastSeenAt)
+      const effectiveLikeList: any[] = effectiveLastSeen
+        ? postLikes.filter((l: any) => l.created_at && l.created_at > effectiveLastSeen)
         : postLikes.filter((l: any) => l.created_at)
 
       const effectiveComments = effectiveCommentList.length
@@ -721,7 +741,7 @@ async function handleRankedFeed(c: any) {
 
       const rawScore =
         (1 + totalEngagement + networkBoost + connectionPostBoost) /
-        (lastSeenAt !== null
+        (effectiveLastSeen !== null
           ? Math.pow(hoursForGravity + 2, FEED_SCORE.seenActivityAgePower) * Math.pow(hoursSincePosted + 2, FEED_SCORE.seenPostAgePower)
           : Math.pow(hoursSincePosted + 2, FEED_SCORE.unseenPostAgePower) * Math.pow(hoursForGravity + 2, FEED_SCORE.unseenActivityAgePower))
 
@@ -731,22 +751,28 @@ async function handleRankedFeed(c: any) {
 
       const recentComments = postComments.filter((cm: any) => cm.created_at > baseline)
       const recentNetworkCommenters = recentComments
-        .filter((cm: any) => cm.posted_by_uuid && connectedUuids.has(cm.posted_by_uuid))
+        .filter((cm: any) => {
+          const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
+          return uuid && connectedUuids.has(uuid)
+        })
         .slice(0, 2)
         .map((cm: any) => {
-          const cp = usersByUuid.get(cm.posted_by_uuid) ?? usersByEmail.get((cm.sender || '').toLowerCase())
+          const cp = usersByEmail.get((cm.sender || '').toLowerCase()) ?? usersByUuid.get(cm.posted_by_uuid)
           const name = cp
             ? `${cp.first_name ?? ''} ${cp.last_name ?? ''}`.trim()
             : cm.sender_name ?? 'משתמש'
-          return { name: name || 'משתמש', uuid: cm.posted_by_uuid }
+          const uuid = cm.posted_by_uuid || cp?.uuid || ''
+          return { name: name || 'משתמש', uuid }
         })
 
       const sentAtMs = new Date(sentAt).getTime()
-      const isNewPost = !lastSeenAt && (Date.now() - sentAtMs) < 86_400_000
+      const isNewPost = !lastSeenAt &&
+        (Date.now() - sentAtMs) < 86_400_000 &&
+        sentAtMs > new Date(effectiveLastSeen ?? 0).getTime()
       v2.is_new_post = isNewPost
       v2.new_comments_count = recentComments.length
       v2.network_commenters = recentNetworkCommenters
-      v2.has_last_seen_data = lastSeenAt !== null
+      v2.has_last_seen_data = effectiveLastSeen !== null
       // tier-1 flag: new post OR comment in last 30 min — used only for sort, not sent to client
       v2._tier1 = isNewPost || postComments.some(
         (cm: any) => cm.created_at > recentActivityCutoff
@@ -2802,6 +2828,23 @@ app.post('/:id/impression', async (c) => {
   } catch {
     return c.json({ ok: true })
   }
+})
+
+// ====================================================================
+// FEED SESSION TIME
+// POST /posts/feed-session — זמן שהייה בפיד (שניות)
+// ====================================================================
+app.post('/feed-session', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return c.json({ ok: true })
+    const body = await c.req.json().catch(() => ({}))
+    const seconds = Math.min(Math.max(0, Number(body.seconds) || 0), 7200) // cap 2h
+    if (seconds < 5) return c.json({ ok: true })
+    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    await supabaseAdmin.rpc('add_feed_time', { p_user_id: user.id, p_seconds: seconds })
+  } catch { /* fire-and-forget */ }
+  return c.json({ ok: true })
 })
 
 // ====================================================================
