@@ -47,6 +47,178 @@ app.get("/dashboard", async (c) => {
   });
 });
 
+// ==================== ANALYTICS ====================
+
+app.get("/analytics", async (c) => {
+  const db = getAdminClient();
+
+  const [activityRes, usersRes] = await Promise.all([
+    db.from("user_activity").select("*"),
+    db.from("users").select("uuid, first_name, last_name, email, created_at"),
+  ]);
+
+  const activities: any[] = activityRes.data || [];
+  const users: any[] = usersRes.data || [];
+
+  const userMap = new Map(users.map((u) => [u.uuid, u]));
+
+  const merged = activities.map((a) => {
+    const u = userMap.get(a.user_id);
+    return {
+      ...a,
+      name: [u?.first_name, u?.last_name].filter(Boolean).join(" ") || "Unknown",
+      email: u?.email ?? null,
+    };
+  });
+
+  const now = Date.now();
+  const D = 86_400_000;
+  const isActive = (u: any, days: number) =>
+    u.last_active_at && now - new Date(u.last_active_at).getTime() < days * D;
+
+  const dau = merged.filter((u) => isActive(u, 1)).length;
+  const wau = merged.filter((u) => isActive(u, 7)).length;
+  const mau = merged.filter((u) => isActive(u, 30)).length;
+  const mauUsers = merged.filter((u) => isActive(u, 30));
+
+  const totalUsers = users.length;
+  const newUsers7d = users.filter(
+    (u) => u.created_at && now - new Date(u.created_at).getTime() < 7 * D
+  ).length;
+
+  const sumField = (arr: any[], key: string) =>
+    arr.reduce((s, u) => s + (Number(u[key]) || 0), 0);
+
+  const totalFeedTimeSec = sumField(merged, "total_feed_time_seconds");
+  const totalPosts = sumField(merged, "total_posts");
+  const totalComments = sumField(merged, "total_comments");
+  const totalConnectionsRaw = sumField(merged, "total_connections");
+  const totalFeedVisits = sumField(merged, "total_feed_visits");
+
+  // User segments
+  const powerUsers = merged.filter(
+    (u) => u.current_streak_days >= 3 && u.total_posts >= 1 && u.total_connections >= 3
+  ).length;
+  const atRisk = merged.filter((u) => {
+    if (!u.last_active_at) return false;
+    const age = now - new Date(u.last_active_at).getTime();
+    return age >= 7 * D && age < 30 * D;
+  }).length;
+  const dormant = merged.filter(
+    (u) => !u.last_active_at || now - new Date(u.last_active_at).getTime() >= 30 * D
+  ).length;
+  const neverActive = Math.max(0, totalUsers - merged.length);
+
+  // Streaks
+  const streakUsers = merged.filter((u) => u.current_streak_days > 0);
+  const longestPlatform = merged.reduce(
+    (m, u) => Math.max(m, u.longest_streak_days || 0), 0
+  );
+
+  // Distribution helper
+  const bucket = (key: string, ranges: [string, number, number][]) =>
+    ranges.map(([label, lo, hi]) => ({
+      label,
+      count: merged.filter((u) => {
+        const v = Number(u[key]) || 0;
+        return v >= lo && (hi === Infinity ? true : v <= hi);
+      }).length,
+    }));
+
+  // Leaderboard helper
+  const leaderboard = (key: string) =>
+    [...merged]
+      .sort((a, b) => (Number(b[key]) || 0) - (Number(a[key]) || 0))
+      .slice(0, 10)
+      .map((u) => ({
+        user_id: u.user_id,
+        name: u.name,
+        email: u.email,
+        current_streak_days: u.current_streak_days || 0,
+        longest_streak_days: u.longest_streak_days || 0,
+        total_posts: u.total_posts || 0,
+        total_comments: u.total_comments || 0,
+        total_connections: u.total_connections || 0,
+        total_feed_visits: u.total_feed_visits || 0,
+        total_feed_time_seconds: u.total_feed_time_seconds || 0,
+        total_reactions_received: u.total_reactions_received || 0,
+        total_comments_received: u.total_comments_received || 0,
+        last_active_at: u.last_active_at || null,
+      }));
+
+  return c.json({
+    generated_at: new Date().toISOString(),
+    total_users: totalUsers,
+    total_in_activity: merged.length,
+    dau,
+    wau,
+    mau,
+    stickiness_pct: mau > 0 ? Math.round((dau / mau) * 1000) / 10 : 0,
+    new_users_7d: newUsers7d,
+    total_feed_visits: totalFeedVisits,
+    total_feed_time_hours: Math.round((totalFeedTimeSec / 3600) * 10) / 10,
+    avg_feed_time_per_mau_minutes:
+      mauUsers.length > 0
+        ? Math.round((sumField(mauUsers, "total_feed_time_seconds") / mauUsers.length / 60) * 10) / 10
+        : 0,
+    avg_feed_visits_per_mau:
+      mauUsers.length > 0
+        ? Math.round((sumField(mauUsers, "total_feed_visits") / mauUsers.length) * 10) / 10
+        : 0,
+    total_posts: totalPosts,
+    total_comments: totalComments,
+    avg_posts_per_mau:
+      mauUsers.length > 0
+        ? Math.round((sumField(mauUsers, "total_posts") / mauUsers.length) * 10) / 10
+        : 0,
+    total_connections_pairs: Math.floor(totalConnectionsRaw / 2),
+    avg_connections_per_user:
+      merged.length > 0
+        ? Math.round((totalConnectionsRaw / merged.length) * 10) / 10
+        : 0,
+    users_with_streak: streakUsers.length,
+    users_7plus_streak: merged.filter((u) => u.current_streak_days >= 7).length,
+    avg_streak_active:
+      streakUsers.length > 0
+        ? Math.round((sumField(streakUsers, "current_streak_days") / streakUsers.length) * 10) / 10
+        : 0,
+    longest_streak_platform: longestPlatform,
+    segments: {
+      power_users: powerUsers,
+      active_7d: wau,
+      at_risk: atRisk,
+      dormant,
+      never_active: neverActive,
+    },
+    feed_time_distribution: bucket("total_feed_time_seconds", [
+      ["< 1 min", 0, 59],
+      ["1–5 min", 60, 299],
+      ["5–30 min", 300, 1799],
+      ["30m–2h", 1800, 7199],
+      ["2h+", 7200, Infinity],
+    ]),
+    streak_distribution: bucket("current_streak_days", [
+      ["0 days", 0, 0],
+      ["1–2", 1, 2],
+      ["3–6", 3, 6],
+      ["7–13", 7, 13],
+      ["14+", 14, Infinity],
+    ]),
+    posts_distribution: bucket("total_posts", [
+      ["0", 0, 0],
+      ["1–2", 1, 2],
+      ["3–9", 3, 9],
+      ["10–24", 10, 24],
+      ["25+", 25, Infinity],
+    ]),
+    top_streaks: leaderboard("current_streak_days"),
+    top_posters: leaderboard("total_posts"),
+    top_feed_time: leaderboard("total_feed_time_seconds"),
+    top_connectors: leaderboard("total_connections"),
+    top_received_reactions: leaderboard("total_reactions_received"),
+  });
+});
+
 // ==================== USERS ====================
 
 app.get("/users", async (c) => {
