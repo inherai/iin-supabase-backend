@@ -559,13 +559,12 @@ function scorePost(
   //   Formula: 1 + (maxBoost-1) × max(0, 1 - impressions/threshold)
   //   → ×1.8 at 0 impressions, ×1.0 at 80+ impressions (smooth gradient)
   //
-  //   Active window: tier1 end (30min) → 24h.
+  //   Active window: tier1 end (30min) → 24h, only for posts never seen by this user.
+  //   If you've already seen the post, the exposure mission is complete for you.
   //   Starts at 30min to avoid a ×4.5 spike at t=0 (freshness + exposure).
-  //   The 30–60min overlap with freshnessBoost is intentional: a post just
-  //   exiting tier1 with 0 views genuinely deserves both protections.
   //
   const impressionsCount = impressionCountMap.get(String(post.id)) ?? 0
-  const exposureBoost = (hoursSincePosted >= HOURS_TIER1 && hoursSincePosted < FEED_SCORE.lowExposureWindowHours)
+  const exposureBoost = (!lastSeenAt && hoursSincePosted >= HOURS_TIER1 && hoursSincePosted < FEED_SCORE.lowExposureWindowHours)
     ? 1 + (FEED_SCORE.lowExposureBoost - 1) * Math.max(0, 1 - impressionsCount / FEED_SCORE.lowExposureThreshold)
     : 1.0
 
