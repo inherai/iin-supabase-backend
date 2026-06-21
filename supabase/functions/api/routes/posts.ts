@@ -636,6 +636,7 @@ async function handleRankedFeed(c: any) {
     lowExposureThreshold: 80,    // median ב-3 שעות = 57, P75 = 76 → 80 = "חשיפה הוגנת"
     lowExposureBoost: 1.8,       // מקסימום boost (ב-0 impressions)
     likeGravityFactor: 4,  // לייק נחשב ישן פי 4 מתגובה לצורך חישוב gravity
+    unseenBoost: 1.3,      // פוסט שמעולם לא הוצג למשתמש הזה מקבל יתרון על פוסט שנראה
     // gravity split — total = 1.2 in both cases
     // seen post:   activityAge dominates, light post-age penalty
     seenActivityAgePower: 1.0,
@@ -772,7 +773,8 @@ async function handleRankedFeed(c: any) {
         ? 1 + (FEED_SCORE.lowExposureBoost - 1) * Math.max(0, 1 - impressionsCount / FEED_SCORE.lowExposureThreshold)
         : 1.0
 
-      _score = isNaN(rawScore) ? 0 : rawScore * freshnessBoost * exposureBoost
+      const unseenBoost = !lastSeenAt ? FEED_SCORE.unseenBoost : 1.0
+      _score = isNaN(rawScore) ? 0 : rawScore * freshnessBoost * exposureBoost * unseenBoost
 
       const recentComments = postComments.filter((cm: any) => cm.created_at > baseline)
       const recentNetworkCommenters = recentComments
