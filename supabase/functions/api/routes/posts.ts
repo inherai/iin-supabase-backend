@@ -637,6 +637,8 @@ async function handleRankedFeed(c: any) {
     lowExposureBoost: 1.8,       // מקסימום boost (ב-0 impressions)
     likeGravityFactor: 4,  // לייק נחשב ישן פי 4 מתגובה לצורך חישוב gravity
     unseenBoost: 1.3,      // פוסט שמעולם לא הוצג למשתמש הזה מקבל יתרון על פוסט שנראה
+    freshnessStrength: 1.5,   // עוצמת ה-boost בזמן 0 → score × (1 + freshnessStrength) = ×2.5
+    freshnessWindowHours: 1,  // אחרי כמה שעות ה-freshness נעלם לחלוטין
     // gravity split — total = 1.2 in both cases
     // seen post:   activityAge dominates, light post-age penalty
     seenActivityAgePower: 1.0,
@@ -763,7 +765,7 @@ async function handleRankedFeed(c: any) {
           : Math.pow(hoursSincePosted + 2, FEED_SCORE.unseenPostAgePower) * Math.pow(hoursForGravity + 2, FEED_SCORE.unseenActivityAgePower))
 
       // smooth freshness decay based on post age: ×2.5 at 0h → ×1.0 at 1h, flat afterwards
-      const freshnessBoost = 1 + 1.5 * Math.max(0, 1 - hoursSincePosted)
+      const freshnessBoost = 1 + FEED_SCORE.freshnessStrength * Math.max(0, 1 - hoursSincePosted / FEED_SCORE.freshnessWindowHours)
 
       // exposure boost: נכנס רק אחרי Tier 1 (30 דק') ועד 24 שעות
       // מונע כפילות עם freshness×2.5 בדקות הראשונות
@@ -789,7 +791,7 @@ async function handleRankedFeed(c: any) {
             ? `${cp.first_name ?? ''} ${cp.last_name ?? ''}`.trim()
             : cm.sender_name ?? 'משתמש'
           const uuid = cm.posted_by_uuid || cp?.uuid || ''
-          return { name: name || 'משתמש', uuid }
+          return { name: name || 'משתמש', uuid, has_image: !!cp?.image }
         })
 
       const sentAtMs = new Date(sentAt).getTime()
@@ -808,7 +810,7 @@ async function handleRankedFeed(c: any) {
       })
       v2.recent_reaction_breakdown = recentReactionBreakdown
       // tier-1 flag: new post OR comment in last 30 min — used only for sort, not sent to client
-      v2._tier1 = hoursSincePosted < 0.5 || isNewPost || postComments.some(
+      v2._tier1 = hoursSincePosted < hoursTier1 || isNewPost || postComments.some(
         (cm: any) => cm.created_at > recentActivityCutoff
       )
     }
