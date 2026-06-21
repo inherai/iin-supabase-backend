@@ -5,6 +5,8 @@ import OpenAI from "https://esm.sh/openai@4";
 
 const app = new Hono()
 
+const VALID_POST_TYPES = new Set(['discussion', 'question', 'job', 'article', 'milestone', 'share', 'email', 'linkedin']);
+
 // ====================================================================
 // 1. הגדרות ופונקציות עזר (Logic Helpers)
 // ====================================================================
@@ -606,6 +608,39 @@ function scorePost(
       return { name: name || 'משתמש', uuid, has_image: !!cp?.image }
     })
 
+  // All-time network activity — not filtered by uiBaseline.
+  // Used in Layer 2 to explain ranking for posts where connection engagement
+  // happened before uiBaseline (user has already seen that activity).
+  const allTimeNetworkCommenters = postComments
+    .filter((cm: any) => {
+      const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
+      return uuid && connectedUuids.has(uuid)
+    })
+    .slice(0, 2)
+    .map((cm: any) => {
+      const cp = usersByEmail.get((cm.sender || '').toLowerCase()) ?? usersByUuid.get(cm.posted_by_uuid)
+      const name = cp ? `${cp.first_name ?? ''} ${cp.last_name ?? ''}`.trim() : cm.sender_name ?? 'משתמש'
+      const uuid = cm.posted_by_uuid || cp?.uuid || ''
+      return { name: name || 'משתמש', uuid, has_image: !!cp?.image }
+    })
+
+  const allTimeNetworkLikers = postLikes
+    .filter((l: any) => l.user_id && connectedUuids.has(l.user_id))
+    .map((l: any) => {
+      const cp = usersByUuid.get(l.user_id)
+      if (!cp) return null
+      const name = `${cp.first_name ?? ''} ${cp.last_name ?? ''}`.trim()
+      return name ? { name, uuid: l.user_id as string, has_image: !!cp.image } : null
+    })
+    .filter(Boolean) as Array<{ name: string; uuid: string; has_image: boolean }>
+
+  // Merge commenters + likers, de-dupe by uuid, commenters first, max 2
+  const seenUuidsHist = new Set(allTimeNetworkCommenters.map((c: any) => c.uuid))
+  const historicalNetworkMembers = [
+    ...allTimeNetworkCommenters,
+    ...allTimeNetworkLikers.filter((l) => !seenUuidsHist.has(l.uuid)),
+  ].slice(0, 2)
+
   // isNewPost: post the user has never seen AND was published after their
   // last reference point. On cold start, any post < 24h old qualifies —
   // acceptable since first-session users should see fresh content first.
@@ -700,6 +735,7 @@ function scorePost(
       is_low_exposure: isLowExposure,
       is_never_seen: isNeverSeen,
       primary_ranking_reason: primaryRankingReason,
+      historical_network_members: historicalNetworkMembers,
     },
   }
 }
@@ -1776,7 +1812,10 @@ app.put('/scheduled/:id', async (c) => {
       if (body.subject.length > 150) return c.json({ error: 'Subject too long' }, 400)
       updateData.subject = body.subject
     }
-    if (body.post_type !== undefined) updateData.post_type = body.post_type
+    if (body.post_type !== undefined) {
+      if (!VALID_POST_TYPES.has(body.post_type)) return c.json({ error: 'Invalid post_type' }, 400)
+      updateData.post_type = body.post_type
+    }
     if (body.community_members_only !== undefined) updateData.community_members_only = body.community_members_only
     if (body.scheduled_at !== undefined) {
       const newDate = new Date(body.scheduled_at)
@@ -2250,6 +2289,10 @@ app.post('/', async (c) => {
       const company_id = body.company_id ? Number(body.company_id) : null;
       const linked_article_id = body.linked_article_id ? String(body.linked_article_id) : null;
 
+      if (post_type !== undefined && !VALID_POST_TYPES.has(post_type)) {
+        return c.json({ error: 'Invalid post_type' }, 400);
+      }
+
       if (communityMembersOnlyInput !== undefined && typeof communityMembersOnlyInput !== 'boolean') {
         return c.json({ error: "community_members_only must be boolean" }, 400);
       }
@@ -2609,7 +2652,10 @@ app.put('/:id', async (c) => {
 
     if (body.message !== undefined) updateData.message = body.message
     if (body.subject !== undefined) updateData.subject = body.subject
-    if (body.post_type !== undefined) updateData.post_type = body.post_type
+    if (body.post_type !== undefined) {
+      if (!VALID_POST_TYPES.has(body.post_type)) return c.json({ error: 'Invalid post_type' }, 400)
+      updateData.post_type = body.post_type
+    }
 
     const communityMembersOnlyInput = body.communityMembersOnly
     if (communityMembersOnlyInput !== undefined) {

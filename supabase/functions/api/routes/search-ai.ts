@@ -160,7 +160,7 @@ app.post('/', async (c) => {
         if (user.email) {
           const displayName = user.first_name
             ? (user.last_name ? `${user.first_name} ${user.last_name}` : user.first_name)
-            : (user.email || 'Anonymous User');
+            : null;
           acc[user.email] = {
             uuid: user.uuid,
             email: user.email,
@@ -176,7 +176,7 @@ app.post('/', async (c) => {
       }, {} as Record<string, any>);
 
       const getAuthor = (email: string) => usersMap?.[email] || {
-        uuid: null, email: email, name: email || 'Unknown', first_name: email || 'Unknown', last_name: null, image: null, role: 'unknown'
+        uuid: null, email: email, name: null, first_name: null, last_name: null, image: null, role: 'unknown'
       };
 
       const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
