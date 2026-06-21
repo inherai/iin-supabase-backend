@@ -338,6 +338,174 @@ async function insertReplyNotification(supabase: any, actorId: string, parentCom
 // Activated only when ?feed_ranking=v2 is present
 // ====================================================================
 
+// ── Scoring config — single source of truth for all tunable parameters ──
+const FEED_SCORE = {
+  commentWeight: 2,
+  likeWeight: 1,
+  networkCommentBoost: 5,
+  networkLikeBoost: 1,
+  connectionPostBoost: 10,
+  tier1WindowMs: 30 * 60 * 1000,
+  // exposure boost: פוסט שטרם צבר מספיק חשיפות מקבל boost יורד בהדרגה
+  lowExposureWindowHours: 24,  // חלון 24ש — פוסט לילי מקבל הגנה עד שהקהל מתעורר
+  lowExposureThreshold: 80,    // median ב-3 שעות = 57, P75 = 76 → 80 = "חשיפה הוגנת"
+  lowExposureBoost: 1.8,       // מקסימום boost (ב-0 impressions)
+  likeGravityFactor: 4,        // לייק נחשב ישן פי 4 מתגובה לצורך חישוב gravity
+  unseenBoost: 1.3,            // פוסט שמעולם לא הוצג למשתמש הזה מקבל יתרון על פוסט שנראה
+  freshnessStrength: 1.5,      // עוצמת ה-boost בזמן 0 → score × (1 + freshnessStrength) = ×2.5
+  freshnessWindowHours: 1,     // אחרי כמה שעות ה-freshness נעלם לחלוטין
+  // gravity split — total = 1.2 in both cases
+  // seen post:   activityAge dominates, light post-age penalty
+  seenActivityAgePower: 1.0,
+  seenPostAgePower: 0.2,
+  // unseen post: postAge dominates, activity recency still matters
+  unseenPostAgePower: 0.8,
+  unseenActivityAgePower: 0.4,
+}
+
+// derived constant — HOURS_TIER1 never changes at runtime
+const HOURS_TIER1 = FEED_SCORE.tier1WindowMs / 3_600_000
+
+// ── ScoreContext — all per-request data scorePost needs ──
+interface ScoreContext {
+  lastSeenMap: Record<string, string | null>
+  cappedLastLoginAt: string | null
+  session_start: string
+  impressionCountMap: Map<string, number>
+  connectedUuids: Set<string>
+  usersByEmail: Map<string, any>
+  usersByUuid: Map<string, any>
+  recentActivityCutoff: string
+}
+
+// ── scorePost — pure scoring + v2 context-line fields for one post ──
+function scorePost(
+  post: any,
+  postLikes: any[],
+  postComments: any[],
+  ctx: ScoreContext,
+): { score: number; tier1: boolean; v2: Record<string, any> } {
+  const {
+    lastSeenMap, cappedLastLoginAt, session_start,
+    impressionCountMap, connectedUuids, usersByEmail, usersByUuid,
+    recentActivityCutoff,
+  } = ctx
+
+  const lastSeenAt: string | null = lastSeenMap[String(post.id)] ?? null
+  // effectiveLastSeen: actual impression → capped last-login → null (cold start)
+  const effectiveLastSeen: string | null = lastSeenAt ?? cappedLastLoginAt
+  const baseline = effectiveLastSeen ?? session_start
+  const sentAt: string = post.sent_at ?? post.effective_sort_date ?? new Date().toISOString()
+  const hoursSincePosted = Math.max(0, (Date.now() - new Date(sentAt).getTime()) / 3_600_000)
+
+  // network activity since baseline
+  const networkCommentCount = postComments.filter((cm: any) => {
+    const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
+    return uuid && connectedUuids.has(uuid) && cm.created_at > baseline
+  }).length
+  const networkLikeCount = postLikes.filter(
+    (l: any) => l.user_id && connectedUuids.has(l.user_id) && l.created_at && l.created_at > baseline
+  ).length
+
+  // effective lists: only new since last visit, or full history for cold start
+  const effectiveCommentList: any[] = effectiveLastSeen
+    ? postComments.filter((cm: any) => cm.created_at > effectiveLastSeen)
+    : [...postComments]
+  const effectiveLikeList: any[] = effectiveLastSeen
+    ? postLikes.filter((l: any) => l.created_at && l.created_at > effectiveLastSeen)
+    : postLikes.filter((l: any) => l.created_at)
+
+  // gravity: use most recent effective activity time, not post age
+  const commentTimes = effectiveCommentList
+    .map((cm: any) => new Date(cm.created_at).getTime()).filter((t: number) => !isNaN(t))
+  const rawLikeTimes = effectiveLikeList
+    .map((l: any) => new Date(l.created_at).getTime()).filter((t: number) => !isNaN(t))
+  const hoursFromComment = commentTimes.length > 0
+    ? Math.max(0, (Date.now() - Math.max(...commentTimes)) / 3_600_000) : null
+  const hoursFromLike = rawLikeTimes.length > 0
+    ? Math.max(0, (Date.now() - Math.max(...rawLikeTimes)) / 3_600_000) * FEED_SCORE.likeGravityFactor : null
+  const gravityCandidates = [hoursFromComment, hoursFromLike].filter((h): h is number => h !== null)
+  const hoursForGravity = gravityCandidates.length > 0 ? Math.min(...gravityCandidates) : hoursSincePosted
+
+  // raw score
+  const totalEngagement =
+    effectiveCommentList.length * FEED_SCORE.commentWeight +
+    effectiveLikeList.length   * FEED_SCORE.likeWeight
+  const networkBoost =
+    networkCommentCount * FEED_SCORE.networkCommentBoost +
+    networkLikeCount    * FEED_SCORE.networkLikeBoost
+  const connectionPostBoost =
+    post.posted_by_uuid && connectedUuids.has(post.posted_by_uuid) ? FEED_SCORE.connectionPostBoost : 0
+  const numerator = 1 + totalEngagement + networkBoost + connectionPostBoost
+
+  // gravity denominator: seen posts — activity age dominates; unseen — post age dominates
+  const hasSeen = effectiveLastSeen !== null
+  const gravityDenominator = hasSeen
+    ? Math.pow(hoursForGravity + 2, FEED_SCORE.seenActivityAgePower) *
+      Math.pow(hoursSincePosted + 2, FEED_SCORE.seenPostAgePower)
+    : Math.pow(hoursSincePosted + 2, FEED_SCORE.unseenPostAgePower) *
+      Math.pow(hoursForGravity + 2,  FEED_SCORE.unseenActivityAgePower)
+
+  const rawScore = numerator / gravityDenominator
+
+  // ── multipliers ───────────────────────────────────────────────────────
+  // freshnessBoost: ×2.5 at 0h, decays linearly to ×1.0 at freshnessWindowHours
+  const freshnessBoost = 1 + FEED_SCORE.freshnessStrength *
+    Math.max(0, 1 - hoursSincePosted / FEED_SCORE.freshnessWindowHours)
+  // exposureBoost: only after tier1 ends (avoids ×4.5 spike at t=0); 30–60min overlap with freshness is intentional
+  const impressionsCount = impressionCountMap.get(String(post.id)) ?? 0
+  const exposureBoost = (hoursSincePosted >= HOURS_TIER1 && hoursSincePosted < FEED_SCORE.lowExposureWindowHours)
+    ? 1 + (FEED_SCORE.lowExposureBoost - 1) * Math.max(0, 1 - impressionsCount / FEED_SCORE.lowExposureThreshold)
+    : 1.0
+  // unseenBoost: posts never shown to this user get a leg up over already-seen posts
+  const unseenBoost = !lastSeenAt ? FEED_SCORE.unseenBoost : 1.0
+
+  // final score = engagement/gravity × freshness × exposure × unseen
+  const score = isNaN(rawScore) ? 0 : rawScore * freshnessBoost * exposureBoost * unseenBoost
+
+  // ── v2 fields: context-line data ─────────────────────────────────────
+  const recentComments = postComments.filter((cm: any) => cm.created_at > baseline)
+  const recentNetworkCommenters = recentComments
+    .filter((cm: any) => {
+      const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
+      return uuid && connectedUuids.has(uuid)
+    })
+    .slice(0, 2)
+    .map((cm: any) => {
+      const cp = usersByEmail.get((cm.sender || '').toLowerCase()) ?? usersByUuid.get(cm.posted_by_uuid)
+      const name = cp ? `${cp.first_name ?? ''} ${cp.last_name ?? ''}`.trim() : cm.sender_name ?? 'משתמש'
+      const uuid = cm.posted_by_uuid || cp?.uuid || ''
+      return { name: name || 'משתמש', uuid, has_image: !!cp?.image }
+    })
+
+  const sentAtMs = new Date(sentAt).getTime()
+  const isNewPost = !lastSeenAt &&
+    (Date.now() - sentAtMs) < 86_400_000 &&
+    sentAtMs > new Date(effectiveLastSeen ?? 0).getTime()
+
+  const recentReactionBreakdown: Record<string, number> = {}
+  effectiveLikeList.forEach((l: any) => {
+    const type = l.reaction_type || 'like'
+    recentReactionBreakdown[type] = (recentReactionBreakdown[type] || 0) + 1
+  })
+
+  const tier1 = hoursSincePosted < HOURS_TIER1 || isNewPost ||
+    postComments.some((cm: any) => cm.created_at > recentActivityCutoff)
+
+  return {
+    score,
+    tier1,
+    v2: {
+      is_new_post: isNewPost,
+      new_comments_count: recentComments.length,
+      network_commenters: recentNetworkCommenters,
+      has_last_seen_data: effectiveLastSeen !== null,
+      recent_likes_count: effectiveLikeList.length,
+      recent_reaction_breakdown: recentReactionBreakdown,
+    },
+  }
+}
+
 async function handleRankedFeed(c: any) {
   const supabase = c.get('supabase')
   const currentUser = c.get('user')
@@ -624,52 +792,36 @@ async function handleRankedFeed(c: any) {
     }))
   }
 
-  const FEED_SCORE = {
-    commentWeight: 2,
-    likeWeight: 1,
-    networkCommentBoost: 5,
-    networkLikeBoost: 1,
-    connectionPostBoost: 10,
-    tier1WindowMs: 30 * 60 * 1000,
-    // exposure boost: פוסט שטרם צבר מספיק חשיפות מקבל boost יורד בהדרגה
-    lowExposureWindowHours: 24,  // חלון 24ש — פוסט לילי מקבל הגנה עד שהקהל מתעורר
-    lowExposureThreshold: 80,    // median ב-3 שעות = 57, P75 = 76 → 80 = "חשיפה הוגנת"
-    lowExposureBoost: 1.8,       // מקסימום boost (ב-0 impressions)
-    likeGravityFactor: 4,  // לייק נחשב ישן פי 4 מתגובה לצורך חישוב gravity
-    unseenBoost: 1.3,      // פוסט שמעולם לא הוצג למשתמש הזה מקבל יתרון על פוסט שנראה
-    freshnessStrength: 1.5,   // עוצמת ה-boost בזמן 0 → score × (1 + freshnessStrength) = ×2.5
-    freshnessWindowHours: 1,  // אחרי כמה שעות ה-freshness נעלם לחלוטין
-    // gravity split — total = 1.2 in both cases
-    // seen post:   activityAge dominates, light post-age penalty
-    seenActivityAgePower: 1.0,
-    seenPostAgePower: 0.2,
-    // unseen post: postAge dominates, activity recency still matters
-    unseenPostAgePower: 0.8,
-    unseenActivityAgePower: 0.4,
-  }
-
-  // tier-1 cutoff: absolute timestamp 30 minutes ago
+  // per-request derived values
   const recentActivityCutoff = new Date(Date.now() - FEED_SCORE.tier1WindowMs).toISOString()
-
   const isProfileFeed = !!targetUserId
 
+  const scoreCtx: ScoreContext = {
+    lastSeenMap, cappedLastLoginAt, session_start,
+    impressionCountMap, connectedUuids,
+    usersByEmail, usersByUuid,
+    recentActivityCutoff,
+  }
+
+  // ── Enrich + score each post ──────────────────────────────────────────
   const scoredPosts = sourcePosts.map((post: any) => {
-    const postLikes = allPostLikes.filter((l: any) => l.target_id === post.id)
-    const postComments = visibleComments.filter((cm: any) => cm.post_id === post.id)
+    const postLikes    = allPostLikes.filter((l: any)  => l.target_id === post.id)
+    const postComments = visibleComments.filter((cm: any) => cm.post_id  === post.id)
+
+    // author
     const senderEmail = post.sender
     const profileData = usersByEmail.get(senderEmail?.toLowerCase())
-
     let postAuthor
     if (post.company_id && companiesById.has(Number(post.company_id))) {
       postAuthor = buildCompanyAuthor(companiesById.get(Number(post.company_id))!)
     } else if (profileData) {
-      const isAnonymous = profileData.is_anonymous === true
       const { _internal_email_lookup, email: _authorEmail, ...cleanProfile } = profileData
-      postAuthor = { ...cleanProfile, first_name: cleanProfile.first_name, last_name: cleanProfile.last_name, is_anonymous: isAnonymous }
+      postAuthor = { ...cleanProfile, is_anonymous: profileData.is_anonymous === true }
     } else {
       postAuthor = { first_name: senderEmail, last_name: null, image: null, is_anonymous: false }
     }
 
+    // reactions
     const reactionCounts = postLikes.reduce((acc: any, like: any) => {
       const type = like.reaction_type || 'like'; acc[type] = (acc[type] || 0) + 1; return acc
     }, {})
@@ -692,128 +844,10 @@ async function handleRankedFeed(c: any) {
       ? linkedArticlesById.get(String(post.linked_article_id)) ?? null
       : null
 
-    let _score = 0
-    const v2: Record<string, any> = {}
-
-    if (!isProfileFeed) {
-      const lastSeenAt: string | null = lastSeenMap[String(post.id)] ?? null
-      // effectiveLastSeen: actual impression → capped last-login → null (cold start)
-      const effectiveLastSeen: string | null = lastSeenAt ?? cappedLastLoginAt
-      const baseline = effectiveLastSeen ?? session_start
-      const sentAt: string = post.sent_at ?? post.effective_sort_date ?? new Date().toISOString()
-      const hoursSincePosted = Math.max(0, (Date.now() - new Date(sentAt).getTime()) / 3_600_000)
-
-      // comments table has no posted_by_uuid — look up UUID from sender email via usersByEmail
-      const networkCommentCount = postComments.filter((cm: any) => {
-        const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
-        return uuid && connectedUuids.has(uuid) && cm.created_at > baseline
-      }).length
-
-      const networkLikeCount = postLikes.filter(
-        (l: any) => l.user_id && connectedUuids.has(l.user_id) && l.created_at && l.created_at > baseline
-      ).length
-
-      // if already seen: count only new engagement since last visit; otherwise full history
-      const effectiveCommentList: any[] = effectiveLastSeen
-        ? postComments.filter((cm: any) => cm.created_at > effectiveLastSeen)
-        : [...postComments]
-      const effectiveLikeList: any[] = effectiveLastSeen
-        ? postLikes.filter((l: any) => l.created_at && l.created_at > effectiveLastSeen)
-        : postLikes.filter((l: any) => l.created_at)
-
-      const effectiveComments = effectiveCommentList.length
-      const effectiveLikes = effectiveLikeList.length
-
-      // gravity uses time of most recent effective activity — not post age
-      // so an old post with a new comment scores by comment freshness, not post age
-      const commentTimes = effectiveCommentList
-        .map((cm: any) => new Date(cm.created_at).getTime())
-        .filter((t: number) => !isNaN(t))
-      const rawLikeTimes = effectiveLikeList
-        .map((l: any) => new Date(l.created_at).getTime())
-        .filter((t: number) => !isNaN(t))
-
-      // לייק מוזז אחורה פי likeGravityFactor — פחות השפעה על gravity מתגובה
-      const hoursFromComment = commentTimes.length > 0
-        ? Math.max(0, (Date.now() - Math.max(...commentTimes)) / 3_600_000)
-        : null
-      const hoursFromLike = rawLikeTimes.length > 0
-        ? Math.max(0, (Date.now() - Math.max(...rawLikeTimes)) / 3_600_000) * FEED_SCORE.likeGravityFactor
-        : null
-      const gravityCandidates = [hoursFromComment, hoursFromLike].filter((h): h is number => h !== null)
-      const hoursForGravity = gravityCandidates.length > 0
-        ? Math.min(...gravityCandidates)
-        : hoursSincePosted
-
-      const totalEngagement =
-        effectiveComments * FEED_SCORE.commentWeight +
-        effectiveLikes * FEED_SCORE.likeWeight
-
-      const networkBoost =
-        networkCommentCount * FEED_SCORE.networkCommentBoost +
-        networkLikeCount * FEED_SCORE.networkLikeBoost
-
-      const connectionPostBoost =
-        post.posted_by_uuid && connectedUuids.has(post.posted_by_uuid)
-          ? FEED_SCORE.connectionPostBoost
-          : 0
-
-      const rawScore =
-        (1 + totalEngagement + networkBoost + connectionPostBoost) /
-        (effectiveLastSeen !== null
-          ? Math.pow(hoursForGravity + 2, FEED_SCORE.seenActivityAgePower) * Math.pow(hoursSincePosted + 2, FEED_SCORE.seenPostAgePower)
-          : Math.pow(hoursSincePosted + 2, FEED_SCORE.unseenPostAgePower) * Math.pow(hoursForGravity + 2, FEED_SCORE.unseenActivityAgePower))
-
-      // smooth freshness decay based on post age: ×2.5 at 0h → ×1.0 at 1h, flat afterwards
-      const freshnessBoost = 1 + FEED_SCORE.freshnessStrength * Math.max(0, 1 - hoursSincePosted / FEED_SCORE.freshnessWindowHours)
-
-      // exposure boost: נכנס רק אחרי Tier 1 (30 דק') ועד 24 שעות
-      // מונע כפילות עם freshness×2.5 בדקות הראשונות
-      const hoursTier1 = FEED_SCORE.tier1WindowMs / 3_600_000
-      const impressionsCount = impressionCountMap.get(String(post.id)) ?? 0
-      const exposureBoost = (hoursSincePosted >= hoursTier1 && hoursSincePosted < FEED_SCORE.lowExposureWindowHours)
-        ? 1 + (FEED_SCORE.lowExposureBoost - 1) * Math.max(0, 1 - impressionsCount / FEED_SCORE.lowExposureThreshold)
-        : 1.0
-
-      const unseenBoost = !lastSeenAt ? FEED_SCORE.unseenBoost : 1.0
-      _score = isNaN(rawScore) ? 0 : rawScore * freshnessBoost * exposureBoost * unseenBoost
-
-      const recentComments = postComments.filter((cm: any) => cm.created_at > baseline)
-      const recentNetworkCommenters = recentComments
-        .filter((cm: any) => {
-          const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
-          return uuid && connectedUuids.has(uuid)
-        })
-        .slice(0, 2)
-        .map((cm: any) => {
-          const cp = usersByEmail.get((cm.sender || '').toLowerCase()) ?? usersByUuid.get(cm.posted_by_uuid)
-          const name = cp
-            ? `${cp.first_name ?? ''} ${cp.last_name ?? ''}`.trim()
-            : cm.sender_name ?? 'משתמש'
-          const uuid = cm.posted_by_uuid || cp?.uuid || ''
-          return { name: name || 'משתמש', uuid, has_image: !!cp?.image }
-        })
-
-      const sentAtMs = new Date(sentAt).getTime()
-      const isNewPost = !lastSeenAt &&
-        (Date.now() - sentAtMs) < 86_400_000 &&
-        sentAtMs > new Date(effectiveLastSeen ?? 0).getTime()
-      v2.is_new_post = isNewPost
-      v2.new_comments_count = recentComments.length
-      v2.network_commenters = recentNetworkCommenters
-      v2.has_last_seen_data = effectiveLastSeen !== null
-      v2.recent_likes_count = effectiveLikeList.length
-      const recentReactionBreakdown: Record<string, number> = {}
-      effectiveLikeList.forEach((l: any) => {
-        const type = l.reaction_type || 'like'
-        recentReactionBreakdown[type] = (recentReactionBreakdown[type] || 0) + 1
-      })
-      v2.recent_reaction_breakdown = recentReactionBreakdown
-      // tier-1 flag: new post OR comment in last 30 min — used only for sort, not sent to client
-      v2._tier1 = hoursSincePosted < hoursTier1 || isNewPost || postComments.some(
-        (cm: any) => cm.created_at > recentActivityCutoff
-      )
-    }
+    // scoring
+    const { score: _score, tier1: _tier1, v2 } = !isProfileFeed
+      ? scorePost(post, postLikes, postComments, scoreCtx)
+      : { score: 0, tier1: false, v2: {} }
 
     return {
       ...postWithoutSender,
@@ -833,6 +867,7 @@ async function handleRankedFeed(c: any) {
       ...(linkedArticle ? { linked_article: linkedArticle } : {}),
       ...v2,
       _score,
+      _tier1,
     }
   })
 
