@@ -113,9 +113,10 @@ app.get("/analytics", async (c) => {
     return age >= 7 * D && age < 30 * D;
   }).length;
   const dormant = merged.filter(
-    (u) => !u.last_active_at || now - new Date(u.last_active_at).getTime() >= 30 * D
+    (u) => u.last_active_at && now - new Date(u.last_active_at).getTime() >= 30 * D
   ).length;
-  const neverActive = Math.max(0, totalUsers - merged.length);
+  const neverInActivity = merged.filter((u) => !u.last_active_at).length;
+  const neverActive = Math.max(0, totalUsers - merged.length) + neverInActivity;
 
   // Streaks
   const streakUsers = merged.filter((u) => u.current_streak_days > 0);
