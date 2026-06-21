@@ -11,11 +11,14 @@ import {
 const app = new Hono()
 const allowedCategories = new Set(['Development', 'QA', 'Data', 'Management', 'Product'])
 
+const numericStrings = (from: number, to: number): string[] =>
+  Array.from({ length: to - from + 1 }, (_, i) => String(from + i))
+
 const SENIORITY_LEVEL_MAP: Record<string, string[]> = {
-  Internship: ['Internship'],
-  Junior: ['Junior', 'Entry level', '0+ years', '1+ years', '2+ years', 'Associate'],
-  Mid: ['Mid', 'Associate', 'Mid-Senior level', '2+ years', '3+ years', '4+ years'],
-  Senior: ['Senior', 'Mid-Senior level', '5+ years', '6+ years', '7+ years', '8+ years'],
+  Internship: ['Internship', '0'],
+  Junior: ['Junior', 'Entry level', 'Associate', ...numericStrings(0, 2)],
+  Mid: ['Mid', 'Associate', 'Mid-Senior level', ...numericStrings(2, 4)],
+  Senior: ['Senior', 'Mid-Senior level', ...numericStrings(5, 30)],
   Management: ['Management', 'Director', 'Executive'],
 }
 
