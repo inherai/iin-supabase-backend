@@ -351,6 +351,7 @@ const FEED_SCORE = {
   lowExposureThreshold: 80,    // median ב-3 שעות = 57, P75 = 76 → 80 = "חשיפה הוגנת"
   lowExposureBoost: 1.8,       // מקסימום boost (ב-0 impressions)
   recentCommunityWindowHours: 12,  // חלון לזיהוי פוסט פעיל — גם אם המשתמש כבר ראה את התגובות
+  highEngagementThreshold: 15,    // כמות engagement כוללת (תגובות×2 + לייקים×1) לתג "פעיל בקהילה"
   likeGravityFactor: 4,        // לייק נחשב ישן פי 4 מתגובה לצורך חישוב gravity
   unseenBoost: 1.3,            // פוסט שמעולם לא הוצג למשתמש הזה מקבל יתרון על פוסט שנראה
   freshnessStrength: 1.5,      // עוצמת ה-boost בזמן 0 → score × (1 + freshnessStrength) = ×2.5
@@ -668,26 +669,32 @@ function scorePost(
   const tier1 = (hasNeverSeen && hoursSincePosted < HOURS_TIER1) || isNewPost ||
     (hasNeverSeen && postComments.some((cm: any) => cm.created_at > recentActivityCutoff))
 
-  // ── Primary ranking reason — always set, guarantees context line in UI ──
+  // ── Primary ranking reason ───────────────────────────────────────────
   //
-  // Encodes the DOMINANT reason this post appears in the feed.
-  // Priority order matches the scoring contribution weight:
-  //   network       — connection activity (strongest signal, networkBoost > 0)
-  //   connection    — post author is in viewer's network (connectionPostBoost)
-  //   new_post      — fresh & never seen by this user (freshness + unseenBoost)
-  //   never_seen    — never shown to user but not "new" (unseenBoost)
-  //   low_exposure  — recent but underseen globally (exposureBoost)
-  //   recent_activity — community commented recently (hoursForGravity low)
-  //   engagement    — ranked purely on historical engagement/gravity score
+  // Priority order matches scoring contribution weight:
+  //   network          — connection activity (strongest signal)
+  //   connection       — post author is in viewer's network
+  //   new_post         — fresh & never seen (freshness + unseenBoost)
+  //   never_seen       — never shown to user, not "new" (unseenBoost)
+  //   low_exposure     — recent but underseen globally (exposureBoost)
+  //   recent_activity  — community commented in last 12h
+  //   high_engagement  — ≥15 weighted engagement (comments×2 + likes×1)
+  //   none             — in feed by score but no notable signal
+  //                      (frontend shows no context line)
   //
+  const allTimeEngagement = postComments.length * FEED_SCORE.commentWeight + postLikes.length * FEED_SCORE.likeWeight
   const primaryRankingReason: string =
     networkBoost > 0             ? 'network'
     : isConnectionAuthor         ? 'connection'
     : isNewPost                  ? 'new_post'
     : isNeverSeen                ? 'never_seen'
     : isLowExposure              ? 'low_exposure'
-    : hasRecentCommunityActivity ? 'recent_activity'
-    : 'engagement'
+    : allTimeEngagement >= FEED_SCORE.highEngagementThreshold ? 'high_engagement'
+    : 'none'
+  // NOTE: hasRecentCommunityActivity is intentionally excluded from the priority chain.
+  // When a community comment is new to the user → Layer 1 catches it via effectiveCommentList.
+  // When the user already saw the comment → the label would be misleading (they know about the discussion).
+  // So "recent_activity" as a standalone Layer 2 reason is either redundant or wrong.
 
   return {
     score,
