@@ -350,6 +350,7 @@ const FEED_SCORE = {
   lowExposureWindowHours: 24,  // חלון 24ש — פוסט לילי מקבל הגנה עד שהקהל מתעורר
   lowExposureThreshold: 80,    // median ב-3 שעות = 57, P75 = 76 → 80 = "חשיפה הוגנת"
   lowExposureBoost: 1.8,       // מקסימום boost (ב-0 impressions)
+  recentCommunityWindowHours: 12,  // חלון לזיהוי פוסט פעיל — גם אם המשתמש כבר ראה את התגובות
   likeGravityFactor: 4,        // לייק נחשב ישן פי 4 מתגובה לצורך חישוב gravity
   unseenBoost: 1.3,            // פוסט שמעולם לא הוצג למשתמש הזה מקבל יתרון על פוסט שנראה
   freshnessStrength: 1.5,      // עוצמת ה-boost בזמן 0 → score × (1 + freshnessStrength) = ×2.5
@@ -642,6 +643,14 @@ function scorePost(
     && hoursSincePosted < FEED_SCORE.lowExposureWindowHours
     && impressionsCount < FEED_SCORE.lowExposureThreshold
 
+  // recent community activity — any comment in the last 12h, regardless of user's last_seen_at
+  // fires in context line Layer 2 when user has seen all comments but post is still "alive"
+  const recentCommunityCutoff = new Date(Date.now() - FEED_SCORE.recentCommunityWindowHours * 3_600_000).toISOString()
+  const hasRecentCommunityActivity = postComments.some((cm: any) => cm.created_at > recentCommunityCutoff)
+
+  // never seen — post was never shown to this user, but doesn't qualify as isNewPost (too old or pre-login)
+  const isNeverSeen = lastSeenAt === null && !isNewPost
+
   // ── STEP 9: tier1 flag ───────────────────────────────────────────────
   //
   // tier1 posts always sort ABOVE non-tier1, regardless of score.
@@ -672,6 +681,8 @@ function scorePost(
       is_connection_author: isConnectionAuthor,
       connection_author_name: connectionAuthorName,
       is_low_exposure: isLowExposure,
+      has_recent_community_activity: hasRecentCommunityActivity,
+      is_never_seen: isNeverSeen,
     },
   }
 }
