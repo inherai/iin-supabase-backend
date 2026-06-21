@@ -379,6 +379,17 @@ interface ScoreContext {
 }
 
 // ── scorePost — pure scoring + v2 context-line fields for one post ──
+//
+// ALGORITHM OVERVIEW
+// ==================
+// Goal: rank posts by personal relevance, not just recency.
+// Each post gets a numeric score derived from:
+//   rawScore   = engagement_numerator / gravity_denominator
+//   finalScore = rawScore × freshnessBoost × exposureBoost × unseenBoost
+//
+// The result is a float. Posts are sorted descending, with a tier1 bucket
+// (very recent/hot) always appearing above the rest regardless of score.
+//
 function scorePost(
   post: any,
   postLikes: any[],
@@ -391,14 +402,57 @@ function scorePost(
     recentActivityCutoff,
   } = ctx
 
+  // ── STEP 1: Temporal anchoring ───────────────────────────────────────
+  //
+  // We need a personal "reference point" per user per post — the last time
+  // this user had context for this post. Used to determine what counts as
+  // *new* engagement vs. engagement the user already knows about.
+  //
+  // Priority chain:
+  //   1. lastSeenAt    — actual impression record for this specific post
+  //   2. cappedLastLoginAt — user's last login (capped to avoid massive gaps
+  //                      inflating "new" counts for long-absent users)
+  //   3. null          — cold start: first session, no reference point at all
+  //
+  // effectiveLastSeen drives scoring (what counts as new engagement).
+  // baseline = effectiveLastSeen ?? session_start drives the context-line UI
+  // (what to show the user *right now* as "happened since you were here").
+  //
   const lastSeenAt: string | null = lastSeenMap[String(post.id)] ?? null
-  // effectiveLastSeen: actual impression → capped last-login → null (cold start)
   const effectiveLastSeen: string | null = lastSeenAt ?? cappedLastLoginAt
   const baseline = effectiveLastSeen ?? session_start
   const sentAt: string = post.sent_at ?? post.effective_sort_date ?? new Date().toISOString()
   const hoursSincePosted = Math.max(0, (Date.now() - new Date(sentAt).getTime()) / 3_600_000)
 
-  // network activity since baseline
+  // ── STEP 2: Effective engagement lists ───────────────────────────────
+  //
+  // Key principle: engagement the user already saw should NOT keep re-surfacing
+  // a post. Only *new* engagement since the user's last reference point counts.
+  //
+  // If we have a reference point (effectiveLastSeen): filter to engagement
+  // that occurred after it — these are "new" interactions the user hasn't
+  // processed yet.
+  //
+  // Cold start (effectiveLastSeen = null): we have no information about what
+  // the user has seen, so we count the full engagement history. This gives
+  // new users a feed seeded by cumulative activity rather than an empty score.
+  //
+  const effectiveCommentList: any[] = effectiveLastSeen
+    ? postComments.filter((cm: any) => cm.created_at > effectiveLastSeen)
+    : [...postComments]
+  const effectiveLikeList: any[] = effectiveLastSeen
+    ? postLikes.filter((l: any) => l.created_at && l.created_at > effectiveLastSeen)
+    : postLikes.filter((l: any) => l.created_at)
+
+  // ── STEP 3: Network activity (since baseline, not effectiveLastSeen) ─
+  //
+  // Activity from people in the user's network is a strong relevance signal
+  // independent of the scoring window. We count it since `baseline` so that
+  // the context-line ("Miriam commented") and the network boost are aligned.
+  //
+  // Note: comments table may not have posted_by_uuid for older rows —
+  // we fall back to resolving email → uuid via usersByEmail.
+  //
   const networkCommentCount = postComments.filter((cm: any) => {
     const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
     return uuid && connectedUuids.has(uuid) && cm.created_at > baseline
@@ -407,15 +461,21 @@ function scorePost(
     (l: any) => l.user_id && connectedUuids.has(l.user_id) && l.created_at && l.created_at > baseline
   ).length
 
-  // effective lists: only new since last visit, or full history for cold start
-  const effectiveCommentList: any[] = effectiveLastSeen
-    ? postComments.filter((cm: any) => cm.created_at > effectiveLastSeen)
-    : [...postComments]
-  const effectiveLikeList: any[] = effectiveLastSeen
-    ? postLikes.filter((l: any) => l.created_at && l.created_at > effectiveLastSeen)
-    : postLikes.filter((l: any) => l.created_at)
-
-  // gravity: use most recent effective activity time, not post age
+  // ── STEP 4: Gravity anchor — hoursForGravity ────────────────────────
+  //
+  // Standard HN-style gravity uses post age as the denominator. We improve on
+  // this: an OLD post with a RECENT comment should score by comment freshness,
+  // not by how old the post is. So we use the most recent effective activity
+  // time as the gravity anchor.
+  //
+  // Like gravity factor (likeGravityFactor = 4):
+  //   A like from 2h ago is treated as "8 effective hours old" for gravity.
+  //   Rationale: likes are passive signals; comments signal active engagement
+  //   and should stay "fresh" much longer in the denominator.
+  //
+  // hoursForGravity = min(hoursFromComment, hoursFromLike×4, postAge)
+  // Falls back to postAge when there is no effective engagement at all.
+  //
   const commentTimes = effectiveCommentList
     .map((cm: any) => new Date(cm.created_at).getTime()).filter((t: number) => !isNaN(t))
   const rawLikeTimes = effectiveLikeList
@@ -427,7 +487,22 @@ function scorePost(
   const gravityCandidates = [hoursFromComment, hoursFromLike].filter((h): h is number => h !== null)
   const hoursForGravity = gravityCandidates.length > 0 ? Math.min(...gravityCandidates) : hoursSincePosted
 
-  // raw score
+  // ── STEP 5: Engagement numerator ────────────────────────────────────
+  //
+  // comments × 2  — comments signal deep engagement (someone wrote something)
+  // likes    × 1  — lighter signal but still meaningful
+  //
+  // networkBoost: activity from connected users is far more relevant than
+  // activity from strangers. Network comments worth 5× because they also
+  // imply the content crossed into a social circle the viewer cares about.
+  //
+  // connectionPostBoost: if the POST AUTHOR is in the viewer's network, the
+  // content itself is more relevant — not just the reaction to it.
+  //
+  // The leading +1 ensures posts with 0 engagement still have a positive
+  // numerator (otherwise gravity would produce 0/denom = 0 for all empty posts,
+  // making their sort order undefined).
+  //
   const totalEngagement =
     effectiveCommentList.length * FEED_SCORE.commentWeight +
     effectiveLikeList.length   * FEED_SCORE.likeWeight
@@ -438,7 +513,27 @@ function scorePost(
     post.posted_by_uuid && connectedUuids.has(post.posted_by_uuid) ? FEED_SCORE.connectionPostBoost : 0
   const numerator = 1 + totalEngagement + networkBoost + connectionPostBoost
 
-  // gravity denominator: seen posts — activity age dominates; unseen — post age dominates
+  // ── STEP 6: Gravity denominator — time decay ─────────────────────────
+  //
+  // Seen vs unseen posts age differently:
+  //
+  //   SEEN (effectiveLastSeen ≠ null):
+  //     Activity age^1.0 × postAge^0.2
+  //     Activity age dominates — what matters is HOW FRESH the new engagement is.
+  //     A slight post-age penalty pushes truly old content down even if it has
+  //     some engagement.
+  //
+  //   UNSEEN (cold start, effectiveLastSeen = null):
+  //     postAge^0.8 × activityAge^0.4
+  //     Post age dominates — we prefer showing newer content to users who have
+  //     no reference point. Activity recency still contributes but less.
+  //
+  // Total gravity power = 1.2 in both cases (same overall decay pressure,
+  // just split differently between the two time axes).
+  //
+  // The +2 offset prevents the denominator collapsing to 1^n at t=0,
+  // which would make rawScore = numerator (too large for very new posts).
+  //
   const hasSeen = effectiveLastSeen !== null
   const gravityDenominator = hasSeen
     ? Math.pow(hoursForGravity + 2, FEED_SCORE.seenActivityAgePower) *
@@ -448,23 +543,64 @@ function scorePost(
 
   const rawScore = numerator / gravityDenominator
 
-  // ── multipliers ───────────────────────────────────────────────────────
-  // freshnessBoost: ×2.5 at 0h, decays linearly to ×1.0 at freshnessWindowHours
+  // ── STEP 7: Multipliers (applied independently on top of rawScore) ───
+  //
+  // Three orthogonal boosts — each addresses a different fairness problem:
+  //
+  // 7a. freshnessBoost
+  //   Problem: a brand-new post with 0 engagement can't compete against an old
+  //   post with accumulated likes. It needs a grace period to surface.
+  //   Solution: linear decay from ×2.5 at t=0 to ×1.0 at freshnessWindowHours (1h).
+  //   Formula: 1 + freshnessStrength × max(0, 1 - age/window)
+  //
   const freshnessBoost = 1 + FEED_SCORE.freshnessStrength *
     Math.max(0, 1 - hoursSincePosted / FEED_SCORE.freshnessWindowHours)
-  // exposureBoost: only after tier1 ends (avoids ×4.5 spike at t=0); 30–60min overlap with freshness is intentional
+
+  // 7b. exposureBoost
+  //   Problem: a post published at 2am gets almost no impressions before the
+  //   community wakes up. By morning it's already "old" and gravity buries it.
+  //   Solution: if a post has fewer impressions than the healthy baseline (80),
+  //   boost it proportionally — more so the fewer impressions it has.
+  //   Formula: 1 + (maxBoost-1) × max(0, 1 - impressions/threshold)
+  //   → ×1.8 at 0 impressions, ×1.0 at 80+ impressions (smooth gradient)
+  //
+  //   Active window: tier1 end (30min) → 24h.
+  //   Starts at 30min to avoid a ×4.5 spike at t=0 (freshness + exposure).
+  //   The 30–60min overlap with freshnessBoost is intentional: a post just
+  //   exiting tier1 with 0 views genuinely deserves both protections.
+  //
   const impressionsCount = impressionCountMap.get(String(post.id)) ?? 0
   const exposureBoost = (hoursSincePosted >= HOURS_TIER1 && hoursSincePosted < FEED_SCORE.lowExposureWindowHours)
     ? 1 + (FEED_SCORE.lowExposureBoost - 1) * Math.max(0, 1 - impressionsCount / FEED_SCORE.lowExposureThreshold)
     : 1.0
-  // unseenBoost: posts never shown to this user get a leg up over already-seen posts
+
+  // 7c. unseenBoost
+  //   Problem: in a small community, the same users may keep seeing the same
+  //   posts, while other users never encounter them. A post "seen by everyone
+  //   already" and a post "seen by no one yet" look identical in score.
+  //   Solution: ×1.3 for posts that have NEVER been shown to this specific user
+  //   (no impression record). Uses lastSeenAt, NOT effectiveLastSeen — we want
+  //   to boost based on actual impressions, not a login-time proxy.
+  //
+  //   Why boost (not penalty)? Penalizing seen posts risks emptying the feed
+  //   in a small community where most content has been seen. Boosting unseen
+  //   content achieves the same rebalancing without degrading the feed floor.
+  //
   const unseenBoost = !lastSeenAt ? FEED_SCORE.unseenBoost : 1.0
 
   // final score = engagement/gravity × freshness × exposure × unseen
   const score = isNaN(rawScore) ? 0 : rawScore * freshnessBoost * exposureBoost * unseenBoost
 
-  // ── v2 fields: context-line data ─────────────────────────────────────
+  // ── STEP 8: Context-line data (v2 UI fields) ─────────────────────────
+  //
+  // These fields explain to the user WHY this post was surfaced.
+  // They use `baseline` (not effectiveLastSeen) because the UI should show
+  // what happened since the user's last meaningful session reference point.
+  //
   const recentComments = postComments.filter((cm: any) => cm.created_at > baseline)
+
+  // Network commenters: up to 2 connected users who commented recently.
+  // Shown as avatar stack + "{name} commented" in the context line.
   const recentNetworkCommenters = recentComments
     .filter((cm: any) => {
       const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
@@ -478,19 +614,37 @@ function scorePost(
       return { name: name || 'משתמש', uuid, has_image: !!cp?.image }
     })
 
+  // isNewPost: post the user has never seen AND was published after their
+  // last reference point. On cold start, any post < 24h old qualifies —
+  // acceptable since first-session users should see fresh content first.
   const sentAtMs = new Date(sentAt).getTime()
   const isNewPost = !lastSeenAt &&
     (Date.now() - sentAtMs) < 86_400_000 &&
     sentAtMs > new Date(effectiveLastSeen ?? 0).getTime()
 
+  // Reaction breakdown by type — UI renders specific icons (ThumbsUp, Heart…)
   const recentReactionBreakdown: Record<string, number> = {}
   effectiveLikeList.forEach((l: any) => {
     const type = l.reaction_type || 'like'
     recentReactionBreakdown[type] = (recentReactionBreakdown[type] || 0) + 1
   })
 
-  const tier1 = hoursSincePosted < HOURS_TIER1 || isNewPost ||
-    postComments.some((cm: any) => cm.created_at > recentActivityCutoff)
+  // ── STEP 9: tier1 flag ───────────────────────────────────────────────
+  //
+  // tier1 posts always sort ABOVE non-tier1, regardless of score.
+  // A post qualifies if ANY of:
+  //   - Post itself is < 30min old AND user hasn't seen it yet
+  //   - It's an "isNewPost" for this user (never seen, just posted after login)
+  //   - ANY comment on the post is < 30min old AND user hasn't seen it yet
+  //
+  // The "not yet seen" gate (lastSeenAt === null) is intentional:
+  // for posts the user has already seen, the score already accounts for new
+  // engagement via effectiveCommentList. Forcing tier1 on top of that would
+  // recreate the old "every comment bumps to top" behavior for seen posts.
+  //
+  const hasNeverSeen = lastSeenAt === null
+  const tier1 = (hasNeverSeen && hoursSincePosted < HOURS_TIER1) || isNewPost ||
+    (hasNeverSeen && postComments.some((cm: any) => cm.created_at > recentActivityCutoff))
 
   return {
     score,
@@ -643,9 +797,15 @@ async function handleRankedFeed(c: any) {
 
   const allPostLikes = postLikesRes.data || []
 
-  const lastSeenMap: Record<string, string | null> = Object.fromEntries(
-    (impressionsRes.data || []).map((i: any) => [String(i.post_id), i.last_seen_at ?? null])
-  )
+  // A post may have multiple impression rows (one per day) — keep only the most recent last_seen_at
+  const lastSeenMap: Record<string, string | null> = {}
+  ;(impressionsRes.data || []).forEach((i: any) => {
+    const key = String(i.post_id)
+    const val = i.last_seen_at ?? null
+    if (!lastSeenMap[key] || (val && val > lastSeenMap[key]!)) {
+      lastSeenMap[key] = val
+    }
+  })
 
   const connectedUuids = new Set<string>(
     (connectionsRes.data || []).map((conn: any) =>
