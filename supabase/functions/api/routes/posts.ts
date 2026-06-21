@@ -799,6 +799,12 @@ async function handleRankedFeed(c: any) {
       v2.network_commenters = recentNetworkCommenters
       v2.has_last_seen_data = effectiveLastSeen !== null
       v2.recent_likes_count = effectiveLikeList.length
+      const recentReactionBreakdown: Record<string, number> = {}
+      effectiveLikeList.forEach((l: any) => {
+        const type = l.reaction_type || 'like'
+        recentReactionBreakdown[type] = (recentReactionBreakdown[type] || 0) + 1
+      })
+      v2.recent_reaction_breakdown = recentReactionBreakdown
       // tier-1 flag: new post OR comment in last 30 min — used only for sort, not sent to client
       v2._tier1 = hoursSincePosted < 0.5 || isNewPost || postComments.some(
         (cm: any) => cm.created_at > recentActivityCutoff
