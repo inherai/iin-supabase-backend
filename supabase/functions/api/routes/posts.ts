@@ -668,6 +668,27 @@ function scorePost(
   const tier1 = (hasNeverSeen && hoursSincePosted < HOURS_TIER1) || isNewPost ||
     (hasNeverSeen && postComments.some((cm: any) => cm.created_at > recentActivityCutoff))
 
+  // ── Primary ranking reason — always set, guarantees context line in UI ──
+  //
+  // Encodes the DOMINANT reason this post appears in the feed.
+  // Priority order matches the scoring contribution weight:
+  //   network       — connection activity (strongest signal, networkBoost > 0)
+  //   connection    — post author is in viewer's network (connectionPostBoost)
+  //   new_post      — fresh & never seen by this user (freshness + unseenBoost)
+  //   never_seen    — never shown to user but not "new" (unseenBoost)
+  //   low_exposure  — recent but underseen globally (exposureBoost)
+  //   recent_activity — community commented recently (hoursForGravity low)
+  //   engagement    — ranked purely on historical engagement/gravity score
+  //
+  const primaryRankingReason: string =
+    networkBoost > 0             ? 'network'
+    : isConnectionAuthor         ? 'connection'
+    : isNewPost                  ? 'new_post'
+    : isNeverSeen                ? 'never_seen'
+    : isLowExposure              ? 'low_exposure'
+    : hasRecentCommunityActivity ? 'recent_activity'
+    : 'engagement'
+
   return {
     score,
     tier1,
@@ -683,6 +704,7 @@ function scorePost(
       is_low_exposure: isLowExposure,
       has_recent_community_activity: hasRecentCommunityActivity,
       is_never_seen: isNeverSeen,
+      primary_ranking_reason: primaryRankingReason,
     },
   }
 }
