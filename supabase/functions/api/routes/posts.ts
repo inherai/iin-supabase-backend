@@ -350,7 +350,6 @@ const FEED_SCORE = {
   lowExposureWindowHours: 24,  // חלון 24ש — פוסט לילי מקבל הגנה עד שהקהל מתעורר
   lowExposureThreshold: 80,    // median ב-3 שעות = 57, P75 = 76 → 80 = "חשיפה הוגנת"
   lowExposureBoost: 1.8,       // מקסימום boost (ב-0 impressions)
-  recentCommunityWindowHours: 12,  // חלון לזיהוי פוסט פעיל — גם אם המשתמש כבר ראה את התגובות
   highEngagementThreshold: 15,    // כמות engagement כוללת (תגובות×2 + לייקים×1) לתג "פעיל בקהילה"
   likeGravityFactor: 4,        // לייק נחשב ישן פי 4 מתגובה לצורך חישוב gravity
   unseenBoost: 1.3,            // פוסט שמעולם לא הוצג למשתמש הזה מקבל יתרון על פוסט שנראה
@@ -406,61 +405,55 @@ function scorePost(
 
   // ── STEP 1: Temporal anchoring ───────────────────────────────────────
   //
-  // We need a personal "reference point" per user per post — the last time
-  // this user had context for this post. Used to determine what counts as
-  // *new* engagement vs. engagement the user already knows about.
+  // Two separate reference points with different purposes:
   //
-  // Priority chain:
-  //   1. lastSeenAt    — actual impression record for this specific post
-  //   2. cappedLastLoginAt — user's last login (capped to avoid massive gaps
-  //                      inflating "new" counts for long-absent users)
-  //   3. null          — cold start: first session, no reference point at all
+  // scoringRef — for engagement numerator + gravity denominator (SCORING only).
+  //   Always cappedLastLoginAt (user's last feed visit), same checkpoint for ALL
+  //   posts. Prevents the "stale impression" paradox: a post seen 3 days ago won't
+  //   accumulate a 3-day window of "new" engagement above posts from yesterday.
+  //   null on cold start → full engagement history counts (new-user seeding).
   //
-  // effectiveLastSeen drives scoring (what counts as new engagement).
-  // baseline = effectiveLastSeen ?? session_start drives the context-line UI
-  // (what to show the user *right now* as "happened since you were here").
+  // uiBaseline — for context-line UI (new comment counts, network commenters).
+  //   Uses lastSeenAt (actual impression for THIS post) when available. The user
+  //   genuinely hasn't seen comments that arrived after they last viewed this
+  //   specific post — even if they've visited the feed since without seeing it.
+  //   Falls back: lastSeenAt → cappedLastLoginAt → session_start.
+  //
+  // lastSeenAt alone drives novelty signals (unseenBoost, isNeverSeen, isNewPost)
+  // — whether this specific post has ever been shown to this user.
   //
   const lastSeenAt: string | null = lastSeenMap[String(post.id)] ?? null
-  const effectiveLastSeen: string | null = lastSeenAt ?? cappedLastLoginAt
-  const baseline = effectiveLastSeen ?? session_start
+  const scoringRef: string | null = cappedLastLoginAt
+  const uiContextRef: string | null = lastSeenAt ?? cappedLastLoginAt
+  const uiBaseline: string = uiContextRef ?? session_start
   const sentAt: string = post.sent_at ?? post.effective_sort_date ?? new Date().toISOString()
   const hoursSincePosted = Math.max(0, (Date.now() - new Date(sentAt).getTime()) / 3_600_000)
 
-  // ── STEP 2: Effective engagement lists ───────────────────────────────
+  // ── STEP 2: Effective engagement lists (scoring window) ─────────────
   //
-  // Key principle: engagement the user already saw should NOT keep re-surfacing
-  // a post. Only *new* engagement since the user's last reference point counts.
+  // Only engagement since scoringRef (last feed visit) counts toward the score.
+  // Cold start (scoringRef = null): count full history to seed the new-user feed.
   //
-  // If we have a reference point (effectiveLastSeen): filter to engagement
-  // that occurred after it — these are "new" interactions the user hasn't
-  // processed yet.
-  //
-  // Cold start (effectiveLastSeen = null): we have no information about what
-  // the user has seen, so we count the full engagement history. This gives
-  // new users a feed seeded by cumulative activity rather than an empty score.
-  //
-  const effectiveCommentList: any[] = effectiveLastSeen
-    ? postComments.filter((cm: any) => cm.created_at > effectiveLastSeen)
+  const effectiveCommentList: any[] = scoringRef
+    ? postComments.filter((cm: any) => cm.created_at > scoringRef)
     : [...postComments]
-  const effectiveLikeList: any[] = effectiveLastSeen
-    ? postLikes.filter((l: any) => l.created_at && l.created_at > effectiveLastSeen)
+  const effectiveLikeList: any[] = scoringRef
+    ? postLikes.filter((l: any) => l.created_at && l.created_at > scoringRef)
     : postLikes.filter((l: any) => l.created_at)
 
-  // ── STEP 3: Network activity (since baseline, not effectiveLastSeen) ─
+  // ── STEP 3: Network activity (scoring window) ────────────────────────
   //
-  // Activity from people in the user's network is a strong relevance signal
-  // independent of the scoring window. We count it since `baseline` so that
-  // the context-line ("Miriam commented") and the network boost are aligned.
+  // Activity from connected users counted since scoringRef — same window as the
+  // engagement numerator. Note: older rows may lack posted_by_uuid; fall back
+  // to email → uuid resolution.
   //
-  // Note: comments table may not have posted_by_uuid for older rows —
-  // we fall back to resolving email → uuid via usersByEmail.
-  //
+  const scoringWindow = scoringRef ?? session_start
   const networkCommentCount = postComments.filter((cm: any) => {
     const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
-    return uuid && connectedUuids.has(uuid) && cm.created_at > baseline
+    return uuid && connectedUuids.has(uuid) && cm.created_at > scoringWindow
   }).length
   const networkLikeCount = postLikes.filter(
-    (l: any) => l.user_id && connectedUuids.has(l.user_id) && l.created_at && l.created_at > baseline
+    (l: any) => l.user_id && connectedUuids.has(l.user_id) && l.created_at && l.created_at > scoringWindow
   ).length
 
   // ── STEP 4: Gravity anchor — hoursForGravity ────────────────────────
@@ -536,7 +529,7 @@ function scorePost(
   // The +2 offset prevents the denominator collapsing to 1^n at t=0,
   // which would make rawScore = numerator (too large for very new posts).
   //
-  const hasSeen = effectiveLastSeen !== null
+  const hasSeen = scoringRef !== null
   const gravityDenominator = hasSeen
     ? Math.pow(hoursForGravity + 2, FEED_SCORE.seenActivityAgePower) *
       Math.pow(hoursSincePosted + 2, FEED_SCORE.seenPostAgePower)
@@ -595,11 +588,9 @@ function scorePost(
 
   // ── STEP 8: Context-line data (v2 UI fields) ─────────────────────────
   //
-  // These fields explain to the user WHY this post was surfaced.
-  // They use `baseline` (not effectiveLastSeen) because the UI should show
-  // what happened since the user's last meaningful session reference point.
+  // Uses uiBaseline — what the user genuinely hasn't seen on this specific post.
   //
-  const recentComments = postComments.filter((cm: any) => cm.created_at > baseline)
+  const recentComments = postComments.filter((cm: any) => cm.created_at > uiBaseline)
 
   // Network commenters: up to 2 connected users who commented recently.
   // Shown as avatar stack + "{name} commented" in the context line.
@@ -622,11 +613,15 @@ function scorePost(
   const sentAtMs = new Date(sentAt).getTime()
   const isNewPost = !lastSeenAt &&
     (Date.now() - sentAtMs) < 86_400_000 &&
-    sentAtMs > new Date(effectiveLastSeen ?? 0).getTime()
+    sentAtMs > new Date(uiContextRef ?? 0).getTime()
 
-  // Reaction breakdown by type — UI renders specific icons (ThumbsUp, Heart…)
+  // Reaction breakdown for context line — uses uiBaseline (what the user hasn't seen),
+  // not effectiveLikeList (which uses scoringRef for scoring purposes).
+  const uiLikeList = uiContextRef
+    ? postLikes.filter((l: any) => l.created_at && l.created_at > uiBaseline)
+    : postLikes.filter((l: any) => l.created_at)
   const recentReactionBreakdown: Record<string, number> = {}
-  effectiveLikeList.forEach((l: any) => {
+  uiLikeList.forEach((l: any) => {
     const type = l.reaction_type || 'like'
     recentReactionBreakdown[type] = (recentReactionBreakdown[type] || 0) + 1
   })
@@ -644,11 +639,6 @@ function scorePost(
     && hoursSincePosted < FEED_SCORE.lowExposureWindowHours
     && impressionsCount < FEED_SCORE.lowExposureThreshold
 
-  // recent community activity — any comment in the last 12h, regardless of user's last_seen_at
-  // fires in context line Layer 2 when user has seen all comments but post is still "alive"
-  const recentCommunityCutoff = new Date(Date.now() - FEED_SCORE.recentCommunityWindowHours * 3_600_000).toISOString()
-  const hasRecentCommunityActivity = postComments.some((cm: any) => cm.created_at > recentCommunityCutoff)
-
   // never seen — post was never shown to this user, but doesn't qualify as isNewPost (too old or pre-login)
   const isNeverSeen = lastSeenAt === null && !isNewPost
 
@@ -662,8 +652,8 @@ function scorePost(
   //
   // The "not yet seen" gate (lastSeenAt === null) is intentional:
   // for posts the user has already seen, the score already accounts for new
-  // engagement via effectiveCommentList. Forcing tier1 on top of that would
-  // recreate the old "every comment bumps to top" behavior for seen posts.
+  // engagement via the scoring window (scoringRef). Forcing tier1 on top of
+  // that would recreate the old "every comment bumps to top" behavior.
   //
   const hasNeverSeen = lastSeenAt === null
   const tier1 = (hasNeverSeen && hoursSincePosted < HOURS_TIER1) || isNewPost ||
@@ -691,10 +681,10 @@ function scorePost(
     : isLowExposure              ? 'low_exposure'
     : allTimeEngagement >= FEED_SCORE.highEngagementThreshold ? 'high_engagement'
     : 'none'
-  // NOTE: hasRecentCommunityActivity is intentionally excluded from the priority chain.
-  // When a community comment is new to the user → Layer 1 catches it via effectiveCommentList.
-  // When the user already saw the comment → the label would be misleading (they know about the discussion).
-  // So "recent_activity" as a standalone Layer 2 reason is either redundant or wrong.
+  // NOTE: "recent community activity" is intentionally absent from this chain.
+  // When a comment is new to the user → Layer 1 catches it via recentComments (uiBaseline).
+  // When the user already saw the comment → any "Back in discussion" label would be misleading.
+  // Either case is already handled; a standalone Layer 2 reason adds nothing.
 
   return {
     score,
@@ -703,13 +693,12 @@ function scorePost(
       is_new_post: isNewPost,
       new_comments_count: recentComments.length,
       network_commenters: recentNetworkCommenters,
-      has_last_seen_data: effectiveLastSeen !== null,
-      recent_likes_count: effectiveLikeList.length,
+      has_last_seen_data: uiContextRef !== null,
+      recent_likes_count: uiLikeList.length,
       recent_reaction_breakdown: recentReactionBreakdown,
       is_connection_author: isConnectionAuthor,
       connection_author_name: connectionAuthorName,
       is_low_exposure: isLowExposure,
-      has_recent_community_activity: hasRecentCommunityActivity,
       is_never_seen: isNeverSeen,
       primary_ranking_reason: primaryRankingReason,
     },

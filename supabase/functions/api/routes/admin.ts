@@ -54,7 +54,9 @@ app.get("/analytics", async (c) => {
 
   const [activityRes, usersRes] = await Promise.all([
     db.from("user_activity").select("*"),
-    db.from("users").select("uuid, first_name, last_name, email, created_at"),
+    db.from("users")
+      .select("uuid, first_name, last_name, email, created_at, status")
+      .not("email", "like", "deleted_%@deleted.local"),
   ]);
 
   const activities: any[] = activityRes.data || [];
@@ -85,6 +87,12 @@ app.get("/analytics", async (c) => {
   const newUsers7d = users.filter(
     (u) => u.created_at && now - new Date(u.created_at).getTime() < 7 * D
   ).length;
+
+  const usersByStatus = {
+    active: users.filter((u) => u.status === "Active").length,
+    onboarding: users.filter((u) => u.status === "onboarding").length,
+    inactive: users.filter((u) => u.status === "Inactive").length,
+  };
 
   const sumField = (arr: any[], key: string) =>
     arr.reduce((s, u) => s + (Number(u[key]) || 0), 0);
@@ -149,6 +157,7 @@ app.get("/analytics", async (c) => {
   return c.json({
     generated_at: new Date().toISOString(),
     total_users: totalUsers,
+    user_statuses: usersByStatus,
     total_in_activity: merged.length,
     dau,
     wau,
