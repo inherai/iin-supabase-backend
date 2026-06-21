@@ -629,6 +629,19 @@ function scorePost(
     recentReactionBreakdown[type] = (recentReactionBreakdown[type] || 0) + 1
   })
 
+  // connection author — post author is in viewer's network
+  const isConnectionAuthor = !!(post.posted_by_uuid && connectedUuids.has(post.posted_by_uuid))
+  const authorProfile = usersByEmail.get((post.sender || '').toLowerCase())
+    ?? (post.posted_by_uuid ? usersByUuid.get(post.posted_by_uuid) : null)
+  const connectionAuthorName: string | null = isConnectionAuthor && authorProfile
+    ? (`${authorProfile.first_name ?? ''} ${authorProfile.last_name ?? ''}`).trim() || null
+    : null
+
+  // low exposure — post is recent but underseen (exposureBoost window active)
+  const isLowExposure = hoursSincePosted >= HOURS_TIER1
+    && hoursSincePosted < FEED_SCORE.lowExposureWindowHours
+    && impressionsCount < FEED_SCORE.lowExposureThreshold
+
   // ── STEP 9: tier1 flag ───────────────────────────────────────────────
   //
   // tier1 posts always sort ABOVE non-tier1, regardless of score.
@@ -656,6 +669,9 @@ function scorePost(
       has_last_seen_data: effectiveLastSeen !== null,
       recent_likes_count: effectiveLikeList.length,
       recent_reaction_breakdown: recentReactionBreakdown,
+      is_connection_author: isConnectionAuthor,
+      connection_author_name: connectionAuthorName,
+      is_low_exposure: isLowExposure,
     },
   }
 }
