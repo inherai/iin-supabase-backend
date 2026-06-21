@@ -635,6 +635,7 @@ async function handleRankedFeed(c: any) {
     lowExposureWindowHours: 24,  // חלון 24ש — פוסט לילי מקבל הגנה עד שהקהל מתעורר
     lowExposureThreshold: 80,    // median ב-3 שעות = 57, P75 = 76 → 80 = "חשיפה הוגנת"
     lowExposureBoost: 1.8,       // מקסימום boost (ב-0 impressions)
+    likeGravityFactor: 4,  // לייק נחשב ישן פי 4 מתגובה לצורך חישוב gravity
     // gravity split — total = 1.2 in both cases
     // seen post:   activityAge dominates, light post-age penalty
     seenActivityAgePower: 1.0,
@@ -722,12 +723,23 @@ async function handleRankedFeed(c: any) {
 
       // gravity uses time of most recent effective activity — not post age
       // so an old post with a new comment scores by comment freshness, not post age
-      const effectiveTimes: number[] = [
-        ...effectiveCommentList.map((cm: any) => new Date(cm.created_at).getTime()).filter((t: number) => !isNaN(t)),
-        ...effectiveLikeList.map((l: any) => new Date(l.created_at).getTime()).filter((t: number) => !isNaN(t)),
-      ]
-      const hoursForGravity = effectiveTimes.length > 0
-        ? Math.max(0, (Date.now() - Math.max(...effectiveTimes)) / 3_600_000)
+      const commentTimes = effectiveCommentList
+        .map((cm: any) => new Date(cm.created_at).getTime())
+        .filter((t: number) => !isNaN(t))
+      const rawLikeTimes = effectiveLikeList
+        .map((l: any) => new Date(l.created_at).getTime())
+        .filter((t: number) => !isNaN(t))
+
+      // לייק מוזז אחורה פי likeGravityFactor — פחות השפעה על gravity מתגובה
+      const hoursFromComment = commentTimes.length > 0
+        ? Math.max(0, (Date.now() - Math.max(...commentTimes)) / 3_600_000)
+        : null
+      const hoursFromLike = rawLikeTimes.length > 0
+        ? Math.max(0, (Date.now() - Math.max(...rawLikeTimes)) / 3_600_000) * FEED_SCORE.likeGravityFactor
+        : null
+      const gravityCandidates = [hoursFromComment, hoursFromLike].filter((h): h is number => h !== null)
+      const hoursForGravity = gravityCandidates.length > 0
+        ? Math.min(...gravityCandidates)
         : hoursSincePosted
 
       const totalEngagement =
@@ -786,6 +798,7 @@ async function handleRankedFeed(c: any) {
       v2.new_comments_count = recentComments.length
       v2.network_commenters = recentNetworkCommenters
       v2.has_last_seen_data = effectiveLastSeen !== null
+      v2.recent_likes_count = effectiveLikeList.length
       // tier-1 flag: new post OR comment in last 30 min — used only for sort, not sent to client
       v2._tier1 = hoursSincePosted < 0.5 || isNewPost || postComments.some(
         (cm: any) => cm.created_at > recentActivityCutoff
