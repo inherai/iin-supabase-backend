@@ -924,9 +924,25 @@ app.post("/company-requests/search-online", async (c) => {
       model: "gpt-4o-search-preview",
       messages: [{
         role: "user",
-        content: `Find all companies named "${companyName}".
+        content: `Find all companies named "${companyName}" using reliable current public sources.
 Return a JSON array of all matching companies (up to 5), ordered by global prominence.
-Each item: { "official_name": string, "website": string|null, "description": string, "industry": string, "country": string, "logo_url": string|null }
+For every company, return as much verified information as possible using exactly this shape:
+{
+  "official_name": string,
+  "website": string|null,
+  "description": string|null,
+  "tagline": string|null,
+  "linkedin_url": string|null,
+  "phone": string|null,
+  "logo_url": string|null,
+  "locations": [{ "city": string|null, "country": string|null, "is_hq": boolean }],
+  "industries": [{ "name": string }],
+  "specialities": string[],
+  "employee_count_range": { "start": number|null, "end": number|null }|null,
+  "founded_on": { "year": number }|null
+}
+The description should be a factual 2-4 sentence overview covering the product or service, market, and headquarters when known.
+Use an empty array or null for information that cannot be verified. Do not invent values.
 If no company can be identified, return: { "error": "not found" }
 You MUST respond with raw JSON only — no markdown, no explanations, no text outside the JSON.`
       }],
@@ -954,10 +970,75 @@ You MUST respond with raw JSON only — no markdown, no explanations, no text ou
   // Normalize to array
   const results: any[] = Array.isArray(parsed) ? parsed : [parsed];
 
-  // Normalize website URLs to https
+  // Normalize the result into the JSON shapes used by the companies UI.
   for (const item of results) {
-    if (typeof item.website === 'string' && item.website.startsWith('http://')) {
-      item.website = item.website.replace('http://', 'https://');
+    if (typeof item.website === 'string' && item.website.trim()) {
+      item.website = item.website.trim();
+      if (item.website.startsWith('http://')) {
+        item.website = item.website.replace('http://', 'https://');
+      } else if (!/^https?:\/\//i.test(item.website)) {
+        item.website = `https://${item.website}`;
+      }
+    }
+    if (typeof item.linkedin_url === 'string' && item.linkedin_url.trim()) {
+      item.linkedin_url = item.linkedin_url.trim();
+      if (item.linkedin_url.startsWith('http://')) {
+        item.linkedin_url = item.linkedin_url.replace('http://', 'https://');
+      } else if (!/^https?:\/\//i.test(item.linkedin_url)) {
+        item.linkedin_url = `https://${item.linkedin_url}`;
+      }
+    }
+
+    const rawLocations = Array.isArray(item.locations) ? item.locations : [];
+    const hasExplicitHq = rawLocations.some((location: any) => location?.is_hq === true);
+    item.locations = Array.isArray(item.locations)
+      ? item.locations
+        .filter((location: any) => location && (location.city || location.country))
+        .map((location: any, index: number) => ({
+          city: typeof location.city === 'string' ? location.city.trim() || null : null,
+          country: typeof location.country === 'string' ? location.country.trim() || null : null,
+          is_hq: location.is_hq === true || (!hasExplicitHq && index === 0),
+        }))
+      : [];
+
+    item.industries = Array.isArray(item.industries)
+      ? item.industries
+        .map((industry: any) => typeof industry === 'string' ? industry : industry?.name)
+        .filter((name: any) => typeof name === 'string' && name.trim())
+        .map((name: string) => ({ name: name.trim() }))
+      : [];
+    item.industry = item.industries.map((industry: any) => industry.name).join(', ') || null;
+    item.country = item.locations.find((location: any) => location.is_hq)?.country
+      || item.locations[0]?.country
+      || null;
+
+    item.specialities = Array.isArray(item.specialities)
+      ? item.specialities.filter((value: any) => typeof value === 'string' && value.trim())
+      : [];
+
+    const rawStart = item.employee_count_range?.start;
+    const rawEnd = item.employee_count_range?.end;
+    const start = typeof rawStart === 'number' && Number.isFinite(rawStart) ? rawStart : null;
+    const end = typeof rawEnd === 'number' && Number.isFinite(rawEnd) ? rawEnd : null;
+    item.employee_count_range = start !== null || end !== null
+      ? {
+        start,
+        end,
+      }
+      : null;
+
+    const foundedYear = Number(item.founded_on?.year);
+    item.founded_on = Number.isInteger(foundedYear) && foundedYear > 1700
+      ? { year: foundedYear }
+      : null;
+
+    if (!item.logo_url && item.website) {
+      try {
+        const domain = new URL(item.website).hostname;
+        item.logo_url = `https://www.google.com/s2/favicons?domain=${domain}&sz=256`;
+      } catch {
+        item.logo_url = null;
+      }
     }
   }
 
