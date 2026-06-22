@@ -1109,14 +1109,60 @@ app.put("/jobs/:id", async (c) => {
   const jobId = c.req.param("id");
   const body = await c.req.json().catch(() => ({}));
 
+  const { data: currentJob, error: currentJobError } = await db
+    .from("open_position")
+    .select("job_id,company_name,company_id")
+    .eq("job_id", jobId)
+    .maybeSingle();
+
+  if (currentJobError) return c.json({ error: currentJobError.message }, 500);
+  if (!currentJob) return c.json({ error: "Job not found" }, 404);
+
   const updates: Record<string, any> = {};
-  if (body.company_id !== undefined) {
+  let linkedJobsCount = 1;
+  if (body.company_id === undefined) {
+    return c.json({ error: "company_id is required" }, 400);
+  }
+
+  {
     const companyId = body.company_id === null ? null : parseInt(body.company_id);
+    if (companyId !== null && !Number.isFinite(companyId)) {
+      return c.json({ error: "Invalid company_id" }, 400);
+    }
     updates.company_id = companyId;
 
     if (companyId !== null) {
       const { data: company } = await db.from("companies").select("name").eq("id", companyId).maybeSingle();
-      if (company?.name) updates.company_name = company.name;
+      if (!company) return c.json({ error: "Company not found" }, 404);
+      updates.company_name = company.name;
+
+      // Link only unlinked jobs whose listed company name is exactly identical.
+      if (currentJob.company_id === null && currentJob.company_name) {
+        const { data: unlinkedJobs, error: unlinkedError } = await db
+          .from("open_position")
+          .select("job_id,company_name")
+          .is("company_id", null)
+          .eq("company_name", currentJob.company_name);
+
+        if (unlinkedError) return c.json({ error: unlinkedError.message }, 500);
+
+        const matchingJobIds = (unlinkedJobs || [])
+          .filter((job: any) =>
+            typeof job.company_name === "string" &&
+            job.company_name === currentJob.company_name
+          )
+          .map((job: any) => job.job_id);
+
+        if (matchingJobIds.length > 0) {
+          const { error: bulkUpdateError } = await db
+            .from("open_position")
+            .update(updates)
+            .in("job_id", matchingJobIds);
+
+          if (bulkUpdateError) return c.json({ error: bulkUpdateError.message }, 400);
+          linkedJobsCount = matchingJobIds.length;
+        }
+      }
     } else {
       updates.company_name = null;
     }
@@ -1131,7 +1177,7 @@ app.put("/jobs/:id", async (c) => {
 
   if (error) return c.json({ error: error.message }, 400);
 
-  return c.json(data);
+  return c.json({ ...data, linked_jobs_count: linkedJobsCount });
 });
 
 // ==================== CONTENT REPORTS ====================
