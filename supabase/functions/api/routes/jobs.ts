@@ -10,6 +10,10 @@ import {
 
 const app = new Hono()
 const allowedCategories = new Set(['Development', 'QA', 'Data', 'Management', 'Product'])
+// Always hide LinkedIn-apply jobs that are not associated with a company.
+// Keep jobs with a missing apply link: only URLs matching isLinkedInUrl semantics are excluded.
+const VISIBLE_JOBS_FILTER =
+  'company_id.not.is.null,apply_link.is.null,apply_link.not.ilike.%linkedin.com%'
 const ALLOWED_LOCATION_REGIONS = new Set([
   'center',
   'sharon',
@@ -71,7 +75,8 @@ app.get('/', async (c) => {
             .from('open_position')
             .select('*, companies:company_id(id, name, logo, website, linkedin_url)')
             .eq('job_id', id)
-            .single();
+            .or(VISIBLE_JOBS_FILTER)
+            .maybeSingle();
         
         if (error) throw error;
         
@@ -127,6 +132,7 @@ app.get('/', async (c) => {
         .from('open_position')
         .select('job_id, job_title, company_name, company_id, location, location_region, time_posted, created_at, employment_type, seniority_level, companies(id, name, logo)', { count: 'exact' })
         .not('job_description_html', 'is', null)
+        .or(VISIBLE_JOBS_FILTER)
         .order('created_at', { ascending: false })
 
       if (textSearch) {
