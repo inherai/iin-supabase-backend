@@ -924,8 +924,8 @@ app.post("/company-requests/search-online", async (c) => {
       model: "gpt-4o-search-preview",
       messages: [{
         role: "user",
-        content: `Find all companies named "${companyName}" using reliable current public sources.
-Return a JSON array of all matching companies (up to 5), ordered by global prominence.
+        content: `Find companies named "${companyName}" that are headquartered in Israel or have a verified office or active operation in Israel, using reliable current public sources.
+Return a JSON array of matching companies (up to 5), ordered by relevance to Israel. Do not return a company unless you can verify an Israeli headquarters, office, or operation.
 For every company, return as much verified information as possible using exactly this shape:
 {
   "official_name": string,
@@ -935,15 +935,16 @@ For every company, return as much verified information as possible using exactly
   "linkedin_url": string|null,
   "phone": string|null,
   "logo_url": string|null,
-  "locations": [{ "city": string|null, "country": string|null, "is_hq": boolean }],
+  "locations": [{ "city": string|null, "country": "IL", "is_hq": boolean }],
   "industries": [{ "name": string }],
   "specialities": string[],
   "employee_count_range": { "start": number|null, "end": number|null }|null,
   "founded_on": { "year": number }|null
 }
-The description should be a factual 2-4 sentence overview covering the product or service, market, and headquarters when known.
+The description should be a factual 2-4 sentence overview covering the product or service, market, and its connection to Israel.
+Include at least one verified Israeli location in locations and use the ISO country code "IL".
 Use an empty array or null for information that cannot be verified. Do not invent values.
-If no company can be identified, return: { "error": "not found" }
+If no Israeli company or verified Israeli operation can be identified, return: { "error": "no verified Israeli company found" }
 You MUST respond with raw JSON only — no markdown, no explanations, no text outside the JSON.`
       }],
     } as any);
@@ -989,17 +990,22 @@ You MUST respond with raw JSON only — no markdown, no explanations, no text ou
       }
     }
 
-    const rawLocations = Array.isArray(item.locations) ? item.locations : [];
-    const hasExplicitHq = rawLocations.some((location: any) => location?.is_hq === true);
     item.locations = Array.isArray(item.locations)
       ? item.locations
         .filter((location: any) => location && (location.city || location.country))
-        .map((location: any, index: number) => ({
+        .map((location: any) => ({
           city: typeof location.city === 'string' ? location.city.trim() || null : null,
-          country: typeof location.country === 'string' ? location.country.trim() || null : null,
-          is_hq: location.is_hq === true || (!hasExplicitHq && index === 0),
+          country: typeof location.country === 'string' &&
+            ['il', 'israel', 'ישראל'].includes(location.country.trim().toLocaleLowerCase())
+            ? 'IL'
+            : null,
+          is_hq: location.is_hq === true,
         }))
+        .filter((location: any) => location.country === 'IL')
       : [];
+
+    // Only Israeli results are eligible for creation in the admin flow.
+    item.is_israeli = item.locations.length > 0;
 
     item.industries = Array.isArray(item.industries)
       ? item.industries
@@ -1042,11 +1048,16 @@ You MUST respond with raw JSON only — no markdown, no explanations, no text ou
     }
   }
 
+  const israeliResults = results.filter((item: any) => item.is_israeli);
+  if (israeliResults.length === 0) {
+    return c.json({ error: 'No verified Israeli company found' });
+  }
+
   // Search our DB for each result's official name
   const dbMatches: any[] = [];
   const seen = new Set<number>();
 
-  for (const item of results) {
+  for (const item of israeliResults) {
     const officialName: string = item.official_name || '';
     if (!officialName) continue;
 
@@ -1063,7 +1074,7 @@ You MUST respond with raw JSON only — no markdown, no explanations, no text ou
     );
   }
 
-  return c.json({ results, db_matches: dbMatches });
+  return c.json({ results: israeliResults, db_matches: dbMatches });
 });
 
 // POST /admin/company-requests/resolve — link requests to a company or dismiss them
