@@ -10,6 +10,14 @@ import {
 
 const app = new Hono()
 const allowedCategories = new Set(['Development', 'QA', 'Data', 'Management', 'Product'])
+const ALLOWED_LOCATION_REGIONS = new Set([
+  'center',
+  'sharon',
+  'north',
+  'jerusalem',
+  'south',
+  'nationwide',
+])
 
 const numericStrings = (from: number, to: number): string[] =>
   Array.from({ length: to - from + 1 }, (_, i) => String(from + i))
@@ -40,6 +48,12 @@ app.get('/', async (c) => {
     const rawTextSearch = (c.req.query('query') ?? c.req.query('search') ?? '').trim()
     const rawCategory = (c.req.query('category') ?? c.req.query('categories') ?? '').trim()
     const rawSeniorityLevels = (c.req.query('seniority_levels') ?? '').split(',').map((s: string) => s.trim()).filter(Boolean)
+    const rawLocationRegions = (
+      c.req.query('location_regions') ?? ''
+    )
+      .split(',')
+      .map((value: string) => value.trim().toLowerCase())
+      .filter(Boolean)
     const id = c.req.query('id')
     const companyId = c.req.query('company_id')
     const sortByMatch = c.req.query('sort') === 'match'
@@ -81,9 +95,37 @@ app.get('/', async (c) => {
       const textSearch = rawTextSearch.replace(/[%_(),]/g, ' ').trim()
       const category = rawCategory.trim()
 
+      const invalidSeniorityLevels = rawSeniorityLevels.filter(
+        (level: string) => !SENIORITY_LEVEL_MAP[level],
+      )
+      if (invalidSeniorityLevels.length) {
+        return c.json(
+          {
+            error: `Invalid seniority_levels: ${invalidSeniorityLevels.join(',')}`,
+            allowed_values: Object.keys(SENIORITY_LEVEL_MAP),
+            success: false,
+          },
+          400,
+        )
+      }
+
+      const invalidLocationRegions = rawLocationRegions.filter(
+        (region: string) => !ALLOWED_LOCATION_REGIONS.has(region),
+      )
+      if (invalidLocationRegions.length) {
+        return c.json(
+          {
+            error: `Invalid location_regions: ${invalidLocationRegions.join(',')}`,
+            allowed_values: [...ALLOWED_LOCATION_REGIONS],
+            success: false,
+          },
+          400,
+        )
+      }
+
       let query = supabaseClient
         .from('open_position')
-        .select('job_id, job_title, company_name, company_id, location, time_posted, created_at, employment_type, seniority_level, companies(id, name, logo)', { count: 'exact' })
+        .select('job_id, job_title, company_name, company_id, location, location_region, time_posted, created_at, employment_type, seniority_level, companies(id, name, logo)', { count: 'exact' })
         .not('job_description_html', 'is', null)
         .order('created_at', { ascending: false })
 
@@ -110,11 +152,16 @@ app.get('/', async (c) => {
 
       if (rawSeniorityLevels.length) {
         const dbValues = rawSeniorityLevels.flatMap((level: string) => {
-          const mapped = SENIORITY_LEVEL_MAP[level]
-          if (!mapped) throw new Error(`Invalid seniority_level: ${level}`)
-          return mapped
+          return SENIORITY_LEVEL_MAP[level]
         })
         query = query.in('seniority_level', [...new Set(dbValues)])
+      }
+
+      if (rawLocationRegions.length) {
+        query = query.in(
+          'location_region',
+          [...new Set(rawLocationRegions)],
+        )
       }
 
       if (companyId) {
