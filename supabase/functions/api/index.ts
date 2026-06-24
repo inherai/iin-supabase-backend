@@ -35,6 +35,7 @@ import platformJoinRequestRoute from './routes/platform-join-request.ts'
 import statusRoute from './routes/status.ts'
 import articlesRoute from './routes/articles.ts'
 import notificationsRoute from './routes/notifications.ts'
+import marketStatsRoute from './routes/market-stats.ts'
 
 //const app = new Hono()
 // מגדירים שהכל יושב תחת /api
@@ -91,6 +92,7 @@ app.route('/platform-join-request', platformJoinRequestRoute)
 app.route('/status', statusRoute)
 app.route('/articles', articlesRoute)
 app.route('/notifications', notificationsRoute)
+app.route('/market-stats', marketStatsRoute)
 // בדיקה שהכל חי
 app.get('/', (c) => c.text('Inerai API is running 🚀'))
 
