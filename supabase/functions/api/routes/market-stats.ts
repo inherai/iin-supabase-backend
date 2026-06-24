@@ -12,6 +12,13 @@ const CBS_PATHS = {
   totalEconomyVacancies: '35,1,1,1,365',
 } as const
 
+const HISTORY_MONTHS = 24
+
+interface Range {
+  min: number
+  max: number
+}
+
 interface HighTechMarketStats {
   vacanciesServices: number
   vacanciesIndustry: number
@@ -19,20 +26,23 @@ interface HighTechMarketStats {
   vacanciesTotalChangePercent: number | null
   vacancyRatePercent: number
   vacancyRateChangePoints: number | null
+  vacancyRateRange: Range
   shareOfEconomyPercent: number
   shareOfEconomyChangePoints: number | null
+  shareOfEconomyRange: Range
   period: string
   sourceUrl: string
+  history: { period: string; vacanciesTotal: number }[]
 }
 
-interface CbsObservation {
-  value: number
-  previousValue: number | null
+interface CbsPoint {
   period: string
+  value: number
 }
 
-async function fetchCbsSeasonallyAdjusted(path: string): Promise<CbsObservation> {
-  const res = await fetch(`${CBS_SERIES_BASE}?id=${path}&format=json&last=3`, {
+// Returns the seasonally-adjusted observations for a series, newest first (obs[0] = latest).
+async function fetchCbsSeries(path: string, last: number): Promise<CbsPoint[]> {
+  const res = await fetch(`${CBS_SERIES_BASE}?id=${path}&format=json&last=${last}`, {
     signal: AbortSignal.timeout(8000),
   })
   if (!res.ok) throw new Error(`CBS non-2xx for ${path}`)
@@ -41,14 +51,12 @@ async function fetchCbsSeasonallyAdjusted(path: string): Promise<CbsObservation>
   const series = json?.DataSet?.Series ?? []
   // data.value === 2 is CBS's "seasonally adjusted" variant — their standard headline figure
   const seasonal = series.find((s: any) => s?.data?.value === 2)
-  const obs = seasonal?.obs?.[0]
-  if (!obs || typeof obs.Value !== 'number') throw new Error(`No observation for ${path}`)
-
-  // obs[1], if present, is the prior month — used for month-over-month trend
-  const prevObs = seasonal?.obs?.[1]
-  const previousValue = typeof prevObs?.Value === 'number' ? prevObs.Value : null
-
-  return { value: obs.Value, previousValue, period: obs.TimePeriod }
+  const obs: any[] = seasonal?.obs ?? []
+  const points = obs
+    .filter((o) => typeof o?.Value === 'number')
+    .map((o) => ({ period: o.TimePeriod as string, value: o.Value as number }))
+  if (points.length === 0) throw new Error(`No observations for ${path}`)
+  return points
 }
 
 function percentChange(current: number, previous: number | null): number | null {
@@ -61,25 +69,52 @@ function pointChange(current: number, previous: number | null): number | null {
   return current - previous
 }
 
+function rangeOf(values: number[]): Range {
+  return { min: Math.min(...values), max: Math.max(...values) }
+}
+
 async function fetchFromCbs(): Promise<HighTechMarketStats> {
-  const [services, industry, rate, totalEconomy] = await Promise.all([
-    fetchCbsSeasonallyAdjusted(CBS_PATHS.hightechServicesVacancies),
-    fetchCbsSeasonallyAdjusted(CBS_PATHS.hightechIndustryVacancies),
-    fetchCbsSeasonallyAdjusted(CBS_PATHS.hightechServicesRate),
-    fetchCbsSeasonallyAdjusted(CBS_PATHS.totalEconomyVacancies),
+  const [servicesSeries, industrySeries, rateSeries, totalEconomySeries] = await Promise.all([
+    fetchCbsSeries(CBS_PATHS.hightechServicesVacancies, HISTORY_MONTHS),
+    fetchCbsSeries(CBS_PATHS.hightechIndustryVacancies, HISTORY_MONTHS),
+    fetchCbsSeries(CBS_PATHS.hightechServicesRate, HISTORY_MONTHS),
+    fetchCbsSeries(CBS_PATHS.totalEconomyVacancies, HISTORY_MONTHS),
   ])
+
+  const services = servicesSeries[0]
+  const servicesPrev = servicesSeries[1]?.value ?? null
+  const industry = industrySeries[0]
+  const industryPrev = industrySeries[1]?.value ?? null
+  const rate = rateSeries[0]
+  const totalEconomy = totalEconomySeries[0]
 
   const vacanciesTotal = services.value + industry.value
   const vacanciesTotalPrev =
-    services.previousValue !== null && industry.previousValue !== null
-      ? services.previousValue + industry.previousValue
-      : null
+    servicesPrev !== null && industryPrev !== null ? servicesPrev + industryPrev : null
 
   const shareOfEconomyPercent = (vacanciesTotal / totalEconomy.value) * 100
   const shareOfEconomyPrev =
-    vacanciesTotalPrev !== null && totalEconomy.previousValue !== null
-      ? (vacanciesTotalPrev / totalEconomy.previousValue) * 100
+    vacanciesTotalPrev !== null && totalEconomySeries[1]
+      ? (vacanciesTotalPrev / totalEconomySeries[1].value) * 100
       : null
+
+  // Zip services + industry by month (same survey, same cadence) for the history chart,
+  // oldest-first so it plots left-to-right chronologically.
+  const monthCount = Math.min(servicesSeries.length, industrySeries.length, totalEconomySeries.length)
+
+  const history = servicesSeries
+    .slice(0, monthCount)
+    .map((s, i) => ({
+      period: s.period,
+      vacanciesTotal: s.value + industrySeries[i].value,
+    }))
+    .reverse()
+
+  // Share-of-economy per month, for the 24-month range used by the dashboard range gauge
+  // ("where does today's value sit between its own 24-month low and high" — not an arbitrary 0-100 scale).
+  const shareOfEconomyHistory = servicesSeries
+    .slice(0, monthCount)
+    .map((s, i) => ((s.value + industrySeries[i].value) / totalEconomySeries[i].value) * 100)
 
   return {
     vacanciesServices: services.value,
@@ -87,11 +122,14 @@ async function fetchFromCbs(): Promise<HighTechMarketStats> {
     vacanciesTotal,
     vacanciesTotalChangePercent: percentChange(vacanciesTotal, vacanciesTotalPrev),
     vacancyRatePercent: rate.value,
-    vacancyRateChangePoints: pointChange(rate.value, rate.previousValue),
+    vacancyRateChangePoints: pointChange(rate.value, rateSeries[1]?.value ?? null),
+    vacancyRateRange: rangeOf(rateSeries.map((p) => p.value)),
     shareOfEconomyPercent,
     shareOfEconomyChangePoints: pointChange(shareOfEconomyPercent, shareOfEconomyPrev),
+    shareOfEconomyRange: rangeOf(shareOfEconomyHistory),
     period: services.period,
     sourceUrl: 'https://www.cbs.gov.il/he/subjects/Pages/הייטק.aspx',
+    history,
   }
 }
 
