@@ -13,15 +13,21 @@ const CBS_PATHS = {
 } as const
 
 interface HighTechMarketStats {
+  vacanciesServices: number
+  vacanciesIndustry: number
   vacanciesTotal: number
+  vacanciesTotalChangePercent: number | null
   vacancyRatePercent: number
+  vacancyRateChangePoints: number | null
   shareOfEconomyPercent: number
+  shareOfEconomyChangePoints: number | null
   period: string
   sourceUrl: string
 }
 
 interface CbsObservation {
   value: number
+  previousValue: number | null
   period: string
 }
 
@@ -38,7 +44,21 @@ async function fetchCbsSeasonallyAdjusted(path: string): Promise<CbsObservation>
   const obs = seasonal?.obs?.[0]
   if (!obs || typeof obs.Value !== 'number') throw new Error(`No observation for ${path}`)
 
-  return { value: obs.Value, period: obs.TimePeriod }
+  // obs[1], if present, is the prior month — used for month-over-month trend
+  const prevObs = seasonal?.obs?.[1]
+  const previousValue = typeof prevObs?.Value === 'number' ? prevObs.Value : null
+
+  return { value: obs.Value, previousValue, period: obs.TimePeriod }
+}
+
+function percentChange(current: number, previous: number | null): number | null {
+  if (previous === null || previous === 0) return null
+  return ((current - previous) / previous) * 100
+}
+
+function pointChange(current: number, previous: number | null): number | null {
+  if (previous === null) return null
+  return current - previous
 }
 
 async function fetchFromCbs(): Promise<HighTechMarketStats> {
@@ -50,11 +70,26 @@ async function fetchFromCbs(): Promise<HighTechMarketStats> {
   ])
 
   const vacanciesTotal = services.value + industry.value
+  const vacanciesTotalPrev =
+    services.previousValue !== null && industry.previousValue !== null
+      ? services.previousValue + industry.previousValue
+      : null
+
+  const shareOfEconomyPercent = (vacanciesTotal / totalEconomy.value) * 100
+  const shareOfEconomyPrev =
+    vacanciesTotalPrev !== null && totalEconomy.previousValue !== null
+      ? (vacanciesTotalPrev / totalEconomy.previousValue) * 100
+      : null
 
   return {
+    vacanciesServices: services.value,
+    vacanciesIndustry: industry.value,
     vacanciesTotal,
+    vacanciesTotalChangePercent: percentChange(vacanciesTotal, vacanciesTotalPrev),
     vacancyRatePercent: rate.value,
-    shareOfEconomyPercent: (vacanciesTotal / totalEconomy.value) * 100,
+    vacancyRateChangePoints: pointChange(rate.value, rate.previousValue),
+    shareOfEconomyPercent,
+    shareOfEconomyChangePoints: pointChange(shareOfEconomyPercent, shareOfEconomyPrev),
     period: services.period,
     sourceUrl: 'https://www.cbs.gov.il/he/subjects/Pages/הייטק.aspx',
   }
