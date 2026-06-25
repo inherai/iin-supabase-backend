@@ -10,9 +10,15 @@ const CBS_PATHS = {
   hightechIndustryVacancies: '35,1,1,1,7453',
   hightechServicesRate: '35,1,1,2,7452',
   totalEconomyVacancies: '35,1,1,1,365',
+  // Topic 33,9 = employment & wages by economic sector, broken out for hi-tech vs the rest
+  // of the economy. Wage series only publish "raw" data (no seasonally-adjusted variant) and
+  // are highly seasonal (e.g. March bonuses) — so they need year-over-year, not month-over-month, comparison.
+  hightechWage: '33,9,1,1,6412',
+  restOfEconomyWage: '33,9,4,1,6412',
 } as const
 
 const HISTORY_MONTHS = 24
+const WAGE_HISTORY_MONTHS = 13
 
 interface Range {
   min: number
@@ -33,6 +39,12 @@ interface HighTechMarketStats {
   period: string
   sourceUrl: string
   history: { period: string; vacanciesTotal: number }[]
+  avgWageHighTech: number
+  avgWageRestOfEconomy: number
+  wageRatio: number
+  avgWageHighTechChangePercentYoy: number | null
+  wagePeriod: string
+  wageSourceUrl: string
 }
 
 interface CbsPoint {
@@ -59,6 +71,26 @@ async function fetchCbsSeries(path: string, last: number): Promise<CbsPoint[]> {
   return points
 }
 
+// Wage series only publish the "raw" variant (data.value === 1), and CBS mixes monthly,
+// quarterly and annual representations of the same raw variant in one response — filter to
+// the monthly one (time.value === 3) specifically.
+async function fetchCbsMonthlyRawSeries(path: string, last: number): Promise<CbsPoint[]> {
+  const res = await fetch(`${CBS_SERIES_BASE}?id=${path}&format=json&last=${last}`, {
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!res.ok) throw new Error(`CBS non-2xx for ${path}`)
+
+  const json = await res.json()
+  const series = json?.DataSet?.Series ?? []
+  const monthly = series.find((s: any) => s?.data?.value === 1 && s?.time?.value === 3)
+  const obs: any[] = monthly?.obs ?? []
+  const points = obs
+    .filter((o) => typeof o?.Value === 'number')
+    .map((o) => ({ period: o.TimePeriod as string, value: o.Value as number }))
+  if (points.length === 0) throw new Error(`No observations for ${path}`)
+  return points
+}
+
 function percentChange(current: number, previous: number | null): number | null {
   if (previous === null || previous === 0) return null
   return ((current - previous) / previous) * 100
@@ -74,11 +106,13 @@ function rangeOf(values: number[]): Range {
 }
 
 async function fetchFromCbs(): Promise<HighTechMarketStats> {
-  const [servicesSeries, industrySeries, rateSeries, totalEconomySeries] = await Promise.all([
+  const [servicesSeries, industrySeries, rateSeries, totalEconomySeries, hightechWageSeries, restOfEconomyWageSeries] = await Promise.all([
     fetchCbsSeries(CBS_PATHS.hightechServicesVacancies, HISTORY_MONTHS),
     fetchCbsSeries(CBS_PATHS.hightechIndustryVacancies, HISTORY_MONTHS),
     fetchCbsSeries(CBS_PATHS.hightechServicesRate, HISTORY_MONTHS),
     fetchCbsSeries(CBS_PATHS.totalEconomyVacancies, HISTORY_MONTHS),
+    fetchCbsMonthlyRawSeries(CBS_PATHS.hightechWage, WAGE_HISTORY_MONTHS),
+    fetchCbsMonthlyRawSeries(CBS_PATHS.restOfEconomyWage, WAGE_HISTORY_MONTHS),
   ])
 
   const services = servicesSeries[0]
@@ -116,6 +150,10 @@ async function fetchFromCbs(): Promise<HighTechMarketStats> {
     .slice(0, monthCount)
     .map((s, i) => ((s.value + industrySeries[i].value) / totalEconomySeries[i].value) * 100)
 
+  const hightechWage = hightechWageSeries[0]
+  const hightechWageYearAgo = hightechWageSeries[12]?.value ?? null
+  const restOfEconomyWage = restOfEconomyWageSeries[0]
+
   return {
     vacanciesServices: services.value,
     vacanciesIndustry: industry.value,
@@ -128,8 +166,14 @@ async function fetchFromCbs(): Promise<HighTechMarketStats> {
     shareOfEconomyChangePoints: pointChange(shareOfEconomyPercent, shareOfEconomyPrev),
     shareOfEconomyRange: rangeOf(shareOfEconomyHistory),
     period: services.period,
-    sourceUrl: 'https://www.cbs.gov.il/he/subjects/Pages/הייטק.aspx',
+    sourceUrl: 'https://www.cbs.gov.il/he/Surveys/Pages/סקר-משרות-פנויות.aspx',
     history,
+    avgWageHighTech: hightechWage.value,
+    avgWageRestOfEconomy: restOfEconomyWage.value,
+    wageRatio: hightechWage.value / restOfEconomyWage.value,
+    avgWageHighTechChangePercentYoy: percentChange(hightechWage.value, hightechWageYearAgo),
+    wagePeriod: hightechWage.period,
+    wageSourceUrl: 'https://www.cbs.gov.il/he/mediarelease/Pages/default.aspx',
   }
 }
 
