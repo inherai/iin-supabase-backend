@@ -99,7 +99,7 @@ app.get('/', async (c) => {
                     .from('job_applications')
                     .select('status, applied_at')
                     .eq('user_id', userId)
-                    .eq('job_id', data.job_id)
+                    .eq('job_id', data.id)
                     .maybeSingle(),
             ]);
             isSaved = !!saveResult.data;
@@ -204,6 +204,7 @@ app.get('/', async (c) => {
         // --- העשרה: שמירות + סטטוס הגשת מועמדות (Batch, parallel) ---
         if (userId && data && data.length > 0) {
             const jobIds = data.map((j: any) => j.job_id);
+            const positionIds = data.map((j: { id: number }) => j.id);
 
             const [savesResult, applicationsResult] = await Promise.all([
                 supabaseClient
@@ -216,16 +217,17 @@ app.get('/', async (c) => {
                     .from('job_applications')
                     .select('job_id, status, applied_at')
                     .eq('user_id', userId)
-                    .in('job_id', jobIds),
+                    .in('job_id', positionIds),
             ]);
 
             const savedSet = new Set(savesResult.data?.map((s: any) => s.saved_resource_id));
+            // job_applications.job_id = open_position.id (PK), so key by open_position.id
             const applicationMap = new Map(
                 applicationsResult.data?.map((a: any) => [String(a.job_id), a]) ?? []
             );
 
             result = data.map((job: any) => {
-                const app = applicationMap.get(String(job.job_id));
+                const app = applicationMap.get(String(job.id));
                 return {
                     ...job,
                     is_saved: savedSet.has(job.job_id),

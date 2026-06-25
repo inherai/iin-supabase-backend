@@ -26,13 +26,15 @@ app.post('/:jobId/click', async (c) => {
 
   const supabase = adminClient()
 
+  // Fetch the PK (id) — job_applications FK references open_position.id, not open_position.job_id
   const { data: job } = await supabase
     .from('open_position')
-    .select('job_id')
+    .select('id')
     .eq('job_id', jobId)
     .maybeSingle()
   if (!job) return c.json({ error: 'Job not found', success: false }, 404)
 
+  const positionId = job.id
   const now = new Date().toISOString()
 
   // Check existing status — never downgrade 'applied' back to 'clicked'
@@ -40,7 +42,7 @@ app.post('/:jobId/click', async (c) => {
     .from('job_applications')
     .select('status')
     .eq('user_id', user.id)
-    .eq('job_id', jobId)
+    .eq('job_id', positionId)
     .maybeSingle()
 
   if (existing?.status === 'applied') {
@@ -48,12 +50,12 @@ app.post('/:jobId/click', async (c) => {
       .from('job_applications')
       .update({ apply_clicked_at: now, updated_at: now })
       .eq('user_id', user.id)
-      .eq('job_id', jobId)
+      .eq('job_id', positionId)
   } else {
     const { error } = await supabase
       .from('job_applications')
       .upsert(
-        { user_id: user.id, job_id: jobId, status: 'clicked', apply_clicked_at: now, updated_at: now },
+        { user_id: user.id, job_id: positionId, status: 'clicked', apply_clicked_at: now, updated_at: now },
         { onConflict: 'user_id,job_id' },
       )
     if (error) {
@@ -80,13 +82,15 @@ app.put('/:jobId', async (c) => {
 
   const supabase = adminClient()
 
+  // Fetch the PK (id) — job_applications FK references open_position.id, not open_position.job_id
   const { data: job } = await supabase
     .from('open_position')
-    .select('job_id')
+    .select('id')
     .eq('job_id', jobId)
     .maybeSingle()
   if (!job) return c.json({ error: 'Job not found', success: false }, 404)
 
+  const positionId = job.id
   const now = new Date().toISOString()
 
   // Preserve original applied_at if it already exists
@@ -94,7 +98,7 @@ app.put('/:jobId', async (c) => {
     .from('job_applications')
     .select('applied_at')
     .eq('user_id', user.id)
-    .eq('job_id', jobId)
+    .eq('job_id', positionId)
     .maybeSingle()
 
   const appliedAt = existing?.applied_at ?? now
@@ -102,7 +106,7 @@ app.put('/:jobId', async (c) => {
   const { data: upserted, error } = await supabase
     .from('job_applications')
     .upsert(
-      { user_id: user.id, job_id: jobId, status: 'applied', applied_at: appliedAt, updated_at: now },
+      { user_id: user.id, job_id: positionId, status: 'applied', applied_at: appliedAt, updated_at: now },
       { onConflict: 'user_id,job_id' },
     )
     .select('applied_at')
@@ -124,11 +128,19 @@ app.delete('/:jobId', async (c) => {
 
   const supabase = adminClient()
 
+  // Fetch the PK (id) — job_applications FK references open_position.id, not open_position.job_id
+  const { data: job } = await supabase
+    .from('open_position')
+    .select('id')
+    .eq('job_id', jobId)
+    .maybeSingle()
+  if (!job) return c.json({ error: 'Job not found', success: false }, 404)
+
   const { error } = await supabase
     .from('job_applications')
     .delete()
     .eq('user_id', user.id)
-    .eq('job_id', jobId)
+    .eq('job_id', job.id)
 
   if (error) return c.json({ error: 'Failed to delete application', success: false }, 500)
 
