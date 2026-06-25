@@ -56,7 +56,10 @@ app.post('/:jobId/click', async (c) => {
         { user_id: user.id, job_id: jobId, status: 'clicked', apply_clicked_at: now, updated_at: now },
         { onConflict: 'user_id,job_id' },
       )
-    if (error) return c.json({ error: 'Failed to record click', success: false }, 500)
+    if (error) {
+      console.error('[job-applications/click] upsert error:', JSON.stringify(error))
+      return c.json({ error: 'Failed to record click', detail: error.message, code: error.code, success: false }, 500)
+    }
   }
 
   return c.json({ success: true })
