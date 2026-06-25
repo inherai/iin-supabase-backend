@@ -80,20 +80,41 @@ app.get('/', async (c) => {
         
         if (error) throw error;
         
-        // בדיקה אם המשרה הבודדת שמורה
+        // בדיקה אם המשרה הבודדת שמורה + סטטוס הגשת מועמדות
         let isSaved = false;
+        let applicationStatus: string | null = null;
+        let hasApplied = false;
+        let appliedAt: string | null = null;
+
         if (userId && data) {
-            const { data: saveEntry } = await supabaseClient
-                .from('saved_resources')
-                .select('id')
-                .eq('user_id', userId)
-                .eq('saved_resource_id', data.job_id)
-                .eq('saved_resource_type', 'position')
-                .maybeSingle();
-            isSaved = !!saveEntry;
+            const [saveResult, appResult] = await Promise.all([
+                supabaseClient
+                    .from('saved_resources')
+                    .select('id')
+                    .eq('user_id', userId)
+                    .eq('saved_resource_id', data.job_id)
+                    .eq('saved_resource_type', 'position')
+                    .maybeSingle(),
+                supabaseClient
+                    .from('job_applications')
+                    .select('status, applied_at')
+                    .eq('user_id', userId)
+                    .eq('job_id', data.job_id)
+                    .maybeSingle(),
+            ]);
+            isSaved = !!saveResult.data;
+            applicationStatus = appResult.data?.status ?? null;
+            hasApplied = appResult.data?.status === 'applied';
+            appliedAt = appResult.data?.applied_at ?? null;
         }
 
-        result = data ? { ...data, is_saved: isSaved } : null;
+        result = data ? {
+            ...data,
+            is_saved: isSaved,
+            application_status: applicationStatus,
+            has_applied: hasApplied,
+            applied_at: appliedAt,
+        } : null;
         totalCount = data ? 1 : 0;
     } else {
       const to = from + limit - 1
@@ -180,24 +201,47 @@ app.get('/', async (c) => {
         
         result = data;
 
-        // --- העשרה: בדיקה אילו משרות שמורות (Batch Check) ---
+        // --- העשרה: שמירות + סטטוס הגשת מועמדות (Batch, parallel) ---
         if (userId && data && data.length > 0) {
             const jobIds = data.map((j: any) => j.job_id);
-            const { data: userSaves } = await supabaseClient
-                .from('saved_resources')
-                .select('saved_resource_id')
-                .eq('user_id', userId)
-                .eq('saved_resource_type', 'position')
-                .in('saved_resource_id', jobIds);
 
-            const savedSet = new Set(userSaves?.map((s: any) => s.saved_resource_id));
-            
-            result = data.map((job: any) => ({
-                ...job,
-                is_saved: savedSet.has(job.job_id)
-            }));
+            const [savesResult, applicationsResult] = await Promise.all([
+                supabaseClient
+                    .from('saved_resources')
+                    .select('saved_resource_id')
+                    .eq('user_id', userId)
+                    .eq('saved_resource_type', 'position')
+                    .in('saved_resource_id', jobIds),
+                supabaseClient
+                    .from('job_applications')
+                    .select('job_id, status, applied_at')
+                    .eq('user_id', userId)
+                    .in('job_id', jobIds),
+            ]);
+
+            const savedSet = new Set(savesResult.data?.map((s: any) => s.saved_resource_id));
+            const applicationMap = new Map(
+                applicationsResult.data?.map((a: any) => [String(a.job_id), a]) ?? []
+            );
+
+            result = data.map((job: any) => {
+                const app = applicationMap.get(String(job.job_id));
+                return {
+                    ...job,
+                    is_saved: savedSet.has(job.job_id),
+                    application_status: app?.status ?? null,
+                    has_applied: app?.status === 'applied',
+                    applied_at: app?.applied_at ?? null,
+                };
+            });
         } else {
-            result = data?.map((job: any) => ({ ...job, is_saved: false }));
+            result = data?.map((job: any) => ({
+                ...job,
+                is_saved: false,
+                application_status: null,
+                has_applied: false,
+                applied_at: null,
+            }));
         }
 
         totalCount = count || 0;
