@@ -94,6 +94,13 @@ app.post("/", async (c) => {
       userInsert.privacy_picture = ["community", "recruiters"];
       userInsert.privacy_lastname = ["community", "recruiters"];
       userInsert.privacy_contact_details = ["community", "recruiters"];
+    } else {
+      // Explicitly default to "shared with no one" rather than leaving these columns
+      // null — matches EditPrivacyDialog.tsx's unchecked-by-default state and avoids
+      // relying solely on call sites interpreting null as fail-closed.
+      userInsert.privacy_picture = [];
+      userInsert.privacy_lastname = [];
+      userInsert.privacy_contact_details = [];
     }
 
     const { error: insertUserError } = await supabaseAdmin

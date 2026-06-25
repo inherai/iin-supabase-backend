@@ -363,9 +363,9 @@ app.post('/feed', async (c) => {
       const approvedFields: string[] = grantMap[(u as any).uuid] ?? []
 
       const canSeeGeneralInfo = !isAnonymous || isOwner
-      const canSeeLastName = isOwner || approvedFields.includes('last_name') || !u.privacy_lastname || hasAccess(u.privacy_lastname)
-      const canSeePicture = isOwner || approvedFields.includes('picture') || !u.privacy_picture || hasAccess(u.privacy_picture)
-      const canSeeContact = isOwner || approvedFields.includes('contact_details') || !u.privacy_contact_details || hasAccess(u.privacy_contact_details)
+      const canSeeLastName = isOwner || approvedFields.includes('last_name') || hasAccess(u.privacy_lastname)
+      const canSeePicture = isOwner || approvedFields.includes('picture') || hasAccess(u.privacy_picture)
+      const canSeeContact = isOwner || approvedFields.includes('contact_details') || hasAccess(u.privacy_contact_details)
 
       return {
         uuid: u.uuid,
@@ -461,7 +461,6 @@ app.post('/', async (c) => {
       const approvedFields: string[] = batchGrantMap[profile.uuid] ?? []
       const canSeeContact = isOwner ||
         approvedFields.includes('contact_details') ||
-        !profile.privacy_contact_details ||
         (Array.isArray(profile.privacy_contact_details) && profile.privacy_contact_details.includes(viewerBusinessRole))
 
       const effectiveEmail = batchContactMap[profile.uuid]?.email ?? profile.email ?? null
@@ -594,13 +593,14 @@ app.get('/', async (c) => {
           const isOwner = u.uuid === user.id
           const approvedFields: string[] = searchGrantMap[u.uuid] ?? []
           const raw = searchRawMap[u.uuid]
-          const privacyAllows = (arr: any) => !arr || !Array.isArray(arr) || arr.includes(viewerBusinessRole)
+          // Fail-closed: missing/non-array/empty privacy_* means "not shared with anyone" (matches
+          // EditPrivacyDialog.tsx's own interpretation — see the canonical privacyAllows definition below).
+          const privacyAllows = (arr: any) => Array.isArray(arr) && arr.includes(viewerBusinessRole)
           const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(u.privacy_lastname)
           const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(u.privacy_picture)
           const canSeeContact = isOwner ||
             approvedFields.includes('contact_details') ||
-            !u.privacy_contact_details ||
-            (Array.isArray(u.privacy_contact_details) && u.privacy_contact_details.includes(viewerBusinessRole))
+            privacyAllows(u.privacy_contact_details)
           const effectiveLastName = raw?.last_name ?? u.last_name ?? null
           const effectiveEmail = raw?.email ?? u.email ?? null
           const effectivePhone = raw?.phone ?? u.phone ?? null
@@ -732,13 +732,12 @@ app.get('/', async (c) => {
         const isOwner = u.uuid === user.id
         const approvedFields: string[] = aiGrantMap[u.uuid] ?? []
         const raw = aiRawMap[u.uuid]
-        const privacyAllows = (arr: any) => !arr || !Array.isArray(arr) || arr.includes(viewerBusinessRole)
+        const privacyAllows = (arr: any) => Array.isArray(arr) && arr.includes(viewerBusinessRole)
         const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(u.privacy_lastname)
         const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(u.privacy_picture)
         const canSeeContact = isOwner ||
           approvedFields.includes('contact_details') ||
-          !u.privacy_contact_details ||
-          (Array.isArray(u.privacy_contact_details) && u.privacy_contact_details.includes(viewerBusinessRole))
+          privacyAllows(u.privacy_contact_details)
         const effectiveLastName = raw?.last_name ?? u.last_name ?? null
         const effectiveEmail = raw?.email ?? u.email ?? null
         const effectivePhone = raw?.phone ?? u.phone ?? null
@@ -844,9 +843,13 @@ app.get('/', async (c) => {
       }
     }
 
-    // Grant overrides privacy — if recruiter has an approved field, show it regardless of privacy setting
+    // Grant overrides privacy — if recruiter has an approved field, show it regardless of privacy setting.
+    // Fail-closed: null/undefined/non-array/empty privacy_* means "not shared with anyone" — this must
+    // match EditPrivacyDialog.tsx's own interpretation (privacy_x || [] → unchecked boxes), otherwise a
+    // user who has never touched their privacy settings is told their data is hidden while it's actually
+    // public. Do not flip this back to "missing array = show to everyone" without updating that dialog too.
     const privacyAllows = (arr: any) =>
-      !arr || !Array.isArray(arr) || arr.includes(viewerBusinessRole)
+      Array.isArray(arr) && arr.includes(viewerBusinessRole)
 
     const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(targetUser.privacy_lastname)
     const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(targetUser.privacy_picture)

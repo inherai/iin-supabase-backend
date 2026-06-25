@@ -33,54 +33,39 @@ app.get("/", async (c) => {
     query = query
       .eq("receiver_id", user.id)
       .eq("status", "pending");
-  } 
-  // For accepted: both directions with search
+  }
+  // For accepted: unified RPC handles both directions, search, pagination
+  // and computes a real mutual_connections_count per row.
   else if (status === "accepted") {
-    // Use RPC for efficient search with joins
-    if (search) {
-      const { data, error } = await supabase.rpc(
-        "search_accepted_connections",
-        {
-          p_user_id: user.id,
-          p_search: search,
-          p_limit: limit,
-          p_offset: (page - 1) * limit,
-        }
-      );
+    const { data, error } = await supabase.rpc("get_accepted_connections", {
+      p_user_id: user.id,
+      p_search: search || null,
+      p_limit: limit,
+      p_offset: (page - 1) * limit,
+    });
 
-      if (error) {
-        console.error("RPC error:", error);
-        return c.json({ error: error.message, details: error }, 400);
-      }
-
-      const totalCount = data && data.length > 0 ? Number(data[0].count) : 0;
-      
-      // Remove count field from each row
-      const cleanData = data?.map((row: any) => {
-        const { count, ...rest } = row;
-        return rest;
-      }) ?? [];
-
-      return c.json({
-        data: cleanData,
-        pagination: {
-          page,
-          limit,
-          total: totalCount,
-          totalPages: Math.ceil(totalCount / limit),
-        },
-      });
+    if (error) {
+      console.error("RPC error:", error);
+      return c.json({ error: error.message, details: error }, 400);
     }
 
-    // Without search, use regular query
-    query = query
-      .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
-      .eq("status", "accepted");
+    const totalCount = data && data.length > 0 ? Number(data[0].count) : 0;
 
-    // Apply pagination
-    const from = (page - 1) * limit;
-    const to = from + limit - 1;
-    query = query.range(from, to);
+    // Remove count field from each row
+    const cleanData = data?.map((row: any) => {
+      const { count, ...rest } = row;
+      return rest;
+    }) ?? [];
+
+    return c.json({
+      data: cleanData,
+      pagination: {
+        page,
+        limit,
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / limit),
+      },
+    });
   }
   // No status: all connections (both directions)
   else {
@@ -89,22 +74,9 @@ app.get("/", async (c) => {
 
   query = query.order("created_at", { ascending: false });
 
-  const { data, error, count } = await query;
+  const { data, error } = await query;
 
   if (error) return c.json({ error: error.message }, 400);
-
-  // For accepted with pagination, return structured response
-  if (status === "accepted") {
-    return c.json({
-      data: data ?? [],
-      pagination: {
-        page,
-        limit,
-        total: count ?? 0,
-        totalPages: Math.ceil((count ?? 0) / limit),
-      },
-    });
-  }
 
   // For pending or no status filter, return simple array
   return c.json(data ?? []);

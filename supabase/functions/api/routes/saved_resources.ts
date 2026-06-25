@@ -69,7 +69,8 @@ app.get('/', async (c) => {
         )
         const savedMap = Object.fromEntries((saved ?? []).map((s: any) => [s.saved_resource_id, s.id]))
         const viewerRole: string = user.app_metadata?.role || 'guest'
-        const hasPrivacyAccess = (arr: any) => !arr || !Array.isArray(arr) || arr.includes(viewerRole)
+        // Fail-closed: missing/non-array/empty privacy_* means "not shared with anyone".
+        const hasPrivacyAccess = (arr: any) => Array.isArray(arr) && arr.includes(viewerRole)
 
         profiles = (profileResult.data ?? []).map((p: any) => {
           const approvedFields: string[] = grantMap[p.uuid] ?? []

@@ -226,15 +226,13 @@ app.post('/', async (c) => {
     const grant = grantMap[u.uuid]
     const approvedFields: string[] | undefined = grant?.approved_fields
 
-    // Privacy check: null means open/public (same logic as can_view_profile_picture RPC)
+    // Fail-closed: missing/non-array/empty privacy_* means "not shared with anyone"
+    // (matches EditPrivacyDialog.tsx's own interpretation — see hasPrivacyAccess in _matchHelpers.ts).
     const canSeeName = approvedFields?.includes('last_name') ||
-      !u.user_privacy_lastname ||
       hasPrivacyAccess(u.user_privacy_lastname, viewerRole)
     const canSeePicture = approvedFields?.includes('picture') ||
-      !u.user_privacy_picture ||
       hasPrivacyAccess(u.user_privacy_picture, viewerRole)
     const canSeeContact = approvedFields?.includes('contact_details') ||
-      !u.privacy_contact_details ||
       hasPrivacyAccess(u.privacy_contact_details, viewerRole)
 
     // Compute which fields are hidden from this recruiter
@@ -604,14 +602,13 @@ app.post('/batch-profiles', async (c) => {
     const grant = grantMap[u.uuid]
     const approvedFields: string[] | undefined = grant?.approved_fields
 
+    // Fail-closed: missing/non-array/empty privacy_* means "not shared with anyone"
+    // (matches EditPrivacyDialog.tsx's own interpretation — see hasPrivacyAccess in _matchHelpers.ts).
     const canSeeName = approvedFields?.includes('last_name') ||
-      !u.user_privacy_lastname ||
       hasPrivacyAccess(u.user_privacy_lastname, viewerRole)
     const canSeePicture = approvedFields?.includes('picture') ||
-      !u.user_privacy_picture ||
       hasPrivacyAccess(u.user_privacy_picture, viewerRole)
     const canSeeContact = approvedFields?.includes('contact_details') ||
-      !u.privacy_contact_details ||
       hasPrivacyAccess(u.privacy_contact_details, viewerRole)
 
     const hiddenFields: string[] = []

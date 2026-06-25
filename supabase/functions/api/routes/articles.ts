@@ -1927,7 +1927,7 @@ app.get('/:id/comments', async (c) => {
   try {
     const { data, error } = await supabase
       .from('article_comments')
-      .select('id, content, created_at, author_uuid')
+      .select('id, content, created_at, author_uuid, parent_comment_id')
       .eq('article_id', articleId)
       .order('created_at', { ascending: true })
 
@@ -1945,12 +1945,24 @@ app.get('/:id/comments', async (c) => {
       }
     }
 
-    const comments = (data || []).map((c: any) => ({
+    const enriched = (data || []).map((c: any) => ({
       ...c,
+      replies: [] as any[],
       users: userMap[c.author_uuid] || null,
     }))
 
-    return c.json({ comments })
+    const topLevel: any[] = []
+    const byId: Record<string, any> = {}
+    for (const c of enriched) byId[c.id] = c
+    for (const c of enriched) {
+      if (c.parent_comment_id && byId[c.parent_comment_id]) {
+        byId[c.parent_comment_id].replies.push(c)
+      } else {
+        topLevel.push(c)
+      }
+    }
+
+    return c.json({ comments: topLevel })
   } catch (err) {
     console.error('GET /articles/:id/comments error:', err)
     return c.json({ error: 'Internal server error' }, 500)
@@ -1971,16 +1983,32 @@ app.post('/:id/comments', async (c) => {
   const supabase = c.get('supabase')
   const articleId = c.req.param('id')
 
-  const { content } = await c.req.json()
+  const { content, parent_comment_id } = await c.req.json()
   if (!content?.trim()) return c.json({ error: 'Content is required' }, 400)
 
   const sanitizedContent = sanitizeHtml(content)
 
   try {
+    let parentCommentAuthorId: string | null = null
+
+    if (parent_comment_id) {
+      const { data: parentComment, error: parentError } = await supabase
+        .from('article_comments')
+        .select('id, article_id, parent_comment_id, author_uuid')
+        .eq('id', parent_comment_id)
+        .single()
+
+      if (parentError || !parentComment) return c.json({ error: 'Parent comment not found' }, 404)
+      if (parentComment.article_id !== articleId) return c.json({ error: 'Parent comment not found' }, 404)
+      if (parentComment.parent_comment_id) return c.json({ error: 'Cannot reply to a reply' }, 400)
+
+      parentCommentAuthorId = parentComment.author_uuid
+    }
+
     const { data: comment, error } = await supabase
       .from('article_comments')
-      .insert({ article_id: articleId, author_uuid: user.id, content: sanitizedContent })
-      .select('id, content, created_at, author_uuid')
+      .insert({ article_id: articleId, author_uuid: user.id, content: sanitizedContent, parent_comment_id: parent_comment_id || null })
+      .select('id, content, created_at, author_uuid, parent_comment_id')
       .single()
 
     if (error) throw error
@@ -1994,8 +2022,9 @@ app.post('/:id/comments', async (c) => {
     const articleAuthorId: string | null = articleRes.data?.author_uuid ?? null
     const authorData = authorDataRes.data
 
-    // Notify the article author about the new comment (skip if they wrote it themselves)
-    if (articleAuthorId && articleAuthorId !== user.id) {
+    // Notify the article author about the new comment (skip if they wrote it themselves,
+    // or if they're the parent comment's author — they'll get the more specific ARTICLE_REPLY below)
+    if (articleAuthorId && articleAuthorId !== user.id && articleAuthorId !== parentCommentAuthorId) {
       await supabase.from('notifications').insert({
         user_id: articleAuthorId,
         actor_id: user.id,
@@ -2006,9 +2035,21 @@ app.post('/:id/comments', async (c) => {
       })
     }
 
-    // Notify mentioned users (exclude the commenter and the article author who already got ARTICLE_COMMENT)
+    // Notify the parent comment's author about the reply (skip if replying to own comment)
+    if (parentCommentAuthorId && parentCommentAuthorId !== user.id) {
+      await supabase.from('notifications').insert({
+        user_id: parentCommentAuthorId,
+        actor_id: user.id,
+        target_id: articleId,
+        type: 'ARTICLE_REPLY',
+        count: 1,
+        is_read: false,
+      })
+    }
+
+    // Notify mentioned users (exclude the commenter and anyone who already got a notification above)
     const mentionedIds = extractArticleCommentMentionIds(sanitizedContent)
-    const excludeFromMention = [user.id, ...(articleAuthorId ? [articleAuthorId] : [])]
+    const excludeFromMention = [user.id, ...(articleAuthorId ? [articleAuthorId] : []), ...(parentCommentAuthorId ? [parentCommentAuthorId] : [])]
     for (const mentionedId of mentionedIds) {
       if (excludeFromMention.includes(mentionedId)) continue
       await supabase.from('notifications').insert({
@@ -2023,6 +2064,7 @@ app.post('/:id/comments', async (c) => {
 
     const enrichedComment = {
       ...comment,
+      replies: [],
       users: authorData ? { id: authorData.uuid, first_name: authorData.first_name, last_name: authorData.last_name, profile_image_url: authorData.image || null, headline: authorData.headline || null } : null,
     }
 
