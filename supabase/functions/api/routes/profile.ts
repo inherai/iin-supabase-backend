@@ -904,8 +904,31 @@ app.get('/', async (c) => {
     }
 
     let networkSuggestions: any[] = []
+    let mutualConnections: { total: number; sample: any[] } = { total: 0, sample: [] }
 
     if (targetUser.uuid !== user.id) {
+  // Mutual connections — people both the viewer and the target are connected
+  // to. See add_get_mutual_connections.sql.
+  const { data: mutualRows, error: mutualError } = await supabase.rpc('get_mutual_connections', {
+    p_viewer_id: user.id,
+    p_target_id: targetUser.uuid,
+    p_limit: 3
+  })
+
+  if (mutualError) {
+    console.error('Failed to fetch mutual connections:', mutualError.message);
+  } else {
+    mutualConnections = {
+      total: mutualRows?.[0]?.count ?? 0,
+      sample: (mutualRows ?? []).map((row: any) => ({
+        uuid: row.uuid,
+        first_name: row.first_name,
+        last_name: row.last_name,
+        image: row.image,
+      }))
+    }
+  }
+
   // "People similar to this profile" — second-degree connections of the
   // target, ranked by shared connections with them. See add_profile_relative_suggestions.sql.
   const { data: suggestionRows, error: suggestionsError } = await supabase.rpc('get_suggested_users_for_profile', {
@@ -945,7 +968,7 @@ app.get('/', async (c) => {
   }
 }
 
-    return c.json({ ...publicProfile, network_suggestions: networkSuggestions })
+    return c.json({ ...publicProfile, network_suggestions: networkSuggestions, mutual_connections: mutualConnections })
 
   } catch (err: any) {
     return c.json({ error: err.message }, 500)

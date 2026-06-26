@@ -105,7 +105,7 @@ BEGIN
 
   RETURN QUERY
   SELECT
-    u.uuid, u.first_name, u.last_name, u.image, u.headline, u.role,
+    u.uuid, u.first_name, u.last_name, u.image, u.headline, u.role::TEXT,
     psc.mutual_with_target_count,
     COUNT(*) OVER() AS count
   FROM profile_suggestion_cache psc
