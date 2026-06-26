@@ -669,6 +669,23 @@ app.get('/', async (c) => {
         userIds = userIds.filter((id: string) => activeSet.has(id))
       }
 
+      // Exclude anyone already connected (or with a pending request) with the
+      // viewer. match_users' own internal exclusion logic lives only in the DB
+      // function body (not visible/auditable from this repo), so this is enforced
+      // here defensively as well — a suggestion the viewer is already connected
+      // to is never a valid "people you may know" result.
+      if (userIds.length > 0) {
+        const { data: existingConnections } = await supabase
+          .from('connections')
+          .select('requester_id, receiver_id')
+          .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+          .in('status', ['accepted', 'pending'])
+        const excludedIds = new Set(
+          (existingConnections ?? []).map((c: any) => c.requester_id === user.id ? c.receiver_id : c.requester_id)
+        )
+        userIds = userIds.filter((id: string) => !excludedIds.has(id))
+      }
+
       if (userIds.length === 0) {
         return c.json({
           users: [],
@@ -886,16 +903,40 @@ app.get('/', async (c) => {
       } : null
     }
 
+    let networkSuggestions: any[] = []
+
     if (targetUser.uuid !== user.id) {
+  // "People similar to this profile" — second-degree connections of the
+  // target, ranked by shared connections with them. See add_profile_relative_suggestions.sql.
+  const { data: suggestionRows, error: suggestionsError } = await supabase.rpc('get_suggested_users_for_profile', {
+    p_viewer_id: user.id,
+    p_target_id: targetUser.uuid,
+    p_limit: 6,
+    p_offset: 0
+  })
+
+  if (suggestionsError) {
+    console.error('Failed to fetch profile-relative suggestions:', suggestionsError.message);
+  } else {
+    networkSuggestions = (suggestionRows ?? []).map((row: any) => ({
+      uuid: row.uuid,
+      first_name: row.first_name,
+      last_name: row.last_name,
+      image: row.image,
+      headline: row.headline,
+      role: row.role,
+    }))
+  }
+
   // ביצוע Upsert - אם קיים שילוב של viewer_id ו-viewed_id, הוא רק יעדכן את הזמן
   const { error: upsertError } = await supabase
     .from('profile_views')
     .upsert(
-      { 
-        viewer_id: user.id, 
+      {
+        viewer_id: user.id,
         viewed_id: targetUser.uuid,
-        viewed_at: new Date().toISOString() 
-      }, 
+        viewed_at: new Date().toISOString()
+      },
       { onConflict: 'viewer_id,viewed_id' } // דורש אינדקס ייחודי ב-DB
     );
 
@@ -904,7 +945,7 @@ app.get('/', async (c) => {
   }
 }
 
-    return c.json(publicProfile)
+    return c.json({ ...publicProfile, network_suggestions: networkSuggestions })
 
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
