@@ -151,7 +151,7 @@ app.get('/', async (c) => {
 
       let query = supabaseClient
         .from('open_position')
-        .select('job_id, job_title, company_name, company_id, location, location_region, time_posted, created_at, employment_type, seniority_level, companies(id, name, logo)', { count: 'exact' })
+        .select('id, job_id, job_title, company_name, company_id, location, location_region, time_posted, created_at, employment_type, seniority_level, companies(id, name, logo)', { count: 'exact' })
         .not('job_description_html', 'is', null)
         .or(VISIBLE_JOBS_FILTER)
         .order('created_at', { ascending: false })

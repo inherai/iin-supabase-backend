@@ -1,4 +1,5 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
+import { supabaseAdmin } from "../middleware.ts";
 
 const app = new Hono();
 
@@ -92,15 +93,34 @@ app.get("/", async (c) => {
 
     const hasConnections = connectedUuids.length > 0;
 
+    // comments.posted_by_uuid doesn't exist — the table only stores the
+    // commenter's email (sender), so network comments are resolved via
+    // connected users' emails instead of a direct uuid filter.
+    const connectedEmails: Set<string> = hasConnections
+      ? new Set(
+          (
+            await supabaseAdmin
+              .from("users")
+              .select("email")
+              .in("uuid", connectedUuids)
+          ).data?.map((u: any) => (u.email || "").toLowerCase()).filter(Boolean) ?? []
+        )
+      : new Set();
+
     const [ncRes, gcRes, nlRes, glRes, npRes] = await Promise.all([
       // Network comments on active posts since $since
-      hasConnections
+      connectedEmails.size > 0
         ? supabase
             .from("comments")
-            .select("id", { count: "exact", head: true })
+            .select("sender")
             .gt("created_at", since)
             .in("post_id", activePostIds)
-            .in("posted_by_uuid", connectedUuids)
+            .then(({ data, error }) => ({
+              count: (data || []).filter((c: any) =>
+                connectedEmails.has((c.sender || "").toLowerCase())
+              ).length,
+              error,
+            }))
         : Promise.resolve({ count: 0, error: null }),
 
       // All comments on active posts since $since
