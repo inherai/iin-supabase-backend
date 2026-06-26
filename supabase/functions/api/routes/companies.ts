@@ -13,13 +13,22 @@ app.get('/', async (c) => {
   const page = parseInt(c.req.query('page') || '1')
   const pageSize = parseInt(c.req.query('pageSize') || c.req.query('limit') || '20')
   const search = c.req.query('search') || ''
+  const sort = c.req.query('sort') || 'latest_job'
   const offset = (page - 1) * pageSize
 
   let query = supabase
     .from('companies_ranked')
     .select('*', { count: 'exact' })
-    .order('latest_job_at', { ascending: false, nullsFirst: false })
-    .order('id', { ascending: true })
+
+  if (sort === 'members') {
+    query = query
+      .order('employees_count', { ascending: false, nullsFirst: false })
+      .order('id', { ascending: true })
+  } else {
+    query = query
+      .order('latest_job_at', { ascending: false, nullsFirst: false })
+      .order('id', { ascending: true })
+  }
 
   if (search) {
     query = query.ilike('name', `%${search}%`)
@@ -70,7 +79,6 @@ app.get('/', async (c) => {
     const nextCompany = {
       ...company,
       employees: employeesDetails,
-      employees_count: employeeIds.filter((id: any) => id !== null && id !== undefined).length,
       open_positions_count: company.open_positions_count ?? 0,
     }
 
