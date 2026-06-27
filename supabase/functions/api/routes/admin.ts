@@ -49,18 +49,33 @@ app.get("/dashboard", async (c) => {
 
 // ==================== ANALYTICS ====================
 
+// PostgREST caps unranged selects at db-max-rows (1000) — page through to get every row.
+async function fetchAllRows(db: ReturnType<typeof getAdminClient>, table: string, select: string, applyFilters?: (q: any) => any) {
+  const PAGE_SIZE = 1000;
+  const rows: any[] = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    let query = db.from(table).select(select);
+    if (applyFilters) query = applyFilters(query);
+    const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
+
 app.get("/analytics", async (c) => {
   const db = getAdminClient();
 
-  const [activityRes, usersRes] = await Promise.all([
-    db.from("user_activity").select("*"),
-    db.from("users")
-      .select("uuid, first_name, last_name, email, created_at, status")
-      .not("email", "like", "deleted_%@deleted.local"),
+  const [activities, users] = await Promise.all([
+    fetchAllRows(db, "user_activity", "*"),
+    fetchAllRows(
+      db,
+      "users",
+      "uuid, first_name, last_name, email, created_at, status",
+      (q) => q.not("email", "like", "deleted_%@deleted.local")
+    ),
   ]);
-
-  const activities: any[] = activityRes.data || [];
-  const users: any[] = usersRes.data || [];
 
   const userMap = new Map(users.map((u) => [u.uuid, u]));
 
