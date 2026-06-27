@@ -1377,6 +1377,15 @@ if (targetUserId) {
     if (postsError) throw postsError
     if (!posts || posts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
 
+    // Streak/visit tracking — only on first load of the default feed (not pagination, not the v2 path).
+    if (current_user_uuid && !last_effective_date && !last_id) {
+      const supabaseAdminVisit = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      )
+      await supabaseAdminVisit.rpc('record_feed_visit', { p_user_id: current_user_uuid })
+    }
+
     const visiblePosts = viewerIsRecruiter
       ? posts.filter((p: any) => p.community_members_only !== true)
       : posts
