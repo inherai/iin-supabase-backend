@@ -1466,6 +1466,7 @@ app.get("/invite-week-stats", async (c) => {
 // ==================== PLATFORM JOIN REQUESTS ====================
 
 app.get("/join-requests", async (c) => {
+  try {
   const db = getAdminClient();
   const page = parseInt(c.req.query("page") || "1");
   const limit = parseInt(c.req.query("limit") || "25");
@@ -1540,6 +1541,9 @@ app.get("/join-requests", async (c) => {
   });
 
   return c.json({ requests: enriched, total: count ?? 0 });
+  } catch (err: any) {
+    return c.json({ error: err?.message ?? String(err) }, 500);
+  }
 });
 
 app.patch("/join-requests/:id", async (c) => {
