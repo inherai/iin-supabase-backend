@@ -1493,16 +1493,17 @@ app.get("/join-requests", async (c) => {
     const { data: allMatching, error } = await query.order("created_at", { ascending: false });
     if (error) return c.json({ error: error.message }, 500);
 
-    const emails = [...new Set((allMatching || []).map((r: any) => r.email).filter(Boolean))];
-    const { data: matchingInvites } = emails.length > 0
-      ? await db.from("invites").select("recipient_email,inviter_id,status,created_at").in("recipient_email", emails)
-      : { data: [] };
+    const norm = (e: unknown) => (typeof e === "string" ? e.trim().toLowerCase() : "");
+
+    const { data: allInvites } = await db.from("invites").select("recipient_email,inviter_id,status,created_at");
 
     const inviteByEmail = new Map<string, any>();
-    for (const inv of matchingInvites || []) {
-      const existing = inviteByEmail.get(inv.recipient_email);
+    for (const inv of allInvites || []) {
+      const key = norm(inv.recipient_email);
+      if (!key) continue;
+      const existing = inviteByEmail.get(key);
       if (!existing || new Date(inv.created_at) > new Date(existing.created_at)) {
-        inviteByEmail.set(inv.recipient_email, inv);
+        inviteByEmail.set(key, inv);
       }
     }
 
@@ -1513,7 +1514,7 @@ app.get("/join-requests", async (c) => {
     const inviterMap = new Map((inviters || []).map((u: any) => [u.uuid, u]));
 
     let enriched = (allMatching ?? []).map((r: any) => {
-      const inv = inviteByEmail.get(r.email);
+      const inv = inviteByEmail.get(norm(r.email));
       return {
         ...r,
         invited: !!inv,
