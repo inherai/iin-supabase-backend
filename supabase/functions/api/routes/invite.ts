@@ -213,8 +213,8 @@ app.post("/", async (c) => {
       ? Math.floor((Date.now() - new Date(inviterData.created_at).getTime()) / (1000 * 60 * 60 * 24))
       : 0;
 
-    if (actualDays < 10) {
-      return c.json({ error: "invite_gate_failed", reason: "new_user", daysLeft: 10 - actualDays }, 403);
+    if (actualDays < 7) {
+      return c.json({ error: "invite_gate_failed", reason: "new_user", daysLeft: 7 - actualDays }, 403);
     }
 
     const cacheAge = inviterData?.scores_cached_at
