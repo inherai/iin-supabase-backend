@@ -1474,6 +1474,7 @@ app.get("/join-requests", async (c) => {
   const status = c.req.query("status") || "";
   const decision = c.req.query("decision") || "";
   const experience = c.req.query("experience") || "";
+  const invited = c.req.query("invited") || "";
   const offset = (page - 1) * limit;
 
   let query = db.from("platform_join_requests").select("*", { count: "exact" });
@@ -1489,12 +1490,56 @@ app.get("/join-requests", async (c) => {
   if (experience === "none") query = query.is("years_experience", null);
   else if (experience) query = query.eq("years_experience", experience);
 
+  if (invited === "yes" || invited === "no") {
+    const { data: invitedRows } = await db.from("invites").select("recipient_email");
+    const invitedEmails = [...new Set((invitedRows || []).map((i: any) => i.recipient_email).filter(Boolean))];
+    if (invited === "yes") {
+      query = invitedEmails.length > 0 ? query.in("email", invitedEmails) : query.eq("email", "__none__");
+    } else if (invitedEmails.length > 0) {
+      query = query.not(
+        "email",
+        "in",
+        `(${invitedEmails.map((e) => `"${e.replace(/"/g, '\\"')}"`).join(",")})`
+      );
+    }
+  }
+
   const { data, count, error } = await query
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
   if (error) return c.json({ error: error.message }, 500);
-  return c.json({ requests: data ?? [], total: count ?? 0 });
+
+  const pageEmails = [...new Set((data || []).map((r: any) => r.email).filter(Boolean))];
+  const { data: matchingInvites } = pageEmails.length > 0
+    ? await db.from("invites").select("recipient_email,inviter_id,status,created_at").in("recipient_email", pageEmails)
+    : { data: [] };
+
+  const inviteByEmail = new Map<string, any>();
+  for (const inv of matchingInvites || []) {
+    const existing = inviteByEmail.get(inv.recipient_email);
+    if (!existing || new Date(inv.created_at) > new Date(existing.created_at)) {
+      inviteByEmail.set(inv.recipient_email, inv);
+    }
+  }
+
+  const inviterIds = [...new Set(Array.from(inviteByEmail.values()).map((i: any) => i.inviter_id).filter(Boolean))];
+  const { data: inviters } = inviterIds.length > 0
+    ? await db.from("users").select("uuid,first_name,last_name,email").in("uuid", inviterIds)
+    : { data: [] };
+  const inviterMap = new Map((inviters || []).map((u: any) => [u.uuid, u]));
+
+  const enriched = (data ?? []).map((r: any) => {
+    const inv = inviteByEmail.get(r.email);
+    return {
+      ...r,
+      invited: !!inv,
+      invite_status: inv?.status ?? null,
+      invited_by: inv?.inviter_id ? inviterMap.get(inv.inviter_id) ?? null : null,
+    };
+  });
+
+  return c.json({ requests: enriched, total: count ?? 0 });
 });
 
 app.patch("/join-requests/:id", async (c) => {
