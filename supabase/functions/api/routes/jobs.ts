@@ -34,6 +34,30 @@ const SENIORITY_LEVEL_MAP: Record<string, string[]> = {
   Management: ['Management', 'Director', 'Executive'],
 }
 
+// `open_position.seniority_level` is free text from the source feed — either a
+// raw year count ("5") or a label ("Mid-Senior level"). Map it down to a single
+// minimum-years number for display, using the same label vocabulary and ranges
+// as SENIORITY_LEVEL_MAP (the lower bound of each category's numeric range).
+const SENIORITY_TEXT_TO_MIN_YEARS: Record<string, number> = {
+  internship: 0,
+  'entry level': 0,
+  junior: 0,
+  associate: 2, // overlap point of Junior's (0-2) and Mid's (2-4) ranges
+  mid: 2,
+  'mid-senior level': 4, // top of Mid's range, just below Senior's floor
+  senior: 5,
+  management: 8,
+  director: 8,
+  executive: 8,
+}
+
+function seniorityLevelToMinYears(raw: string | null | undefined): number | null {
+  if (!raw) return null
+  const trimmed = raw.trim()
+  if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10)
+  return SENIORITY_TEXT_TO_MIN_YEARS[trimmed.toLowerCase()] ?? null
+}
+
 app.get('/', async (c) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -110,6 +134,7 @@ app.get('/', async (c) => {
 
         result = data ? {
             ...data,
+            min_experience_years: seniorityLevelToMinYears(data.seniority_level),
             is_saved: isSaved,
             application_status: applicationStatus,
             has_applied: hasApplied,
@@ -230,6 +255,7 @@ app.get('/', async (c) => {
                 const app = applicationMap.get(String(job.id));
                 return {
                     ...job,
+                    min_experience_years: seniorityLevelToMinYears(job.seniority_level),
                     is_saved: savedSet.has(job.job_id),
                     application_status: app?.status ?? null,
                     has_applied: app?.status === 'applied',
@@ -239,6 +265,7 @@ app.get('/', async (c) => {
         } else {
             result = data?.map((job: any) => ({
                 ...job,
+                min_experience_years: seniorityLevelToMinYears(job.seniority_level),
                 is_saved: false,
                 application_status: null,
                 has_applied: false,
