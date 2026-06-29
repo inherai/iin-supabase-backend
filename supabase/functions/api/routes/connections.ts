@@ -162,10 +162,15 @@ app.post("/", async (c) => {
 
   const body = await c.req.json();
   const receiverId = body?.receiver_id;
+  const rawMessage = typeof body?.message === "string" ? body.message.trim() : "";
+  const message = rawMessage.length > 0 ? rawMessage : null;
 
   if (!receiverId) return c.json({ error: "receiver_id is required" }, 400);
   if (receiverId === user.id) {
     return c.json({ error: "You cannot connect with yourself" }, 400);
+  }
+  if (message && message.length > 300) {
+    return c.json({ error: "Message must be 300 characters or fewer" }, 400);
   }
 
   const { data: existing, error: existingError } = await supabase
@@ -188,6 +193,7 @@ app.post("/", async (c) => {
         requester_id: user.id,
         receiver_id: receiverId,
         status: "pending",
+        message,
       },
     ])
     .select(CONNECTION_SELECT)
