@@ -79,6 +79,11 @@ export const authMiddleware = async (c: Context, next: Next) => {
     return await next();
   }
 
+  // Public profile share links — viewed by logged-out visitors outside the platform
+  if (c.req.path === '/api/public-profile' || c.req.path.startsWith('/api/public-profile/')) {
+    return await next();
+  }
+
   // Internal cron endpoint — authenticated via service role key inside the handler
   if (c.req.path === '/api/posts/publish-scheduled') {
     return await next();

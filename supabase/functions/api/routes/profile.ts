@@ -976,6 +976,150 @@ app.get('/', async (c) => {
 })
 
 // ====================================================================
+// PUT /api/profile/public-link
+// Enable/configure/disable the public, shareable profile link (/in/<slug>).
+// The actual public-facing read is served unauthenticated by routes/public-profile.ts —
+// this endpoint only manages the authenticated owner's settings.
+// ====================================================================
+const RESERVED_PUBLIC_SLUGS = new Set([
+  'admin', 'login', 'api', 'in', 'support', 'invite', 'careers',
+  'profile', 'dualldmin', 'about', 'help', 'onboarding', 'settings',
+])
+
+function slugifyPublicLink(value: string): string {
+  return (value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 50)
+}
+
+function isValidPublicSlugFormat(slug: string): boolean {
+  return /^[a-z0-9-]{3,50}$/.test(slug) && !RESERVED_PUBLIC_SLUGS.has(slug)
+}
+
+async function isPublicSlugTaken(admin: any, slug: string, ownerUuid: string): Promise<boolean> {
+  const { data } = await admin
+    .from('public_profile_slug_history')
+    .select('user_uuid')
+    .eq('slug', slug)
+    .maybeSingle()
+  return Boolean(data) && data.user_uuid !== ownerUuid
+}
+
+async function generateUniquePublicSlug(admin: any, firstName: string, lastName: string, ownerUuid: string): Promise<string> {
+  const base = slugifyPublicLink(`${firstName ?? ''}-${lastName ?? ''}`) || 'member'
+  let candidate = base
+  for (let attempt = 0; attempt < 10; attempt++) {
+    if (!(await isPublicSlugTaken(admin, candidate, ownerUuid))) return candidate
+    candidate = `${base}-${Math.random().toString(36).slice(2, 6)}`
+  }
+  throw new Error('Could not generate a unique slug')
+}
+
+app.put('/public-link', async (c) => {
+  try {
+    const user = c.get('user')
+    const supabase = c.get('supabase')
+    if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+    const body = await c.req.json().catch(() => ({}))
+    const { enabled, slug: requestedSlug, settings } = body
+
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    const { data: currentUser } = await supabaseAdmin
+      .from('users')
+      .select('first_name, last_name, is_anonymous, public_profile_slug')
+      .eq('uuid', user.id)
+      .maybeSingle()
+
+    if (!currentUser) return c.json({ error: 'User not found' }, 404)
+
+    // Anonymous mode exists to keep a member hidden — enabling a public, internet-wide
+    // link would defeat that, so it's blocked here even if the dialog UI is bypassed.
+    if (enabled === true && currentUser.is_anonymous) {
+      return c.json({ error: 'anonymous_mode_active' }, 409)
+    }
+
+    const updates: any = {}
+
+    if (typeof enabled === 'boolean') {
+      updates.public_profile_enabled = enabled
+    }
+
+    if (settings && typeof settings === 'object') {
+      updates.public_profile_settings = {
+        show_last_name: Boolean(settings.show_last_name),
+        show_picture: Boolean(settings.show_picture),
+        show_location: Boolean(settings.show_location),
+        show_contact_details: Boolean(settings.show_contact_details),
+        sections: {
+          about: Boolean(settings.sections?.about),
+          experience: Boolean(settings.sections?.experience),
+          education: Boolean(settings.sections?.education),
+          skills: Boolean(settings.sections?.skills),
+          certifications: Boolean(settings.sections?.certifications),
+          languages: Boolean(settings.sections?.languages),
+          interests: Boolean(settings.sections?.interests),
+        },
+      }
+    }
+
+    // Slug handling — every assigned slug is recorded permanently in
+    // public_profile_slug_history (see add_public_profile_link.sql) and never freed,
+    // so a stale shared link can never later resolve to a different person.
+    if (enabled === true && !currentUser.public_profile_slug && !requestedSlug) {
+      const generated = await generateUniquePublicSlug(supabaseAdmin, currentUser.first_name, currentUser.last_name, user.id)
+      const { error: historyError } = await supabaseAdmin
+        .from('public_profile_slug_history')
+        .insert({ slug: generated, user_uuid: user.id })
+      if (historyError) return c.json({ error: 'Could not assign a slug, please try again' }, 500)
+      updates.public_profile_slug = generated
+    } else if (typeof requestedSlug === 'string' && requestedSlug.trim() && requestedSlug !== currentUser.public_profile_slug) {
+      const normalized = slugifyPublicLink(requestedSlug)
+      if (!isValidPublicSlugFormat(normalized)) {
+        return c.json({ error: 'invalid_slug' }, 400)
+      }
+      if (await isPublicSlugTaken(supabaseAdmin, normalized, user.id)) {
+        return c.json({ error: 'slug_taken' }, 409)
+      }
+      const { error: historyError } = await supabaseAdmin
+        .from('public_profile_slug_history')
+        .insert({ slug: normalized, user_uuid: user.id })
+      if (historyError) return c.json({ error: 'slug_taken' }, 409)
+      updates.public_profile_slug = normalized
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return c.json({ error: 'no changes provided' }, 400)
+    }
+
+    const { error: updateError } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('uuid', user.id)
+
+    if (updateError) return c.json({ error: updateError.message }, 500)
+
+    return c.json({
+      success: true,
+      updated: {
+        ...updates,
+        public_profile_slug: updates.public_profile_slug ?? currentUser.public_profile_slug,
+      },
+    })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500)
+  }
+})
+
+// ====================================================================
 // PUT /api/profile/privacy
 // עדכון הגדרות פרטיות
 // ====================================================================
@@ -992,9 +1136,16 @@ app.put('/privacy', async (c) => {
     if (privacy_lastname) updates.privacy_lastname = privacy_lastname
     if (privacy_picture) updates.privacy_picture = privacy_picture
     if (privacy_contact_details) updates.privacy_contact_details = privacy_contact_details
-    
+
     if (typeof is_anonymous === 'boolean') {
       updates.is_anonymous = is_anonymous
+
+      // Anonymous mode exists specifically to keep a member hidden from the community —
+      // a live public profile link (visible to the entire internet) would defeat that
+      // purpose entirely, so turning anonymous mode on always retires it too.
+      if (is_anonymous) {
+        updates.public_profile_enabled = false
+      }
 
       // Read role from DB — JWT may be stale right after invite registration
       const supabaseAdmin = createClient(

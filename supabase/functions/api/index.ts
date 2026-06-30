@@ -10,6 +10,7 @@ import summaryRoute from './routes/summary.ts'
 import searchAiRoute from './routes/search-ai.ts'
 import jobsRoute from './routes/jobs.ts'
 import profileRoute from './routes/profile.ts'
+import publicProfileRoute from './routes/public-profile.ts'
 import likeRoute from './routes/like.ts'
 import connectionsRoute from './routes/connections.ts'
 import companiesRoute from './routes/companies.ts'
@@ -68,6 +69,7 @@ app.route('/summary', summaryRoute)
 app.route('/search-ai', searchAiRoute)
 app.route('/jobs', jobsRoute)
 app.route('/profile', profileRoute)
+app.route('/public-profile', publicProfileRoute)
 app.route('/like', likeRoute)
 app.route('/connections', connectionsRoute)
 app.route('/companies', companiesRoute)

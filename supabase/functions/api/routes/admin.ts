@@ -522,6 +522,8 @@ app.delete("/users/:id", async (c) => {
     privacy_picture: null,
     privacy_lastname: null,
     privacy_contact_details: null,
+    // a deleted account's public profile link (if any) must stop resolving
+    public_profile_enabled: false,
     // NOT NULL jsonb fields → empty array (cannot be null)
     languages: [],
     experience: [],
