@@ -1487,6 +1487,7 @@ app.get("/join-requests", async (c) => {
     const decision = c.req.query("decision") || "";
     const experience = c.req.query("experience") || "";
     const invited  = c.req.query("invited")  || "";
+    const sortDir  = c.req.query("sortDir")  || "desc";
 
     const { data, error } = await db.rpc("admin_join_requests_with_invites", {
       p_search:     search,
@@ -1497,6 +1498,7 @@ app.get("/join-requests", async (c) => {
       p_invited:    invited,
       p_page:       page,
       p_limit:      limit,
+      p_sort_dir:   sortDir,
     });
 
     if (error) return c.json({ error: error.message }, 500);

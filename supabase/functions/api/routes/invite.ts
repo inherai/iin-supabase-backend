@@ -128,6 +128,7 @@ app.post("/", async (c) => {
     const personalNote = body?.personal_note?.trim();
     const acquaintanceSource = body?.acquaintance_source?.trim();
     const termsAccepted = body?.terms_accepted;
+    const requestedRole = body?.role === "recruiters" ? "recruiters" : "community";
 
     if (!recipientEmail.trim()) {
       return c.json({ error: "recipient_email is required" }, 400);
@@ -184,7 +185,7 @@ app.post("/", async (c) => {
         terms_accepted: true,
         terms_accepted_at: createdAt.toISOString(),
         status: "pending",
-        role: "community",
+        role: requestedRole,
         views_count: 0,
         last_viewed_at: null,
         created_at: createdAt.toISOString(),
