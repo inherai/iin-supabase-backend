@@ -2,6 +2,7 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { calculateProfileStrength, calculateActivityScore } from './_scoreHelpers.ts';
 import OpenAI from "https://esm.sh/openai@4";
+import { sendInviteEmail } from '../lib/email.ts';
 
 const app = new Hono();
 
@@ -672,6 +673,14 @@ app.post("/invitations", async (c) => {
     .single();
 
   if (error) return c.json({ error: error.message }, 400);
+
+  const { data: inviterProfile } = await db.from("users").select("first_name,last_name").eq("uuid", user.id).maybeSingle();
+  const inviterName = inviterProfile
+    ? [inviterProfile.first_name, inviterProfile.last_name].filter(Boolean).join(" ") || "a duallin member"
+    : "a duallin member";
+
+  sendInviteEmail({ to: normalizedEmail, inviterName, token, personalNote: personalNote || null, expiresAt: expiresAt.toISOString() })
+    .catch((err: any) => { console.error("Failed to send admin invite email:", err.message); });
 
   return c.json(data, 201);
 });
@@ -1497,7 +1506,8 @@ app.get("/join-requests", async (c) => {
 
     const norm = (e: unknown) => (typeof e === "string" ? e.trim().toLowerCase() : "");
 
-    const { data: allInvites } = await db.from("invites").select("recipient_email,inviter_id,status,created_at").range(0, 9999);
+    const { data: allInvites, error: invitesError } = await db.from("invites").select("recipient_email,inviter_id,status,created_at").range(0, 9999);
+    if (invitesError) throw new Error(`invites query failed: ${invitesError.message}`);
 
     const inviteByEmail = new Map<string, any>();
     for (const inv of allInvites || []) {
@@ -1532,7 +1542,7 @@ app.get("/join-requests", async (c) => {
     const offset = (page - 1) * limit;
     const pageRows = enriched.slice(offset, offset + limit);
 
-    return c.json({ requests: pageRows, total });
+    return c.json({ requests: pageRows, total, _debug: { invitesLoaded: allInvites?.length ?? 0, inviteMapSize: inviteByEmail.size } });
   } catch (err: any) {
     return c.json({ error: err?.message ?? String(err) }, 500);
   }
