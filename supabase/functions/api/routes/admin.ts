@@ -1479,70 +1479,28 @@ app.get("/invite-week-stats", async (c) => {
 app.get("/join-requests", async (c) => {
   try {
     const db = getAdminClient();
-    const page = parseInt(c.req.query("page") || "1");
-    const limit = parseInt(c.req.query("limit") || "25");
-    const search = c.req.query("search") || "";
-    const type = c.req.query("type") || "";
-    const status = c.req.query("status") || "";
+    const page     = parseInt(c.req.query("page")    || "1");
+    const limit    = parseInt(c.req.query("limit")   || "25");
+    const search   = c.req.query("search")   || "";
+    const type     = c.req.query("type")     || "";
+    const status   = c.req.query("status")   || "";
     const decision = c.req.query("decision") || "";
     const experience = c.req.query("experience") || "";
-    const invited = c.req.query("invited") || "";
+    const invited  = c.req.query("invited")  || "";
 
-    let query = db.from("platform_join_requests").select("*");
-
-    if (search) {
-      query = query.or(`full_name.ilike.%${search}%,email.ilike.%${search}%,company_name.ilike.%${search}%`);
-    }
-    if (type) query = query.eq("type", type);
-    if (status) query = query.eq("status", status);
-    if (decision === "approved") query = query.eq("approved", true);
-    else if (decision === "rejected") query = query.eq("approved", false);
-    else if (decision === "none") query = query.is("approved", null);
-    if (experience === "none") query = query.is("years_experience", null);
-    else if (experience) query = query.eq("years_experience", experience);
-
-    const { data: allMatching, error } = await query.order("created_at", { ascending: false });
-    if (error) return c.json({ error: error.message }, 500);
-
-    const norm = (e: unknown) => (typeof e === "string" ? e.trim().toLowerCase() : "");
-
-    const { data: allInvites, error: invitesError } = await db.from("invites").select("recipient_email,inviter_id,status,created_at").range(0, 9999);
-    if (invitesError) throw new Error(`invites query failed: ${invitesError.message}`);
-
-    const inviteByEmail = new Map<string, any>();
-    for (const inv of allInvites || []) {
-      const key = norm(inv.recipient_email);
-      if (!key) continue;
-      const existing = inviteByEmail.get(key);
-      if (!existing || new Date(inv.created_at) > new Date(existing.created_at)) {
-        inviteByEmail.set(key, inv);
-      }
-    }
-
-    const inviterIds = [...new Set(Array.from(inviteByEmail.values()).map((i: any) => i.inviter_id).filter(Boolean))];
-    const { data: inviters } = inviterIds.length > 0
-      ? await db.from("users").select("uuid,first_name,last_name,email").in("uuid", inviterIds)
-      : { data: [] };
-    const inviterMap = new Map((inviters || []).map((u: any) => [u.uuid, u]));
-
-    let enriched = (allMatching ?? []).map((r: any) => {
-      const inv = inviteByEmail.get(norm(r.email));
-      return {
-        ...r,
-        invited: !!inv,
-        invite_status: inv?.status ?? null,
-        invited_by: inv?.inviter_id ? inviterMap.get(inv.inviter_id) ?? null : null,
-      };
+    const { data, error } = await db.rpc("admin_join_requests_with_invites", {
+      p_search:     search,
+      p_type:       type,
+      p_status:     status,
+      p_decision:   decision,
+      p_experience: experience,
+      p_invited:    invited,
+      p_page:       page,
+      p_limit:      limit,
     });
 
-    if (invited === "yes") enriched = enriched.filter((r: any) => r.invited);
-    else if (invited === "no") enriched = enriched.filter((r: any) => !r.invited);
-
-    const total = enriched.length;
-    const offset = (page - 1) * limit;
-    const pageRows = enriched.slice(offset, offset + limit);
-
-    return c.json({ requests: pageRows, total, _debug: { invitesLoaded: allInvites?.length ?? 0, inviteMapSize: inviteByEmail.size } });
+    if (error) return c.json({ error: error.message }, 500);
+    return c.json(data);
   } catch (err: any) {
     return c.json({ error: err?.message ?? String(err) }, 500);
   }
