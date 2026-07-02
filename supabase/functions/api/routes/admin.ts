@@ -1497,7 +1497,7 @@ app.get("/join-requests", async (c) => {
 
     const norm = (e: unknown) => (typeof e === "string" ? e.trim().toLowerCase() : "");
 
-    const { data: allInvites } = await db.from("invites").select("recipient_email,inviter_id,status,created_at");
+    const { data: allInvites } = await db.from("invites").select("recipient_email,inviter_id,status,created_at").range(0, 9999);
 
     const inviteByEmail = new Map<string, any>();
     for (const inv of allInvites || []) {
