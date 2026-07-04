@@ -190,12 +190,10 @@ app.post('/request', async (c) => {
 
   const { error } = await supabase
     .from('company_requests')
-    .upsert(
-      { requested_name: name, requested_by: user.id, status: 'pending' },
-      { onConflict: 'requested_by,lower(requested_name)', ignoreDuplicates: true }
-    )
+    .insert({ requested_name: name, requested_by: user.id, status: 'pending' })
 
-  if (error) return c.json({ error: error.message }, 400)
+  // 23505 = unique_violation — same user already requested this company name → treat as success
+  if (error && error.code !== '23505') return c.json({ error: error.message }, 400)
 
   return c.json({ ok: true })
 })

@@ -6,6 +6,11 @@ const app = new Hono()
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
+function stripNullBytes(s: string): string {
+  // PostgreSQL rejects null bytes (\x00) in text fields
+  return s.replace(/\0/g, '')
+}
+
 function stripHtml(html: string): string {
   return html
     .replace(/<[^>]*>/g, ' ')
@@ -1518,7 +1523,7 @@ app.post('/', async (c) => {
     if (company.owner_uuid !== user.id) return c.json({ error: "You don't have permission to post on behalf of this company" }, 403)
   }
 
-  const sanitized = sanitizeHtml(content)
+  const sanitized = stripNullBytes(sanitizeHtml(content))
   const plain = stripHtml(sanitized)
   const isAdmin = (user as any).app_metadata?.is_admin === true
   const resolvedType = isAdmin && article_type === 'news' ? 'news' : 'article'
@@ -1590,9 +1595,9 @@ app.put('/:id', async (c) => {
     const isAdminUpdate = (user as any).app_metadata?.is_admin === true
 
     const updates: Record<string, any> = { updated_at: new Date().toISOString() }
-    if (title !== undefined) updates.title = title
+    if (title !== undefined) updates.title = stripNullBytes(title)
     if (content !== undefined) {
-      updates.content = sanitizeHtml(content)
+      updates.content = stripNullBytes(sanitizeHtml(content))
       updates.content_plain = stripHtml(updates.content)
       updates.read_time = Math.max(1, Math.ceil(wordCount(updates.content_plain) / 200))
     }

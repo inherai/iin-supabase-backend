@@ -2,26 +2,41 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 
 const app = new Hono();
 
-// GET /notifications — list the current user's notifications (most recent 30)
+// GET /notifications — all unread (capped at 100) merged with the 30 most recent.
+// The union guarantees an unread notification is never pushed out of the window
+// by newer read ones — the client derives the badge count from this list, so
+// everything counted must be present here.
 // Enriches with actor name, post subject, and article title server-side.
 app.get("/", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-  const { data: rows, error } = await supabase
-    .from("notifications")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(30);
+  const baseQuery = () =>
+    supabase
+      .from("notifications")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
 
+  const [unreadRes, recentRes] = await Promise.all([
+    baseQuery().eq("is_read", false).limit(100),
+    baseQuery().limit(30),
+  ]);
+
+  const error = unreadRes.error ?? recentRes.error;
   if (error) {
     console.error("GET /notifications error:", error);
     return c.json({ error: "Failed to fetch notifications" }, 500);
   }
 
-  const notifications = rows ?? [];
+  const byId = new Map<string, any>();
+  for (const row of [...(unreadRes.data ?? []), ...(recentRes.data ?? [])]) {
+    byId.set(row.id, row);
+  }
+  const notifications = [...byId.values()].sort((a: any, b: any) =>
+    a.created_at < b.created_at ? 1 : -1
+  );
 
   // Collect IDs for enrichment
   const actorIds = [...new Set(notifications.map((n: any) => n.actor_id).filter(Boolean))];
