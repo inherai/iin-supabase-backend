@@ -41,6 +41,43 @@ async function deterministicInt8(seed: string): Promise<number> {
   return Number(n & 0x1fffffffffffffn);
 }
 
+// PostgREST caps every response at 1000 rows and supabase-js reports no error for the
+// truncation, so bulk .in() lookups (likes/comments for a feed batch) silently lose rows
+// once the batch is large enough — posts then render with 0 likes. Fetch in ID chunks and
+// page each chunk to completion; ordered by id so range pagination is stable.
+async function fetchAllByIds(
+  supabase: any,
+  table: string,
+  select: string,
+  idColumn: string,
+  ids: string[],
+  applyFilters?: (q: any) => any,
+): Promise<any[]> {
+  const CHUNK_SIZE = 100
+  const PAGE_SIZE = 1000
+  const rows: any[] = []
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE)
+    for (let from = 0; ; from += PAGE_SIZE) {
+      let query = supabase
+        .from(table)
+        .select(select)
+        .in(idColumn, chunk)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE_SIZE - 1)
+      if (applyFilters) query = applyFilters(query)
+      const { data, error } = await query
+      if (error) {
+        console.error(`[feed] fetch ${table} by ${idColumn} failed:`, error.message)
+        break
+      }
+      rows.push(...(data || []))
+      if (!data || data.length < PAGE_SIZE) break
+    }
+  }
+  return rows
+}
+
 function stripHtml(html: string): string {
   return html
     .replace(/<[^>]*>/g, ' ')
@@ -834,17 +871,10 @@ async function handleRankedFeed(c: any) {
 
   const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
-  const [commentsRes, postLikesRes, impressionsRes, connectionsRes, authUserRes] = await Promise.all([
-    supabase
-      .from('comments')
-      .select('*')
-      .in('post_id', postIds)
-      .lte('created_at', session_start)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('likes')
-      .select('target_id, user_id, reaction_type, created_at')
-      .in('target_id', postIds),
+  const [allComments, allPostLikes, impressionsRes, connectionsRes, authUserRes] = await Promise.all([
+    fetchAllByIds(supabase, 'comments', '*', 'post_id', postIds,
+      (q: any) => q.lte('created_at', session_start)),
+    fetchAllByIds(supabase, 'likes', 'target_id, user_id, reaction_type, created_at', 'target_id', postIds),
     current_user_uuid
       ? supabase
           .from('post_impressions')
@@ -875,7 +905,7 @@ async function handleRankedFeed(c: any) {
     supabaseAdmin.rpc('record_feed_visit', { p_user_id: current_user_uuid })
   }
 
-  const allPostLikes = postLikesRes.data || []
+  allComments.sort((a: any, b: any) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
 
   // A post may have multiple impression rows (one per day) — keep only the most recent last_seen_at
   const lastSeenMap: Record<string, string | null> = {}
@@ -894,13 +924,13 @@ async function handleRankedFeed(c: any) {
   )
 
   const visibleComments = viewerIsRecruiter
-    ? (commentsRes.data || []).filter((cm: any) => cm.community_members_only !== true)
-    : (commentsRes.data || [])
+    ? allComments.filter((cm: any) => cm.community_members_only !== true)
+    : allComments
 
   const commentIds = visibleComments.map((cm: any) => cm.id.toString())
-  const { data: allCommentLikes } = commentIds.length > 0
-    ? await supabase.from('likes').select('target_id, user_id, reaction_type').in('target_id', commentIds)
-    : { data: [] }
+  const allCommentLikes = commentIds.length > 0
+    ? await fetchAllByIds(supabase, 'likes', 'target_id, user_id, reaction_type', 'target_id', commentIds)
+    : []
 
   const emailsToFetch = new Set<string>()
   sourcePosts.forEach((p: any) => { if (p.sender) emailsToFetch.add(p.sender) })
@@ -1445,32 +1475,25 @@ if (targetUserId) {
 
     const postIds = sourcePosts.map((p: any) => p.id)
 
-    const { data: allPostLikes } = await supabase
-      .from('likes')
-      .select('target_id, user_id, reaction_type')
-      .in('target_id', postIds)
+    const allPostLikes = await fetchAllByIds(supabase, 'likes', 'target_id, user_id, reaction_type', 'target_id', postIds)
 
     const emailsToFetch = new Set<string>()
     sourcePosts.forEach((p: any) => {
       if (p.sender) emailsToFetch.add(p.sender)
     })
 
-    const { data: comments } = await supabase
-      .from('comments')
-      .select('*')
-      .in('post_id', postIds)
-      .lte('created_at', session_start)
-      .order('created_at', { ascending: true })
+    const comments = await fetchAllByIds(supabase, 'comments', '*', 'post_id', postIds,
+      (q: any) => q.lte('created_at', session_start))
+    comments.sort((a: any, b: any) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
 
     const visibleComments = viewerIsRecruiter
-      ? (comments || []).filter((c: any) => c.community_members_only !== true)
-      : (comments || [])
+      ? comments.filter((c: any) => c.community_members_only !== true)
+      : comments
 
     const commentIds = visibleComments.map((c: any) => c.id.toString())
-    const { data: allCommentLikes } = await supabase
-      .from('likes')
-      .select('target_id, user_id, reaction_type')
-      .in('target_id', commentIds)
+    const allCommentLikes = commentIds.length > 0
+      ? await fetchAllByIds(supabase, 'likes', 'target_id, user_id, reaction_type', 'target_id', commentIds)
+      : []
 
     visibleComments.forEach((c: any) => emailsToFetch.add(c.sender))
 
