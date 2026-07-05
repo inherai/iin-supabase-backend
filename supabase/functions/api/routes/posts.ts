@@ -169,6 +169,16 @@ function firstString(...values: any[]): string | null {
   return null;
 }
 
+// Category words like 'document'/'image' are not MIME types — a real MIME always has a '/'
+function firstMimeType(...values: any[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.includes('/') && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
 function extractExtension(value: string | null): string | null {
   if (!value) return null;
   const cleanValue = value.split('?')[0].split('#')[0];
@@ -227,6 +237,8 @@ function normalizeAttachment(rawAttachment: any) {
     base.file_url,
     base.publicUrl,
     base.public_url,
+    base.localPath,
+    base.local_path,
   );
 
   const name = firstString(
@@ -237,12 +249,12 @@ function normalizeAttachment(rawAttachment: any) {
     base.original_name,
   ) ?? deriveFileName(url);
 
-  const incomingMimeType = firstString(
+  const incomingMimeType = firstMimeType(
     base.mime_type,
     base.mimeType,
-    base.type,
     base.contentType,
     base.content_type,
+    base.type,
   );
 
   const extension = extractExtension(name) ?? extractExtension(url);
@@ -1848,7 +1860,13 @@ app.put('/scheduled/:id', async (c) => {
       if (!VALID_POST_TYPES.has(body.post_type)) return c.json({ error: 'Invalid post_type' }, 400)
       updateData.post_type = body.post_type
     }
-    if (body.community_members_only !== undefined) updateData.community_members_only = body.community_members_only
+    const communityMembersOnlyInput = body.community_members_only ?? body.communityMembersOnly
+    if (communityMembersOnlyInput !== undefined) {
+      if (typeof communityMembersOnlyInput !== 'boolean') {
+        return c.json({ error: "community_members_only must be boolean" }, 400)
+      }
+      updateData.community_members_only = communityMembersOnlyInput
+    }
     if (body.scheduled_at !== undefined) {
       const newDate = new Date(body.scheduled_at)
       if (isNaN(newDate.getTime()) || newDate <= new Date()) {
