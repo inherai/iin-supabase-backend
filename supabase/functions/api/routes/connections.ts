@@ -1,6 +1,65 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const app = new Hono();
+
+const getAdminClient = () =>
+  createClient(
+    Deno.env.get("SUPABASE_URL") ?? "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+  );
+
+// When a request that carried a note is accepted, seed the note as the first
+// chat message so it isn't lost once the request disappears from the UI.
+// Inserted as already-read: the receiver saw the note on the request itself.
+async function seedChatWithConnectionNote(
+  requesterId: string,
+  receiverId: string,
+  note: string,
+) {
+  const admin = getAdminClient();
+  const [u1, u2] = [requesterId, receiverId].sort();
+
+  const { data: existing, error: findError } = await admin
+    .from("conversations")
+    .select("id")
+    .eq("user1_id", u1)
+    .eq("user2_id", u2)
+    .maybeSingle();
+
+  if (findError) throw findError;
+
+  let conversationId = existing?.id ?? null;
+
+  if (!conversationId) {
+    const { data: newConv, error: createError } = await admin
+      .from("conversations")
+      .insert([{ user1_id: u1, user2_id: u2 }])
+      .select("id")
+      .single();
+
+    if (createError) throw createError;
+    conversationId = newConv.id;
+  }
+
+  const { error: insertError } = await admin.from("messages").insert([
+    {
+      conversation_id: conversationId,
+      sender_id: requesterId,
+      content: note,
+      is_read: true,
+    },
+  ]);
+
+  if (insertError) throw insertError;
+
+  if (existing) {
+    await admin
+      .from("conversations")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", conversationId);
+  }
+}
 const ALLOWED_UPDATE_STATUSES = new Set(["accepted"]);
 const CONNECTION_SELECT = `
   *,
@@ -233,6 +292,15 @@ app.put("/:id", async (c) => {
   // invalidate score cache for both sides of the connection
   supabase.from("users").update({ scores_cached_at: null })
     .in("uuid", [user.id, data.requester_id]).then(() => {});
+
+  if (data.message) {
+    try {
+      await seedChatWithConnectionNote(data.requester_id, user.id, data.message);
+    } catch (e) {
+      // Never fail the accept because of chat seeding
+      console.error("Failed to seed chat with connection note:", e);
+    }
+  }
 
   await supabase
     .from("notifications")
