@@ -126,7 +126,7 @@ export async function calculateProfileStrength(supabase: any, userId: string) {
   const [userRes, connRes] = await Promise.all([
     supabase
       .from('users')
-      .select('headline, about, skills, experience, education, certifications, location, image')
+      .select('headline, about, skills, experience, education, certifications, projects, location, image')
       .eq('uuid', userId)
       .single(),
     supabase
@@ -155,6 +155,12 @@ export async function calculateProfileStrength(supabase: any, userId: string) {
   const skillsCount = userData.skills?.length ?? 0
   const skillsScore = skillsCount >= 6 ? 1 : skillsCount >= 3 ? 0.5 : 0
 
+  const projectsList: any[] = userData.projects ?? []
+  const hasRichProject = projectsList.some(
+    (p) => (p?.description ?? '').trim().length >= 30 || p?.url
+  )
+  const projectsScore = projectsList.length === 0 ? 0 : hasRichProject ? 1 : 0.5
+
   const connectionsScore =
     connections >= 30 ? 1    :
     connections >= 15 ? 0.75 :
@@ -169,7 +175,7 @@ export async function calculateProfileStrength(supabase: any, userId: string) {
         ? 'The single most important section — recruiters filter by experience first'
         : 'Great start! Add descriptions to your roles so recruiters understand what you actually did',
       score: experienceScore,
-      weight: 0.22,
+      weight: 0.20,
     },
     {
       key: 'skills',
@@ -178,14 +184,14 @@ export async function calculateProfileStrength(supabase: any, userId: string) {
         ? 'Recruiters search by skills — this is one of the first filters they use'
         : 'You have some skills listed — aim for 6+ to maximize visibility in recruiter searches',
       score: skillsScore,
-      weight: 0.20,
+      weight: 0.19,
     },
     {
       key: 'photo',
       label: 'Profile photo',
       tip: 'Profiles with a photo get significantly more recruiter attention and connection requests',
       score: hasPhoto ? 1 : 0,
-      weight: 0.12,
+      weight: 0.11,
     },
     {
       key: 'about',
@@ -194,7 +200,7 @@ export async function calculateProfileStrength(supabase: any, userId: string) {
         ? 'Your bio is a bit short — aim for 200+ characters to make a real impression on recruiters'
         : 'A well-written bio helps recruiters understand who you are beyond your job titles',
       score: aboutScore,
-      weight: 0.11,
+      weight: 0.10,
     },
     {
       key: 'headline',
@@ -219,6 +225,15 @@ export async function calculateProfileStrength(supabase: any, userId: string) {
       tip: 'Adding your academic background helps recruiters assess your qualifications',
       score: (userData.education?.length ?? 0) >= 1 ? 1 : 0,
       weight: 0.08,
+    },
+    {
+      key: 'projects',
+      label: projectsScore === 0.5 ? 'Add a description or link to your projects' : 'Projects',
+      tip: projectsScore === 0
+        ? 'Showcasing projects lets recruiters see what you can actually build'
+        : 'Add a short description or a link so recruiters can explore your work',
+      score: projectsScore,
+      weight: 0.05,
     },
     {
       key: 'certifications',

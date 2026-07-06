@@ -627,6 +627,7 @@ app.get('/', async (c) => {
             experience: u.experience,
             education: u.education,
             certifications: u.certifications,
+            projects: u.projects,
             skills: u.skills,
             image: canSeePicture ? (effectiveHasImage ? true : null) : null,
             contact_details: canSeeContact && (effectiveEmail || effectivePhone) ? {
@@ -781,6 +782,7 @@ app.get('/', async (c) => {
           experience: u.experience,
           education: u.education,
           certifications: u.certifications,
+          projects: u.projects,
           skills: u.skills,
           image: canSeePicture ? (effectiveHasImage ? true : null) : null,
           contact_details: canSeeContact && (effectiveEmail || effectivePhone) ? {
@@ -817,6 +819,7 @@ app.get('/', async (c) => {
 
     // 5. לוגיקת סינון
     const enrichedExperience = await enrichExperience(targetUser.experience, supabase);
+    const enrichedProjects = await enrichExperience(targetUser.projects ?? [], supabase);
 
     const isOwner = targetUser.uuid === user.id
 
@@ -896,7 +899,10 @@ app.get('/', async (c) => {
       experience: enrichedExperience,
       education: targetUser.education,
       certifications: targetUser.certifications,
+      projects: enrichedProjects,
       skills: targetUser.skills,
+      github_url: targetUser.github_url ?? null,
+      website_url: targetUser.website_url ?? null,
       image: canSeePicture ? (effectiveHasImage ? true : null) : null,
       cover_image_url: targetUser.cover_image_url ?? null,
       contact_details: canSeeContact && (effectiveEmail || effectivePhone) ? {
@@ -1064,6 +1070,9 @@ app.put('/public-link', async (c) => {
         sections: {
           about: Boolean(settings.sections?.about),
           experience: Boolean(settings.sections?.experience),
+          // Default missing to true — a stale client that saves settings without this
+          // key must not silently hide the owner's projects section.
+          projects: settings.sections?.projects === undefined ? true : Boolean(settings.sections.projects),
           education: Boolean(settings.sections?.education),
           skills: Boolean(settings.sections?.skills),
           certifications: Boolean(settings.sections?.certifications),

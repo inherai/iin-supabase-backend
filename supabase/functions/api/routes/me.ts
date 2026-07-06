@@ -16,7 +16,7 @@ async function updateUserVector(userId: string) {
 
     const { data: user, error } = await supabaseAdmin
       .from("users")
-      .select("headline, about, skills, interests, languages, work_preferences, experience, education, certifications, location, role")
+      .select("headline, about, skills, interests, languages, work_preferences, experience, education, certifications, projects, location, role")
       .eq("uuid", userId)
       .single();
 
@@ -32,6 +32,11 @@ async function updateUserVector(userId: string) {
 
     const certificationsText = (user.certifications ?? [])
       .map((c: any) => c.name || c.title || c).filter(Boolean)
+      .join(", ");
+
+    const projectsText = (user.projects ?? [])
+      .map((p: any) => [p.name, (p.technologies ?? []).join(" "), p.description?.slice(0, 200)]
+        .filter(Boolean).join(" — "))
       .join(", ");
 
     const languagesText = (user.languages ?? [])
@@ -50,6 +55,7 @@ async function updateUserVector(userId: string) {
       experienceText && `Experience: ${experienceText}`,
       educationText && `Education: ${educationText}`,
       certificationsText && `Certifications: ${certificationsText}`,
+      projectsText && `Projects: ${projectsText}`,
     ].filter(Boolean).join("\n");
 
     if (!parts.trim()) return;
@@ -94,24 +100,26 @@ app.get('/', async (c) => {
     return c.json({ error: error.message }, 400)
   }
 
-  // שליפת נתוני חברות עבור ה-experiences
-  if (userData.experience && Array.isArray(userData.experience)) {
-    const companyIds = userData.experience
-      .map((exp: any) => exp.company)
-      .filter((id: any) => typeof id === 'number')
-    
-    if (companyIds.length > 0) {
-      const { data: companies } = await supabase
-        .from('companies')
-        .select('id, name, logo')
-        .in('id', companyIds)
-      
-      if (companies) {
-        userData.experience = userData.experience.map((exp: any) => ({
-          ...exp,
-          company: companies.find((comp: any) => comp.id === exp.company) || exp.company
-        }))
-      }
+  // שליפת נתוני חברות עבור ה-experiences וה-projects
+  const experienceList = Array.isArray(userData.experience) ? userData.experience : []
+  const projectsList = Array.isArray(userData.projects) ? userData.projects : []
+  const companyIds = [...experienceList, ...projectsList]
+    .map((item: any) => item.company)
+    .filter((id: any) => typeof id === 'number')
+
+  if (companyIds.length > 0) {
+    const { data: companies } = await supabase
+      .from('companies')
+      .select('id, name, logo')
+      .in('id', companyIds)
+
+    if (companies) {
+      const enrich = (item: any) => ({
+        ...item,
+        company: companies.find((comp: any) => comp.id === item.company) || item.company
+      })
+      if (experienceList.length > 0) userData.experience = experienceList.map(enrich)
+      if (projectsList.length > 0) userData.projects = projectsList.map(enrich)
     }
   }
 
@@ -143,7 +151,7 @@ app.put('/', async (c) => {
   const payload = await c.req.json()
   const profileData = payload.profile || payload
 
-  const EMBEDDING_FIELDS = ['headline', 'about', 'skills', 'interests', 'languages', 'work_preferences', 'experience', 'education', 'certifications', 'location', 'role'];
+  const EMBEDDING_FIELDS = ['headline', 'about', 'skills', 'interests', 'languages', 'work_preferences', 'experience', 'education', 'certifications', 'projects', 'location', 'role'];
 
   // שלוף מצב נוכחי לפני העדכון - להשוואה
   const { data: currentUser } = await supabase
@@ -165,7 +173,10 @@ app.put('/', async (c) => {
     experience: profileData.experience,
     education: profileData.education,
     certifications: profileData.certifications,
+    projects: profileData.projects,
     skills: profileData.skills,
+    github_url: profileData.github_url ?? null,
+    website_url: profileData.website_url ?? null,
     cover_image_url: profileData.cover_image_url ?? null,
     values_agreed: profileData.values_agreed
   };

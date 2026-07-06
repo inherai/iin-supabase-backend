@@ -80,9 +80,12 @@ app.get('/:slug', async (c) => {
       experience: await enrichExperience(row.experience ?? []),
       education: row.education ?? [],
       certifications: row.certifications ?? [],
+      projects: await enrichExperience(row.projects ?? []),
       skills: row.skills ?? [],
       languages: row.languages ?? [],
       interests: row.interests ?? [],
+      github_url: row.github_url ?? null,
+      website_url: row.website_url ?? null,
     }
 
     return c.json(publicProfile)
