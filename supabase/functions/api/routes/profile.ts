@@ -15,6 +15,18 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const app = new Hono()
 
+// Canonical privacy-array check — MUST stay in sync with the DB function
+// can_view_profile_picture (migrations/fix_can_view_profile_picture.sql).
+// Fail-closed: null/non-array/empty means "not shared with anyone" (matches
+// EditPrivacyDialog.tsx, which renders a missing array as all boxes unchecked).
+// Reciprocity: anonymous viewers (role 'feed_participant') get NO community-shared
+// data — whoever chose to be anonymous sees others as anonymous too. Their role is
+// matched literally, and privacy arrays never contain 'feed_participant'.
+const privacyArrayAllows = (arr: unknown, viewerRole: string | undefined | null): boolean => {
+  if (!Array.isArray(arr) || !viewerRole) return false
+  return arr.includes(viewerRole)
+}
+
 app.get('/views/count', async (c) => {
   try {
     const user = c.get('user')
@@ -332,10 +344,7 @@ app.post('/feed', async (c) => {
     if (error) return c.json({ error: error.message }, 500)
 
     // פונקציית עזר לבדיקת הרשאות
-    const hasAccess = (privacyArray: any) => {
-      if (!privacyArray || !Array.isArray(privacyArray) || !viewerBusinessRole) return false
-      return privacyArray.includes(viewerBusinessRole)
-    }
+    const hasAccess = (privacyArray: any) => privacyArrayAllows(privacyArray, viewerBusinessRole)
 
     // Fetch active grants if viewer is a recruiter (grant overrides privacy settings)
     const isRecruiterViewer = viewerBusinessRole === 'recruiters'
@@ -593,9 +602,7 @@ app.get('/', async (c) => {
           const isOwner = u.uuid === user.id
           const approvedFields: string[] = searchGrantMap[u.uuid] ?? []
           const raw = searchRawMap[u.uuid]
-          // Fail-closed: missing/non-array/empty privacy_* means "not shared with anyone" (matches
-          // EditPrivacyDialog.tsx's own interpretation — see the canonical privacyAllows definition below).
-          const privacyAllows = (arr: any) => Array.isArray(arr) && arr.includes(viewerBusinessRole)
+          const privacyAllows = (arr: any) => privacyArrayAllows(arr, viewerBusinessRole)
           const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(u.privacy_lastname)
           const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(u.privacy_picture)
           const canSeeContact = isOwner ||
@@ -749,7 +756,7 @@ app.get('/', async (c) => {
         const isOwner = u.uuid === user.id
         const approvedFields: string[] = aiGrantMap[u.uuid] ?? []
         const raw = aiRawMap[u.uuid]
-        const privacyAllows = (arr: any) => Array.isArray(arr) && arr.includes(viewerBusinessRole)
+        const privacyAllows = (arr: any) => privacyArrayAllows(arr, viewerBusinessRole)
         const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(u.privacy_lastname)
         const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(u.privacy_picture)
         const canSeeContact = isOwner ||
@@ -861,12 +868,7 @@ app.get('/', async (c) => {
     }
 
     // Grant overrides privacy — if recruiter has an approved field, show it regardless of privacy setting.
-    // Fail-closed: null/undefined/non-array/empty privacy_* means "not shared with anyone" — this must
-    // match EditPrivacyDialog.tsx's own interpretation (privacy_x || [] → unchecked boxes), otherwise a
-    // user who has never touched their privacy settings is told their data is hidden while it's actually
-    // public. Do not flip this back to "missing array = show to everyone" without updating that dialog too.
-    const privacyAllows = (arr: any) =>
-      Array.isArray(arr) && arr.includes(viewerBusinessRole)
+    const privacyAllows = (arr: any) => privacyArrayAllows(arr, viewerBusinessRole)
 
     const canSeeLastName = isOwner || approvedFields.includes('last_name') || privacyAllows(targetUser.privacy_lastname)
     const canSeePicture = isOwner || approvedFields.includes('picture') || privacyAllows(targetUser.privacy_picture)
