@@ -69,7 +69,7 @@ app.get("/analytics", async (c) => {
   try {
   const db = getAdminClient();
 
-  const [activities, users, invites, postAuthors, commentAuthors, jobAppliers, jobSavers] = await Promise.all([
+  const [activities, users, invites, postAuthors, commentAuthors, jobAppliers, jobSavers, reactionRows] = await Promise.all([
     fetchAllRows(db, "user_activity", "*"),
     fetchAllRows(
       db,
@@ -79,13 +79,15 @@ app.get("/analytics", async (c) => {
     ),
     fetchAllRows(db, "invites", "id, inviter_id, recipient_email, status, created_at"),
     // Source tables — full history, unlike user_activity counters which only run since tracking launch
-    fetchAllRows(db, "posts", "posted_by_uuid", (q) =>
+    // posts have no created_at — publish date is sent_at
+    fetchAllRows(db, "posts", "posted_by_uuid, sent_at", (q) =>
       q.not("posted_by_uuid", "is", null).not("post_type", "is", null).neq("post_type", "email")
     ),
     // comments have no posted_by_uuid column — authors are identified by sender email
-    fetchAllRows(db, "comments", "sender", (q) => q.not("sender", "is", null)),
+    fetchAllRows(db, "comments", "sender, created_at", (q) => q.not("sender", "is", null)),
     fetchAllRows(db, "job_applications", "user_id, job_id, status, applied_at, apply_clicked_at"),
     fetchAllRows(db, "saved_resources", "user_id", (q) => q.eq("saved_resource_type", "position")),
+    fetchAllRows(db, "likes", "user_id, created_at"),
   ]);
 
   const userMap = new Map(users.map((u) => [u.uuid, u]));
@@ -380,6 +382,49 @@ app.get("/analytics", async (c) => {
     top_viewed: topViewedJobs,
   };
 
+  // ── Content activity per day (30d): posts, comments, reactions + who posted ──
+  const contentPerDay = new Map<
+    string,
+    { posts: number; comments: number; reactions: number; posterIds: Set<string> }
+  >();
+  for (let i = 29; i >= 0; i--) {
+    contentPerDay.set(dayKey(new Date(now - i * D)), {
+      posts: 0, comments: 0, reactions: 0, posterIds: new Set(),
+    });
+  }
+  for (const p of postAuthors) {
+    if (!p.sent_at) continue;
+    const e = contentPerDay.get(dayKey(new Date(p.sent_at)));
+    if (!e) continue;
+    e.posts++;
+    if (p.posted_by_uuid) e.posterIds.add(p.posted_by_uuid);
+  }
+  for (const cm of commentAuthors) {
+    if (!cm.created_at) continue;
+    const e = contentPerDay.get(dayKey(new Date(cm.created_at)));
+    if (e) e.comments++;
+  }
+  for (const r of reactionRows) {
+    if (!r.created_at) continue;
+    const e = contentPerDay.get(dayKey(new Date(r.created_at)));
+    if (e) e.reactions++;
+  }
+  const contentActivity = {
+    total_posts_all_time: postAuthors.length,
+    total_comments_all_time: commentAuthors.length,
+    total_reactions_all_time: reactionRows.length,
+    per_day: [...contentPerDay.entries()].map(([date, v]) => ({
+      date,
+      posts: v.posts,
+      comments: v.comments,
+      reactions: v.reactions,
+      posters: [...v.posterIds].map((id) => {
+        const u = userMap.get(id);
+        return [u?.first_name, u?.last_name].filter(Boolean).join(" ") || "Unknown";
+      }),
+    })),
+  };
+
   return c.json({
     generated_at: new Date().toISOString(),
     total_users: totalUsers,
@@ -453,6 +498,7 @@ app.get("/analytics", async (c) => {
     top_received_reactions: leaderboard("total_reactions_received"),
     participation,
     job_applications: jobApplications,
+    content_activity: contentActivity,
     invites: {
       total: invites.length,
       accepted: invitesAccepted,
