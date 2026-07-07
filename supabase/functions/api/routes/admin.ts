@@ -84,7 +84,7 @@ app.get("/analytics", async (c) => {
     ),
     // comments have no posted_by_uuid column — authors are identified by sender email
     fetchAllRows(db, "comments", "sender", (q) => q.not("sender", "is", null)),
-    fetchAllRows(db, "job_applications", "user_id, status, applied_at, apply_clicked_at"),
+    fetchAllRows(db, "job_applications", "user_id, job_id, status, applied_at, apply_clicked_at"),
     fetchAllRows(db, "saved_resources", "user_id", (q) => q.eq("saved_resource_type", "position")),
   ]);
 
@@ -300,10 +300,84 @@ app.get("/analytics", async (c) => {
     if (isApplied) e.applied++;
     else e.clicked++;
   }
+  // ── Top jobs & companies by applications ──
+  const byJob = new Map<string, { clicks: number; applied: number }>();
+  for (const a of jobAppliers) {
+    if (a.job_id == null) continue;
+    const key = String(a.job_id);
+    const e = byJob.get(key) ?? { clicks: 0, applied: 0 };
+    e.clicks++;
+    if (a.status === "applied") e.applied++;
+    byJob.set(key, e);
+  }
+
+  // Resolve job titles/companies only for jobs that have applications (chunked .in to keep URLs short)
+  const appliedJobIds = [...byJob.keys()];
+  const positions: any[] = [];
+  for (let i = 0; i < appliedJobIds.length; i += 200) {
+    const { data, error } = await db
+      .from("open_position")
+      .select("id, job_title, company_name, companies:company_id(name)")
+      .in("id", appliedJobIds.slice(i, i + 200));
+    if (error) throw error;
+    positions.push(...(data ?? []));
+  }
+  const posMap = new Map(positions.map((p) => [String(p.id), p]));
+  const companyOf = (p: any) => p?.companies?.name ?? p?.company_name ?? "Unknown";
+
+  const topJobsByApplications = [...byJob.entries()]
+    .sort((a, b) => b[1].clicks - a[1].clicks)
+    .slice(0, 10)
+    .map(([id, v]) => {
+      const p = posMap.get(id);
+      return {
+        job_id: id,
+        title: p?.job_title ?? "Unknown position",
+        company: companyOf(p),
+        clicks: v.clicks,
+        applied: v.applied,
+      };
+    });
+
+  const byCompany = new Map<string, { clicks: number; applied: number }>();
+  for (const [id, v] of byJob) {
+    const name = companyOf(posMap.get(id));
+    const e = byCompany.get(name) ?? { clicks: 0, applied: 0 };
+    e.clicks += v.clicks;
+    e.applied += v.applied;
+    byCompany.set(name, e);
+  }
+  const topCompaniesByApplications = [...byCompany.entries()]
+    .sort((a, b) => b[1].clicks - a[1].clicks)
+    .slice(0, 10)
+    .map(([company, v]) => ({ company, ...v }));
+
+  // Most viewed jobs — soft-fail while the views_count migration hasn't run yet
+  let topViewedJobs: { job_id: string; title: string; company: string; views: number }[] = [];
+  try {
+    const { data: viewed, error } = await db
+      .from("open_position")
+      .select("job_id, job_title, company_name, views_count, companies:company_id(name)")
+      .gt("views_count", 0)
+      .order("views_count", { ascending: false })
+      .limit(10);
+    if (!error) {
+      topViewedJobs = (viewed ?? []).map((p: any) => ({
+        job_id: p.job_id,
+        title: p.job_title ?? "Unknown position",
+        company: companyOf(p),
+        views: p.views_count,
+      }));
+    }
+  } catch (_) { /* column not migrated yet */ }
+
   const jobApplications = {
     total_clicks: jobAppliers.length,
     total_applied: appliedRows.length,
     per_day: [...appsPerDayMap.entries()].map(([date, v]) => ({ date, ...v })),
+    top_jobs: topJobsByApplications,
+    top_companies: topCompaniesByApplications,
+    top_viewed: topViewedJobs,
   };
 
   return c.json({

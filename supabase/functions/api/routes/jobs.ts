@@ -112,7 +112,12 @@ app.get('/', async (c) => {
             .maybeSingle();
         
         if (error) throw error;
-        
+
+        // fire-and-forget: per-job view counter for admin analytics
+        if (data?.job_id) {
+          supabaseClient.rpc('increment_job_views', { p_job_id: data.job_id })
+        }
+
         // בדיקה אם המשרה הבודדת שמורה + סטטוס הגשת מועמדות
         let isSaved = false;
         let applicationStatus: string | null = null;
