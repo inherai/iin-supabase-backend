@@ -66,6 +66,7 @@ async function fetchAllRows(db: ReturnType<typeof getAdminClient>, table: string
 }
 
 app.get("/analytics", async (c) => {
+  try {
   const db = getAdminClient();
 
   const [activities, users, invites, postAuthors, commentAuthors, jobAppliers, jobSavers] = await Promise.all([
@@ -81,7 +82,8 @@ app.get("/analytics", async (c) => {
     fetchAllRows(db, "posts", "posted_by_uuid", (q) =>
       q.not("posted_by_uuid", "is", null).not("post_type", "is", null).neq("post_type", "email")
     ),
-    fetchAllRows(db, "comments", "posted_by_uuid", (q) => q.not("posted_by_uuid", "is", null)),
+    // comments have no posted_by_uuid column — authors are identified by sender email
+    fetchAllRows(db, "comments", "sender", (q) => q.not("sender", "is", null)),
     fetchAllRows(db, "job_applications", "user_id, status, applied_at, apply_clicked_at"),
     fetchAllRows(db, "saved_resources", "user_id", (q) => q.eq("saved_resource_type", "position")),
   ]);
@@ -260,11 +262,18 @@ app.get("/analytics", async (c) => {
   // only excludes deleted users (absent from userMap).
   const distinctUsers = (rows: any[], key: string) =>
     new Set(rows.map((r) => r[key]).filter((id) => id && userMap.has(id))).size;
+  const userEmails = new Set(
+    users.map((u) => (u.email || "").toLowerCase()).filter(Boolean)
+  );
   const countWhere = (fn: (u: any) => boolean) => merged.filter(fn).length;
   const appliedRows = jobAppliers.filter((r) => r.status === "applied");
   const participation = {
     unique_posters: distinctUsers(postAuthors, "posted_by_uuid"),
-    unique_commenters: distinctUsers(commentAuthors, "posted_by_uuid"),
+    unique_commenters: new Set(
+      commentAuthors
+        .map((r) => (r.sender || "").toLowerCase())
+        .filter((e) => userEmails.has(e))
+    ).size,
     job_apply_clickers: distinctUsers(jobAppliers, "user_id"),
     job_appliers: distinctUsers(appliedRows, "user_id"),
     job_savers: distinctUsers(jobSavers, "user_id"),
@@ -383,6 +392,10 @@ app.get("/analytics", async (c) => {
       quotas: quotas.slice(0, 100),
     },
   });
+  } catch (err: any) {
+    console.error("analytics error:", err);
+    return c.json({ error: err?.message ?? "analytics failed" }, 500);
+  }
 });
 
 // ==================== USERS ====================
