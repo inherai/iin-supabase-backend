@@ -90,6 +90,15 @@ app.get('/', async (c) => {
     const limit = parseInt(c.req.query('limit') || '25')
     const from = (page - 1) * limit
 
+    // fire-and-forget activity tracking: single job = view, filtered list = search,
+    // plain board load = board_visit. Pagination and company-page listings are not counted.
+    if (userId && (id || (page === 1 && !companyId))) {
+      const hasSearchFilters =
+        !!rawTextSearch || !!rawCategory || rawSeniorityLevels.length > 0 || rawLocationRegions.length > 0
+      const kind = id ? 'view' : hasSearchFilters ? 'search' : 'board_visit'
+      supabaseClient.rpc('record_job_activity', { p_user_id: userId, p_kind: kind })
+    }
+
     let result
     let totalCount = 0
 

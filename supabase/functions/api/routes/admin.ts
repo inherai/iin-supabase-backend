@@ -1,6 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { calculateProfileStrength, calculateActivityScore } from './_scoreHelpers.ts';
+import { calculateProfileStrength, calculateActivityScore, getWeeklyLimit } from './_scoreHelpers.ts';
 import OpenAI from "https://esm.sh/openai@4";
 import { sendInviteEmail } from '../lib/email.ts';
 
@@ -68,14 +68,22 @@ async function fetchAllRows(db: ReturnType<typeof getAdminClient>, table: string
 app.get("/analytics", async (c) => {
   const db = getAdminClient();
 
-  const [activities, users] = await Promise.all([
+  const [activities, users, invites, postAuthors, commentAuthors, jobAppliers, jobSavers] = await Promise.all([
     fetchAllRows(db, "user_activity", "*"),
     fetchAllRows(
       db,
       "users",
-      "uuid, first_name, last_name, email, created_at, status",
+      "uuid, first_name, last_name, email, created_at, status, profile_strength_cache, activity_score_cache",
       (q) => q.not("email", "like", "deleted_%@deleted.local")
     ),
+    fetchAllRows(db, "invites", "id, inviter_id, recipient_email, status, created_at"),
+    // Source tables — full history, unlike user_activity counters which only run since tracking launch
+    fetchAllRows(db, "posts", "posted_by_uuid", (q) =>
+      q.not("posted_by_uuid", "is", null).not("post_type", "is", null).neq("post_type", "email")
+    ),
+    fetchAllRows(db, "comments", "posted_by_uuid", (q) => q.not("posted_by_uuid", "is", null)),
+    fetchAllRows(db, "job_applications", "user_id, status, applied_at, apply_clicked_at"),
+    fetchAllRows(db, "saved_resources", "user_id", (q) => q.eq("saved_resource_type", "position")),
   ]);
 
   const userMap = new Map(users.map((u) => [u.uuid, u]));
@@ -171,6 +179,124 @@ app.get("/analytics", async (c) => {
         last_active_at: u.last_active_at || null,
       }));
 
+  // ── Invitations ──
+  const invitesAccepted = invites.filter((i) => i.status === "accepted").length;
+  const invitesPending = invites.filter((i) => i.status === "pending").length;
+
+  // Per-day series, last 30 days, zero-filled; each day's invites split by current status
+  const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+  const perDayMap = new Map<string, { accepted: number; pending: number; other: number }>();
+  for (let i = 29; i >= 0; i--) {
+    perDayMap.set(dayKey(new Date(now - i * D)), { accepted: 0, pending: 0, other: 0 });
+  }
+  for (const inv of invites) {
+    if (!inv.created_at) continue;
+    const entry = perDayMap.get(dayKey(new Date(inv.created_at)));
+    if (!entry) continue;
+    if (inv.status === "accepted") entry.accepted++;
+    else if (inv.status === "pending") entry.pending++;
+    else entry.other++;
+  }
+  const invitesPerDay = [...perDayMap.entries()].map(([date, v]) => ({ date, ...v }));
+
+  // Top inviters (all time)
+  const byInviter = new Map<string, { sent: number; accepted: number }>();
+  for (const inv of invites) {
+    if (!inv.inviter_id) continue;
+    const e = byInviter.get(inv.inviter_id) ?? { sent: 0, accepted: 0 };
+    e.sent++;
+    if (inv.status === "accepted") e.accepted++;
+    byInviter.set(inv.inviter_id, e);
+  }
+  const inviterName = (uuid: string) => {
+    const u = userMap.get(uuid);
+    return {
+      name: [u?.first_name, u?.last_name].filter(Boolean).join(" ") || "Unknown",
+      email: u?.email ?? null,
+    };
+  };
+  const topInviters = [...byInviter.entries()]
+    .sort((a, b) => b[1].sent - a[1].sent)
+    .slice(0, 10)
+    .map(([uuid, v]) => ({ user_id: uuid, ...inviterName(uuid), sent: v.sent, accepted: v.accepted }));
+
+  // Unused weekly quotas — same calendar-week window as the invite route (Sunday start)
+  const weekStart = new Date();
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  weekStart.setHours(0, 0, 0, 0);
+  const weekStartMs = weekStart.getTime();
+
+  const usedThisWeek = new Map<string, number>();
+  let invitesThisWeek = 0;
+  for (const inv of invites) {
+    if (!inv.created_at || new Date(inv.created_at).getTime() < weekStartMs) continue;
+    invitesThisWeek++;
+    if (inv.inviter_id) usedThisWeek.set(inv.inviter_id, (usedThisWeek.get(inv.inviter_id) ?? 0) + 1);
+  }
+
+  const quotas = users
+    .filter((u) => u.status === "Active")
+    .map((u) => {
+      const hasCache = u.activity_score_cache != null && u.profile_strength_cache != null;
+      const weeklyLimit = getWeeklyLimit(u.activity_score_cache ?? 0, u.profile_strength_cache ?? 0);
+      const used = usedThisWeek.get(u.uuid) ?? 0;
+      return {
+        user_id: u.uuid,
+        name: [u.first_name, u.last_name].filter(Boolean).join(" ") || "Unknown",
+        email: u.email ?? null,
+        weekly_limit: weeklyLimit,
+        used_this_week: used,
+        remaining: Math.max(0, weeklyLimit - used),
+        estimated: !hasCache,
+      };
+    })
+    .filter((q) => q.remaining > 0)
+    .sort((a, b) => b.remaining - a.remaining || b.used_this_week - a.used_this_week);
+
+  const unusedQuotaTotal = quotas.reduce((s, q) => s + q.remaining, 0);
+
+  // ── Unique participation ──
+  // Historical counts come straight from the source tables (all-time, distinct users);
+  // only excludes deleted users (absent from userMap).
+  const distinctUsers = (rows: any[], key: string) =>
+    new Set(rows.map((r) => r[key]).filter((id) => id && userMap.has(id))).size;
+  const countWhere = (fn: (u: any) => boolean) => merged.filter(fn).length;
+  const appliedRows = jobAppliers.filter((r) => r.status === "applied");
+  const participation = {
+    unique_posters: distinctUsers(postAuthors, "posted_by_uuid"),
+    unique_commenters: distinctUsers(commentAuthors, "posted_by_uuid"),
+    job_apply_clickers: distinctUsers(jobAppliers, "user_id"),
+    job_appliers: distinctUsers(appliedRows, "user_id"),
+    job_savers: distinctUsers(jobSavers, "user_id"),
+    // The three below run on new tracking (record_job_activity) — counted since it was deployed
+    job_board_users: countWhere(
+      (u) => (u.total_job_board_visits || 0) > 0 || (u.total_job_searches || 0) > 0
+    ),
+    job_searchers: countWhere((u) => (u.total_job_searches || 0) > 0),
+    job_viewers: countWhere((u) => (u.total_job_views || 0) > 0),
+  };
+
+  // ── Job applications over time (30d) ──
+  // applied rows dated by applied_at, click-only rows by apply_clicked_at
+  const appsPerDayMap = new Map<string, { applied: number; clicked: number }>();
+  for (let i = 29; i >= 0; i--) {
+    appsPerDayMap.set(dayKey(new Date(now - i * D)), { applied: 0, clicked: 0 });
+  }
+  for (const a of jobAppliers) {
+    const isApplied = a.status === "applied";
+    const ts = isApplied ? (a.applied_at ?? a.apply_clicked_at) : a.apply_clicked_at;
+    if (!ts) continue;
+    const e = appsPerDayMap.get(dayKey(new Date(ts)));
+    if (!e) continue;
+    if (isApplied) e.applied++;
+    else e.clicked++;
+  }
+  const jobApplications = {
+    total_clicks: jobAppliers.length,
+    total_applied: appliedRows.length,
+    per_day: [...appsPerDayMap.entries()].map(([date, v]) => ({ date, ...v })),
+  };
+
   return c.json({
     generated_at: new Date().toISOString(),
     total_users: totalUsers,
@@ -242,6 +368,20 @@ app.get("/analytics", async (c) => {
     top_feed_time: leaderboard("total_feed_time_seconds"),
     top_connectors: leaderboard("total_connections"),
     top_received_reactions: leaderboard("total_reactions_received"),
+    participation,
+    job_applications: jobApplications,
+    invites: {
+      total: invites.length,
+      accepted: invitesAccepted,
+      pending: invitesPending,
+      acceptance_rate_pct:
+        invites.length > 0 ? Math.round((invitesAccepted / invites.length) * 1000) / 10 : 0,
+      this_week: invitesThisWeek,
+      per_day: invitesPerDay,
+      top_inviters: topInviters,
+      unused_quota_total: unusedQuotaTotal,
+      quotas: quotas.slice(0, 100),
+    },
   });
 });
 
