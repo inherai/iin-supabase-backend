@@ -540,6 +540,7 @@ app.get("/analytics", async (c) => {
     experience: experienceAnalytics,
     invites: {
       total: invites.length,
+      unique_inviters: byInviter.size,
       accepted: invitesAccepted,
       pending: invitesPending,
       acceptance_rate_pct:
