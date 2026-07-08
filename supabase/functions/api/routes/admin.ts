@@ -74,7 +74,7 @@ app.get("/analytics", async (c) => {
     fetchAllRows(
       db,
       "users",
-      "uuid, first_name, last_name, email, created_at, status, profile_strength_cache, activity_score_cache",
+      "uuid, first_name, last_name, email, created_at, status, profile_strength_cache, activity_score_cache, experience",
       (q) => q.not("email", "like", "deleted_%@deleted.local")
     ),
     fetchAllRows(db, "invites", "id, inviter_id, recipient_email, status, created_at"),
@@ -382,6 +382,44 @@ app.get("/analytics", async (c) => {
     top_viewed: topViewedJobs,
   };
 
+  // ── Experience distribution ──
+  // Mirrors calculate_experience_years (talent search): year-only precision,
+  // any role with a valid startDate counts as at least 1 year
+  const nowYear = new Date().getFullYear();
+  const expYears = (exp: any): number => {
+    if (!Array.isArray(exp) || exp.length === 0) return 0;
+    let total = 0;
+    for (const e of exp) {
+      const startYear = parseInt(String(e?.startDate ?? "").slice(0, 4), 10);
+      if (!Number.isFinite(startYear) || startYear <= 0) continue;
+      if (e?.current === true || String(e?.current) === "true") {
+        total += Math.max(nowYear - startYear, 1);
+      } else if (e?.endDate) {
+        const endYear = parseInt(String(e.endDate).slice(0, 4), 10);
+        total += Math.max((Number.isFinite(endYear) ? endYear : nowYear) - startYear, 1);
+      }
+    }
+    return total;
+  };
+  const userYears = users.map((u) => expYears(u.experience));
+  const withExp = userYears.filter((y) => y > 0);
+  const experienceAnalytics = {
+    with_experience: withExp.length,
+    avg_years: withExp.length
+      ? Math.round((withExp.reduce((s, y) => s + y, 0) / withExp.length) * 10) / 10
+      : 0,
+    distribution: ([
+      ["Not listed", 0, 0],
+      ["1–2y", 1, 2],
+      ["3–5y", 3, 5],
+      ["6–9y", 6, 9],
+      ["10y+", 10, Infinity],
+    ] as [string, number, number][]).map(([label, lo, hi]) => ({
+      label,
+      count: userYears.filter((y) => y >= lo && (hi === Infinity || y <= hi)).length,
+    })),
+  };
+
   // ── Content activity per day (30d): posts, comments, reactions + who posted ──
   const contentPerDay = new Map<
     string,
@@ -499,6 +537,7 @@ app.get("/analytics", async (c) => {
     participation,
     job_applications: jobApplications,
     content_activity: contentActivity,
+    experience: experienceAnalytics,
     invites: {
       total: invites.length,
       accepted: invitesAccepted,
