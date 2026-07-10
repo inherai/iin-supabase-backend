@@ -420,6 +420,33 @@ app.get("/analytics", async (c) => {
     })),
   };
 
+  // ── Profile strength & activity score distributions (from cached scores) ──
+  const scoreBuckets = (vals: (number | null | undefined)[]) => {
+    const ranges: [string, number, number][] = [
+      ["0–20", 0, 20],
+      ["21–40", 21, 40],
+      ["41–60", 41, 60],
+      ["61–80", 61, 80],
+      ["81–100", 81, 100],
+    ];
+    const scored = vals.filter((v): v is number => v != null);
+    return {
+      scored_users: scored.length,
+      avg: scored.length
+        ? Math.round(scored.reduce((s, v) => s + v, 0) / scored.length)
+        : 0,
+      distribution: [
+        ...ranges.map(([label, lo, hi]) => ({
+          label,
+          count: scored.filter((v) => v >= lo && v <= hi).length,
+        })),
+        { label: "Not scored", count: vals.length - scored.length },
+      ],
+    };
+  };
+  const profileStrengthAnalytics = scoreBuckets(users.map((u) => u.profile_strength_cache));
+  const activityScoreAnalytics = scoreBuckets(users.map((u) => u.activity_score_cache));
+
   // ── Content activity per day (30d): posts, comments, reactions + who posted ──
   const contentPerDay = new Map<
     string,
@@ -538,6 +565,8 @@ app.get("/analytics", async (c) => {
     job_applications: jobApplications,
     content_activity: contentActivity,
     experience: experienceAnalytics,
+    profile_strength: profileStrengthAnalytics,
+    activity_score: activityScoreAnalytics,
     invites: {
       total: invites.length,
       unique_inviters: byInviter.size,
