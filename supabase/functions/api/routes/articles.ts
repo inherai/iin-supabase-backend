@@ -70,6 +70,19 @@ function sanitizeHtml(html: string): string {
     '*':  new Set(['class']),
   }
 
+  // YouTube embeds: iframe is not allowlisted, so extract valid ones first,
+  // rebuild them from the validated src only (drops any smuggled attributes),
+  // and restore after tag stripping.
+  const YT_EMBED = /^https:\/\/(www\.)?(youtube\.com|youtube-nocookie\.com)\/embed\/[\w-]+([?&][\w=&%.-]*)?$/i
+  const iframes: string[] = []
+  const iframeToken = `IFRAME-${crypto.randomUUID()}`
+  html = html.replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, (m) => {
+    const src = m.match(/\ssrc=["']([^"']*)["']/i)?.[1] ?? ''
+    if (!YT_EMBED.test(src)) return ''
+    iframes.push(`<iframe src="${src}" width="640" height="360" frameborder="0" allowfullscreen></iframe>`)
+    return `${iframeToken}-${iframes.length - 1}`
+  })
+
   // Strip script/style/on* attributes — simple regex approach for Deno edge
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -81,6 +94,8 @@ function sanitizeHtml(html: string): string {
       if (ALLOWED_TAGS.has(tag.toLowerCase())) return match
       return ''
     })
+    // Restore validated YouTube iframes
+    .replace(new RegExp(`${iframeToken}-(\\d+)`, 'g'), (_, i) => iframes[Number(i)] ?? '')
 }
 
 /** Single-article enrich — used only when fetching one article */
