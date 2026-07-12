@@ -725,6 +725,36 @@ app.get('/editors-picks', async (c) => {
   }
 })
 
+// ─── GET /articles/featured — admin-selected article shown first in the feed widget ───
+
+app.get('/featured', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const supabase = c.get('supabase')
+
+  try {
+    const { data, error } = await supabase
+      .from('articles')
+      .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, author_uuid, author_type, company_id, guest_author_name, guest_author_avatar_url, series_name, is_featured')
+      .eq('status', 'published')
+      .eq('is_featured', true)
+      .is('deleted_at', null)
+      .order('published_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) throw error
+    if (!data) return c.json({ article: null })
+
+    const [enriched] = await batchEnrichArticles([data], supabase)
+    const tagsMap = await batchFetchTags([String(data.id)], supabase)
+    return c.json({ article: { ...enriched, tags: tagsMap[data.id] || [] } })
+  } catch (err) {
+    console.error('GET /articles/featured error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
 // ─── GET /articles/my-articles — author's own published + drafts ──────────────
 
 app.get('/my-articles', async (c) => {
@@ -1848,6 +1878,51 @@ app.post('/:id/editors-pick', async (c) => {
     return c.json({ is_editors_pick: !article.is_editors_pick })
   } catch (err) {
     console.error('POST /articles/:id/editors-pick error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── POST /articles/:id/featured — admin only, single featured article ───────
+
+app.post('/:id/featured', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  // Admin check via app_metadata
+  const isAdmin = (user as any).app_metadata?.is_admin === true
+  if (!isAdmin) return c.json({ error: 'Forbidden' }, 403)
+
+  const articleId = c.req.param('id')
+
+  try {
+    const { data: article } = await supabaseAdmin
+      .from('articles')
+      .select('id, is_featured')
+      .eq('id', articleId)
+      .maybeSingle()
+
+    if (!article) return c.json({ error: 'Not found' }, 404)
+
+    const nextFeatured = !article.is_featured
+
+    // Only one featured article at a time — clear any previous one first
+    if (nextFeatured) {
+      const { error: clearError } = await supabaseAdmin
+        .from('articles')
+        .update({ is_featured: false })
+        .eq('is_featured', true)
+      if (clearError) throw clearError
+    }
+
+    const { error } = await supabaseAdmin
+      .from('articles')
+      .update({ is_featured: nextFeatured })
+      .eq('id', articleId)
+
+    if (error) throw error
+    return c.json({ is_featured: nextFeatured })
+  } catch (err) {
+    console.error('POST /articles/:id/featured error:', err)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })
