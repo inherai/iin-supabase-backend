@@ -321,7 +321,7 @@ app.get('/', async (c) => {
     const articleIds  = raw.map((a: any) => String(a.id))
     const authorUuids = [...new Set(raw.filter((a: any) => a.author_uuid).map((a: any) => String(a.author_uuid)))]
 
-    const [enrichedArticles, tagsMap, impressionsRes, followersRes] = await Promise.all([
+    const [enrichedArticles, tagsMap, impressionsRes, followersRes, commentsRes] = await Promise.all([
       batchEnrichArticles(raw, supabase),
       batchFetchTags(articleIds, supabase),
       articleIds.length
@@ -329,6 +329,9 @@ app.get('/', async (c) => {
         : { data: [] as any[] },
       authorUuids.length
         ? supabase.from('article_author_follows').select('author_uuid').in('author_uuid', authorUuids)
+        : { data: [] as any[] },
+      articleIds.length
+        ? supabase.from('article_comments').select('article_id').in('article_id', articleIds)
         : { data: [] as any[] },
     ])
 
@@ -340,6 +343,10 @@ app.get('/', async (c) => {
     for (const row of followersRes.data || []) {
       followerCountMap[row.author_uuid] = (followerCountMap[row.author_uuid] || 0) + 1
     }
+    const commentCountMap: Record<string, number> = {}
+    for (const row of commentsRes.data || []) {
+      commentCountMap[row.article_id] = (commentCountMap[row.article_id] || 0) + 1
+    }
 
     const articles = enrichedArticles.map((a: any) => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -348,6 +355,7 @@ app.get('/', async (c) => {
         ...rest,
         tags: tagsMap[a.id] || [],
         view_count: viewCountMap[a.id] || 0,
+        comment_count: commentCountMap[a.id] || 0,
         ...(a.author ? { author: { ...a.author, follower_count: followerCountMap[a.author_uuid] || 0 } } : {}),
       }
     })
@@ -385,19 +393,25 @@ app.get('/latest', async (c) => {
 
     const articles = await batchEnrichArticles(data || [], supabase)
     const articleIds = (data || []).map((a: any) => String(a.id))
-    const [tagsMap, viewsRes] = await Promise.all([
+    const [tagsMap, viewsRes, commentsRes] = await Promise.all([
       batchFetchTags(articleIds, supabase),
       articleIds.length
         ? supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', articleIds)
         : { data: [] as any[] },
+      articleIds.length
+        ? supabase.from('article_comments').select('article_id').in('article_id', articleIds)
+        : { data: [] as any[] },
     ])
     const viewCountMap: Record<string, number> = {}
     for (const row of viewsRes.data || []) viewCountMap[row.article_id] = row.view_count ?? 0
+    const commentCountMap: Record<string, number> = {}
+    for (const row of commentsRes.data || []) commentCountMap[row.article_id] = (commentCountMap[row.article_id] || 0) + 1
 
     const enriched = articles.map((a: any) => ({
       ...a,
       tags: tagsMap[a.id] || [],
       view_count: viewCountMap[a.id] || 0,
+      comment_count: commentCountMap[a.id] || 0,
     }))
 
     return c.json({ articles: enriched })
@@ -565,19 +579,25 @@ app.get('/trending', async (c) => {
 
     const enriched = await batchEnrichArticles(sorted, supabase)
     const enrichedIds = enriched.map((a: any) => String(a.id))
-    const [tagsMap, viewCountRes] = await Promise.all([
+    const [tagsMap, viewCountRes, commentsRes] = await Promise.all([
       batchFetchTags(enrichedIds, supabase),
       enrichedIds.length
         ? supabaseAdmin.from('article_view_counts').select('article_id, view_count').in('article_id', enrichedIds)
         : { data: [] as any[] },
+      enrichedIds.length
+        ? supabase.from('article_comments').select('article_id').in('article_id', enrichedIds)
+        : { data: [] as any[] },
     ])
     const viewCountMap: Record<string, number> = {}
     for (const row of viewCountRes.data || []) viewCountMap[row.article_id] = row.view_count ?? 0
+    const commentCountMap: Record<string, number> = {}
+    for (const row of commentsRes.data || []) commentCountMap[row.article_id] = (commentCountMap[row.article_id] || 0) + 1
 
     const articles = enriched.map((a: any) => ({
       ...a,
       tags: tagsMap[a.id] || [],
       view_count: viewCountMap[a.id] || 0,
+      comment_count: commentCountMap[a.id] || 0,
     }))
 
     return c.json({ articles })
