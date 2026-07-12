@@ -746,9 +746,22 @@ app.get('/featured', async (c) => {
     if (error) throw error
     if (!data) return c.json({ article: null })
 
-    const [enriched] = await batchEnrichArticles([data], supabase)
-    const tagsMap = await batchFetchTags([String(data.id)], supabase)
-    return c.json({ article: { ...enriched, tags: tagsMap[data.id] || [] } })
+    const articleId = String(data.id)
+    const [[enriched], tagsMap, viewsRes, commentsRes] = await Promise.all([
+      batchEnrichArticles([data], supabase),
+      batchFetchTags([articleId], supabase),
+      supabaseAdmin.from('article_view_counts').select('view_count').eq('article_id', articleId).maybeSingle(),
+      supabase.from('article_comments').select('id', { count: 'exact', head: true }).eq('article_id', articleId),
+    ])
+
+    return c.json({
+      article: {
+        ...enriched,
+        tags: tagsMap[data.id] || [],
+        view_count: viewsRes.data?.view_count ?? 0,
+        comment_count: commentsRes.count ?? 0,
+      },
+    })
   } catch (err) {
     console.error('GET /articles/featured error:', err)
     return c.json({ error: 'Internal server error' }, 500)
