@@ -35,7 +35,7 @@ app.get("/", async (c) => {
 
     const { data, error } = await supabase
       .from("invites")
-      .select("id, recipient_email, status, created_at, expires_at, acquaintance_source")
+      .select("id, recipient_email, status, created_at, expires_at, acquaintance_source, personal_note")
       .eq("inviter_id", user.id)
       .order("created_at", { ascending: false });
 
@@ -51,7 +51,22 @@ app.get("/", async (c) => {
         : inv
     );
 
-    return c.json(invites);
+    // Flag recipients who joined in the meantime (e.g. via someone else's invite),
+    // so the client can show "joined" instead of offering a pointless re-invite
+    const recipientEmails = [...new Set(invites.map((inv: any) => inv.recipient_email))];
+    let memberEmails = new Set<string>();
+    if (recipientEmails.length > 0) {
+      const { data: members } = await supabase
+        .from("users")
+        .select("email")
+        .in("email", recipientEmails);
+      memberEmails = new Set((members ?? []).map((m: any) => m.email));
+    }
+
+    return c.json(invites.map((inv: any) => ({
+      ...inv,
+      recipient_is_member: memberEmails.has(inv.recipient_email),
+    })));
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }

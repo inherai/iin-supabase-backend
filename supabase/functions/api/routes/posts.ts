@@ -386,7 +386,8 @@ async function insertReplyNotification(supabase: any, actorId: string, parentCom
 
 // ====================================================================
 // Feed Ranking v2 — completely separate handler, existing flow untouched
-// Activated only when ?feed_ranking=v2 is present
+// Activated when ?feed_ranking=v2 is present, or in ?ids= mode (explicit
+// post list, e.g. AI search results — enriched without ranking/pagination)
 // ====================================================================
 
 // ── Scoring config — single source of truth for all tunable parameters ──
@@ -801,6 +802,14 @@ async function handleRankedFeed(c: any) {
   const targetUserId = c.req.query('userid')
   const excludeEmail = c.req.query('exclude_email') === 'true'
 
+  // ids mode: enrich an explicit, pre-ranked post list (e.g. AI search results)
+  // through the exact same pipeline as the ranked feed — same authors, privacy,
+  // reactions, comments and saved state. Skips ranking/pagination, keeps input order.
+  const idsParam = c.req.query('ids')
+  const requestedIds: string[] | null = idsParam
+    ? Array.from(new Set<string>(idsParam.split(',').map((s: string) => s.trim()).filter((s: string) => s.length > 0))).slice(0, 100)
+    : null
+
   let filterEmail: string | null = null
   if (targetUserId) {
     const { data: email, error: emailError } = await supabase
@@ -811,18 +820,58 @@ async function handleRankedFeed(c: any) {
     filterEmail = email
   }
 
-  const { data: posts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
-    p_session_start: session_start,
-    p_last_effective_date: last_effective_date || null,
-    p_last_id: last_id || null,
-    p_limit: 50,
-    p_filter_email: filterEmail
-  })
+  let posts: any[] | null
+  if (requestedIds) {
+    if (requestedIds.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
+    const { data: idPosts, error: idPostsError } = await supabase
+      .from('posts')
+      .select('id, sender, subject, message, attachments, sent_at, post_type, community_members_only, company_id, posted_by_uuid, linked_article_id')
+      .in('id', requestedIds)
+    if (idPostsError) {
+      console.error('[ranked-feed] posts-by-ids error:', idPostsError.message)
+      return c.json({ data: [], meta: { next_cursor: null } })
+    }
 
-  if (postsError) {
-    console.error('[ranked-feed] get_stabilized_feed error:', postsError.message)
-    return c.json({ data: [], meta: { next_cursor: null } })
+    const savedIdSet = new Set<string>()
+    if (current_user_uuid && (idPosts || []).length > 0) {
+      const { data: savedRows, error: savedError } = await supabase
+        .from('saved_resources')
+        .select('saved_resource_id')
+        .eq('user_id', current_user_uuid)
+        .eq('saved_resource_type', 'post')
+        .in('saved_resource_id', (idPosts || []).map((p: any) => String(p.id)))
+      if (savedError) console.error('[ranked-feed] posts-by-ids saved lookup error:', savedError.message)
+      ;(savedRows || []).forEach((r: any) => savedIdSet.add(String(r.saved_resource_id)))
+    }
+
+    // preserve the caller's (ranking) order, normalize to the stabilized-feed row shape
+    const byId = new Map((idPosts || []).map((p: any) => [String(p.id), p]))
+    posts = requestedIds
+      .map((id: string) => byId.get(id))
+      .filter(Boolean)
+      .map((p: any) => ({
+        ...p,
+        id: String(p.id),
+        community_members_only: p.community_members_only === true,
+        effective_sort_date: p.sent_at,
+        is_saved: savedIdSet.has(String(p.id)),
+      }))
+  } else {
+    const { data: rpcPosts, error: postsError } = await supabase.rpc('get_stabilized_feed', {
+      p_session_start: session_start,
+      p_last_effective_date: last_effective_date || null,
+      p_last_id: last_id || null,
+      p_limit: 50,
+      p_filter_email: filterEmail
+    })
+
+    if (postsError) {
+      console.error('[ranked-feed] get_stabilized_feed error:', postsError.message)
+      return c.json({ data: [], meta: { next_cursor: null } })
+    }
+    posts = rpcPosts
   }
+
   if (!posts || posts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
 
   const visiblePosts = viewerIsRecruiter
@@ -832,7 +881,7 @@ async function handleRankedFeed(c: any) {
   if (visiblePosts.length === 0) return c.json({ data: [], meta: { next_cursor: null } })
 
   let lastBatchTail = visiblePosts[visiblePosts.length - 1]
-  let cursorForPagination = lastBatchTail ? {
+  let cursorForPagination = (lastBatchTail && !requestedIds) ? {
     last_effective_date: lastBatchTail.effective_sort_date,
     last_id: lastBatchTail.id,
     session_start: session_start
@@ -842,7 +891,7 @@ async function handleRankedFeed(c: any) {
     ? visiblePosts.filter((p: any) => p.post_type !== null && p.post_type !== 'email')
     : visiblePosts
 
-  if (excludeEmail && !targetUserId) {
+  if (excludeEmail && !targetUserId && !requestedIds) {
     const TARGET = 50
     const MAX_EXTRA = 10
     let extraFetches = 0
@@ -912,8 +961,8 @@ async function handleRankedFeed(c: any) {
   const rawLastVisit = authUserRes?.data?.last_feed_visit_at ?? null
   const cappedLastLoginAt: string | null = rawLastVisit && rawLastVisit > lookbackFloor ? rawLastVisit : null
 
-  // fire-and-forget: רק בטעינת פיד ראשונה (לא pagination)
-  if (current_user_uuid && !last_effective_date && !last_id) {
+  // fire-and-forget: רק בטעינת פיד ראשונה (לא pagination ולא ids mode)
+  if (current_user_uuid && !last_effective_date && !last_id && !requestedIds) {
     supabaseAdmin.rpc('record_feed_visit', { p_user_id: current_user_uuid })
   }
 
@@ -1077,6 +1126,8 @@ async function handleRankedFeed(c: any) {
   // per-request derived values
   const recentActivityCutoff = new Date(Date.now() - FEED_SCORE.tier1WindowMs).toISOString()
   const isProfileFeed = !!targetUserId
+  // profile feed keeps chronological order; ids mode keeps the caller's ranking order
+  const skipRanking = isProfileFeed || !!requestedIds
 
   const scoreCtx: ScoreContext = {
     lastSeenMap, cappedLastLoginAt, session_start,
@@ -1127,7 +1178,7 @@ async function handleRankedFeed(c: any) {
       : null
 
     // scoring
-    const { score: _score, tier1: _tier1, v2 } = !isProfileFeed
+    const { score: _score, tier1: _tier1, v2 } = !skipRanking
       ? scorePost(post, postLikes, postComments, scoreCtx)
       : { score: 0, tier1: false, v2: {} }
 
@@ -1153,7 +1204,7 @@ async function handleRankedFeed(c: any) {
     }
   })
 
-  if (!isProfileFeed) {
+  if (!skipRanking) {
     scoredPosts.sort((a: any, b: any) => {
       if (a._tier1 !== b._tier1) return a._tier1 ? -1 : 1
       return (b._score ?? 0) - (a._score ?? 0)
@@ -1402,6 +1453,12 @@ if (targetUserId) {
       return c.json({ data: apEnrichedPosts, meta: { next_cursor: activityNextCursor } })
     }
     // ---- End activity filter path ----
+
+    // Explicit post-list mode (e.g. AI search results): enrich the given ids through
+    // the shared feed pipeline, regardless of the feed_ranking flag.
+    if (c.req.query('ids')) {
+      return handleRankedFeed(c)
+    }
 
     // Feature flag: v2 ranked feed (hermetically separate, no effect on existing flow)
     if (c.req.query('feed_ranking') === 'v2') {

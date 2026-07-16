@@ -26,7 +26,6 @@ app.post('/', async (c) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    const supabaseUser = c.get('supabase');
     const currentUser = c.get('user');
     const viewerIsRecruiter = isRecruiterViewer(currentUser);
 
@@ -112,92 +111,30 @@ app.post('/', async (c) => {
     }
 
     // =================================================================
-    // שלב 3.5: העשרת הנתונים (Enrichment)
+    // שלב 3.5: העשרה דרך צינור הפיד הרגיל (GET /api/posts?ids=...)
+    // אותם מחברים, פרטיות, אנונימיות, ריאקציות, תגובות ו-saved —
+    // אחד לאחד עם הפיד. exclude_email שומר על הסינון הקיים של החיפוש.
     // =================================================================
     let enrichedItems: any[] = [];
 
     if (finalItems.length > 0) {
-      const postIds = finalItems.map((p) => p.id);
-      const emailsToFetch = new Set<string>();
-
-      finalItems.forEach((p: any) => {
-        if (p.sender) emailsToFetch.add(p.sender);
-      });
-
-      const [{ data: postTypes }, { data: comments, error: commentsError }] = await Promise.all([
-        supabaseUser.from('posts').select('id, post_type').in('id', postIds),
-        supabaseUser.from('comments').select('*').in('post_id', postIds).order('created_at', { ascending: true }).limit(200),
-      ]);
-
-      const postTypeMap = (postTypes || []).reduce((acc: any, p: any) => {
-        acc[p.id] = p.post_type;
-        return acc;
-      }, {} as Record<string, string>);
-
-      finalItems = finalItems.filter((p: any) => {
-        const pt = postTypeMap[p.id];
-        return pt && pt !== 'email';
-      });
-
-      if (commentsError) throw commentsError;
-
-      const visibleComments = viewerIsRecruiter
-        ? (comments || []).filter((c: any) => c.community_members_only !== true)
-        : (comments || []);
-
-      visibleComments.forEach((c: any) => {
-        if (c.sender) emailsToFetch.add(c.sender);
-      });
-
-      const { data: users, error: usersError } = await supabaseUser
-        .from('public_users_view')
-        .select('uuid, email, first_name, last_name, image, role, headline')
-        .in('email', Array.from(emailsToFetch));
-
-      if (usersError) throw usersError;
-
-      const usersMap = users?.reduce((acc: any, user: any) => {
-        if (user.email) {
-          const displayName = user.first_name
-            ? (user.last_name ? `${user.first_name} ${user.last_name}` : user.first_name)
-            : null;
-          acc[user.email] = {
-            uuid: user.uuid,
-            email: user.email,
-            name: displayName,
-            first_name: user.first_name,
-            last_name: user.last_name,
-            image: user.image === 'true' ? true : null,
-            role: user.role,
-            headline: user.headline
-          };
+      const rankedIds = finalItems.map((p: any) => String(p.id)).slice(0, 100);
+      const PROJECT_URL = Deno.env.get('SUPABASE_URL');
+      const postsRes = await fetch(
+        `${PROJECT_URL}/functions/v1/api/posts?ids=${encodeURIComponent(rankedIds.join(','))}&exclude_email=true`,
+        {
+          headers: {
+            'Authorization': c.req.header('Authorization') || '',
+            'Content-Type': 'application/json'
+          }
         }
-        return acc;
-      }, {} as Record<string, any>);
-
-      const getAuthor = (email: string) => usersMap?.[email] || {
-        uuid: null, email: email, name: null, first_name: null, last_name: null, image: null, role: 'unknown'
-      };
-
-      const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
-        const commentWithAuthor = {
-          ...comment,
-          author: getAuthor(comment.sender)
-        };
-        if (!acc[comment.post_id]) acc[comment.post_id] = [];
-        acc[comment.post_id].push(commentWithAuthor);
-        return acc;
-      }, {} as Record<string, any[]>);
-
-      enrichedItems = finalItems.map((post: any) => {
-        const { comments_text, similarity, final_score, days_old, ...restOfPost } = post;
-        return {
-          ...restOfPost,
-          post_type: postTypeMap[post.id] || null,
-          author: getAuthor(post.sender),
-          comments: commentsByPostId?.[post.id] || []
-        };
-      });
+      );
+      if (!postsRes.ok) {
+        console.error('[search-ai] Failed to enrich via feed pipeline:', await postsRes.text());
+        return c.json({ error: 'Failed to enrich search results' }, 500);
+      }
+      const postsJson = await postsRes.json();
+      enrichedItems = postsJson.data || [];
     }
 
     return c.json({
