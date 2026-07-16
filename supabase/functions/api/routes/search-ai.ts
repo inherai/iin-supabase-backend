@@ -16,6 +16,55 @@ function isRecruiterViewer(user: any): boolean {
   return role === RECRUITER_ROLE;
 }
 
+// self-contained fetch helper (kept local to this route — not shared with posts.ts)
+async function fetchAllByIds(
+  supabase: any,
+  table: string,
+  select: string,
+  idColumn: string,
+  ids: string[] | number[],
+): Promise<any[]> {
+  const CHUNK_SIZE = 100
+  const PAGE_SIZE = 1000
+  const rows: any[] = []
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE)
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from(table)
+        .select(select)
+        .in(idColumn, chunk)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE_SIZE - 1)
+      if (error) {
+        console.error(`[search-ai] fetch ${table} by ${idColumn} failed:`, error.message)
+        break
+      }
+      rows.push(...(data || []))
+      if (!data || data.length < PAGE_SIZE) break
+    }
+  }
+  return rows
+}
+
+function buildReactionSummary(likes: any[], current_user_uuid: string | undefined) {
+  const reactionCounts = likes.reduce((acc: any, like: any) => {
+    const type = like.reaction_type || 'like'
+    acc[type] = (acc[type] || 0) + 1
+    return acc
+  }, {} as Record<string, number>)
+  const userReactions = likes
+    .filter((l: any) => l.user_id === current_user_uuid)
+    .map((l: any) => l.reaction_type)
+  return {
+    likes_count: likes.length,
+    reaction_counts: reactionCounts,
+    user_reactions: userReactions,
+    user_reaction: userReactions[0] || null,
+    is_liked: userReactions.length > 0,
+  }
+}
+
 // POST /api/search-ai
 app.post('/', async (c) => {
   try {
@@ -28,6 +77,7 @@ app.post('/', async (c) => {
 
     const supabaseUser = c.get('supabase');
     const currentUser = c.get('user');
+    const current_user_uuid = currentUser?.id;
     const viewerIsRecruiter = isRecruiterViewer(currentUser);
 
     const { query: rawUserQuery } = await c.req.json();
@@ -124,9 +174,10 @@ app.post('/', async (c) => {
         if (p.sender) emailsToFetch.add(p.sender);
       });
 
-      const [{ data: postTypes }, { data: comments, error: commentsError }] = await Promise.all([
+      const [{ data: postTypes }, comments, postLikes] = await Promise.all([
         supabaseUser.from('posts').select('id, post_type').in('id', postIds),
-        supabaseUser.from('comments').select('*').in('post_id', postIds).order('created_at', { ascending: true }).limit(200),
+        fetchAllByIds(supabaseUser, 'comments', '*', 'post_id', postIds),
+        fetchAllByIds(supabaseUser, 'likes', 'target_id, user_id, reaction_type, created_at', 'target_id', postIds),
       ]);
 
       const postTypeMap = (postTypes || []).reduce((acc: any, p: any) => {
@@ -139,11 +190,14 @@ app.post('/', async (c) => {
         return pt && pt !== 'email';
       });
 
-      if (commentsError) throw commentsError;
-
       const visibleComments = viewerIsRecruiter
         ? (comments || []).filter((c: any) => c.community_members_only !== true)
         : (comments || []);
+
+      const commentIds = visibleComments.map((c: any) => c.id.toString());
+      const commentLikes = commentIds.length > 0
+        ? await fetchAllByIds(supabaseUser, 'likes', 'target_id, user_id, reaction_type, created_at', 'target_id', commentIds)
+        : [];
 
       visibleComments.forEach((c: any) => {
         if (c.sender) emailsToFetch.add(c.sender);
@@ -180,9 +234,11 @@ app.post('/', async (c) => {
       };
 
       const commentsByPostId = visibleComments.reduce((acc: any, comment: any) => {
+        const theseLikes = commentLikes.filter((l: any) => l.target_id === comment.id.toString());
         const commentWithAuthor = {
           ...comment,
-          author: getAuthor(comment.sender)
+          author: getAuthor(comment.sender),
+          ...buildReactionSummary(theseLikes, current_user_uuid)
         };
         if (!acc[comment.post_id]) acc[comment.post_id] = [];
         acc[comment.post_id].push(commentWithAuthor);
@@ -191,11 +247,13 @@ app.post('/', async (c) => {
 
       enrichedItems = finalItems.map((post: any) => {
         const { comments_text, similarity, final_score, days_old, ...restOfPost } = post;
+        const theseLikes = postLikes.filter((l: any) => l.target_id === post.id);
         return {
           ...restOfPost,
           post_type: postTypeMap[post.id] || null,
           author: getAuthor(post.sender),
-          comments: commentsByPostId?.[post.id] || []
+          comments: commentsByPostId?.[post.id] || [],
+          ...buildReactionSummary(theseLikes, current_user_uuid)
         };
       });
     }
