@@ -7,6 +7,13 @@ const app = new Hono();
 const sanitizeEmail = (email: string) =>
   email.replace(/[​-‏‪-‮﻿­]/g, "").trim().toLowerCase();
 
+const isInviteExpired = (expiresAtValue: string | null) => {
+  if (!expiresAtValue) return true;
+  const expiresAtMs = new Date(expiresAtValue).getTime();
+  if (Number.isNaN(expiresAtMs)) return true;
+  return expiresAtMs <= Date.now();
+};
+
 function startOfCalendarWeek(): Date {
   const now = new Date();
   const day = now.getDay(); // 0 = Sunday
@@ -28,7 +35,7 @@ app.get("/", async (c) => {
 
     const { data, error } = await supabase
       .from("invites")
-      .select("id, recipient_email, status, created_at, acquaintance_source")
+      .select("id, recipient_email, status, created_at, expires_at, acquaintance_source")
       .eq("inviter_id", user.id)
       .order("created_at", { ascending: false });
 
@@ -36,7 +43,15 @@ app.get("/", async (c) => {
       return c.json({ error: error.message }, 500);
     }
 
-    return c.json(data ?? []);
+    // Pending invites past their expiry are only flipped to "expired" in the DB
+    // when someone opens the link, so derive the effective status here
+    const invites = (data ?? []).map((inv: any) =>
+      inv.status === "pending" && isInviteExpired(inv.expires_at)
+        ? { ...inv, status: "expired" }
+        : inv
+    );
+
+    return c.json(invites);
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
@@ -155,18 +170,34 @@ app.post("/", async (c) => {
       return c.json({ error: "recipient already exists" }, 409);
     }
 
-    const { data: existingInvite, error: existingInviteError } = await supabase
+    const { data: pendingInvites, error: existingInviteError } = await supabase
       .from("invites")
-      .select("id")
+      .select("id, expires_at")
       .eq("recipient_email", normalizedRecipientEmail)
-      .eq("status", "pending")
-      .maybeSingle();
+      .eq("status", "pending");
 
     if (existingInviteError) {
       return c.json({ error: existingInviteError.message }, 500);
     }
-    if (existingInvite) {
+
+    const hasActiveInvite = (pendingInvites ?? []).some(
+      (inv: any) => !isInviteExpired(inv.expires_at),
+    );
+    if (hasActiveInvite) {
       return c.json({ error: "recipient already invited" }, 409);
+    }
+
+    // Any remaining pending invites are past expiry — mark them expired so the
+    // recipient can be re-invited as if she was never invited
+    const staleInviteIds = (pendingInvites ?? []).map((inv: any) => inv.id);
+    if (staleInviteIds.length > 0) {
+      const { error: expireError } = await supabase
+        .from("invites")
+        .update({ status: "expired" })
+        .in("id", staleInviteIds);
+      if (expireError) {
+        return c.json({ error: expireError.message }, 500);
+      }
     }
 
     if (isAdmin) {
