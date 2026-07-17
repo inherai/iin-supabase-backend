@@ -99,9 +99,15 @@ app.post("/", async (c) => {
   const [u1, u2] = [user.id, partnerId].sort();
 
   // 2. מציאת או יצירת שיחה
+  const conversationSelect = `
+    *,
+    user1:public_users_view!user1_id(uuid, first_name, last_name, image, headline),
+    user2:public_users_view!user2_id(uuid, first_name, last_name, image, headline)
+  `;
+
   const { data: existing, error: findError } = await supabase
     .from("conversations")
-    .select("*")
+    .select(conversationSelect)
     .eq("user1_id", u1)
     .eq("user2_id", u2)
     .maybeSingle();
@@ -113,7 +119,7 @@ app.post("/", async (c) => {
   const { data: newConv, error: createError } = await supabase
     .from("conversations")
     .insert([{ user1_id: u1, user2_id: u2 }])
-    .select()
+    .select(conversationSelect)
     .single();
 
   if (createError) return c.json({ error: createError.message }, 400);
