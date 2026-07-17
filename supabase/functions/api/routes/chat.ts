@@ -54,20 +54,24 @@ app.get("/", async (c) => {
   }
 
   // 4. הצלבת הנתונים בקוד
-  const enhancedData = convs.map(conv => {
-    const partnerId = conv.user1_id === user.id ? conv.user2_id : conv.user1_id;
-    const hasActiveConn = conns.some(conn =>
-      (conn.requester_id === partnerId || conn.receiver_id === partnerId)
-    );
-    const lastMsg = lastMessageMap[conv.id];
+  // Conversations with no messages yet are just an empty shell created by opening
+  // the chat (e.g. an accidental "Message" click) — don't clutter the inbox with them.
+  const enhancedData = convs
+    .map(conv => {
+      const partnerId = conv.user1_id === user.id ? conv.user2_id : conv.user1_id;
+      const hasActiveConn = conns.some(conn =>
+        (conn.requester_id === partnerId || conn.receiver_id === partnerId)
+      );
+      const lastMsg = lastMessageMap[conv.id];
 
-    return {
-      ...conv,
-      last_message: lastMsg?.content ?? conv.last_message ?? null,
-      last_message_at: lastMsg?.created_at ?? conv.last_message_at ?? conv.updated_at,
-      is_connection_active: hasActiveConn
-    };
-  });
+      return {
+        ...conv,
+        last_message: lastMsg?.content ?? conv.last_message ?? null,
+        last_message_at: lastMsg?.created_at ?? conv.last_message_at ?? conv.updated_at,
+        is_connection_active: hasActiveConn
+      };
+    })
+    .filter(conv => conv.last_message !== null);
 
   return c.json(enhancedData);
 });
