@@ -1203,6 +1203,145 @@ app.delete("/companies/:id", async (c) => {
   return c.json({ success: true });
 });
 
+// ==================== WORKPLACES ====================
+
+// GET /admin/workplaces — members grouped by current workplace.
+// A member's workplace comes from experience entries with current=true
+// (entry.company can be a plain string or a linked {id,name,logo} object);
+// falls back to the free-text users.company field when no current entry exists.
+app.get("/workplaces", async (c) => {
+  try {
+    const db = getAdminClient();
+    const roleFilter = c.req.query("role") || "";
+
+    const [users, companies] = await Promise.all([
+      fetchAllRows(
+        db,
+        "users",
+        "uuid, first_name, last_name, email, status, role, headline, company, experience",
+        (q) => {
+          let query = q.not("email", "like", "deleted_%@deleted.local");
+          if (roleFilter) query = query.eq("role", roleFilter);
+          return query;
+        }
+      ),
+      fetchAllRows(db, "companies", "id, name, logo, website"),
+    ]);
+
+    const companyById = new Map(companies.map((co: any) => [co.id, co]));
+    const companyByNorm = new Map<string, any>();
+    for (const co of companies) {
+      const norm = normalizeCompanyName(co.name || "");
+      if (norm && !companyByNorm.has(norm)) companyByNorm.set(norm, co);
+    }
+
+    type Employee = {
+      user_id: string;
+      name: string;
+      email: string | null;
+      title: string | null;
+      status: string | null;
+      role: string | null;
+      source: "experience" | "profile";
+    };
+
+    const groups = new Map<string, {
+      nameCounts: Map<string, number>;
+      company: any | null;
+      employees: Employee[];
+      seen: Set<string>;
+    }>();
+    const noWorkplace: Employee[] = [];
+
+    const isCurrent = (e: any) => e?.current === true || String(e?.current) === "true";
+
+    for (const u of users) {
+      const fullName = [u.first_name, u.last_name].filter(Boolean).join(" ") || "Unknown";
+      const exp = Array.isArray(u.experience) ? u.experience : [];
+
+      const places: { raw: string; matched: any | null; title: string | null; source: "experience" | "profile" }[] = [];
+      for (const e of exp.filter(isCurrent)) {
+        const comp = e?.company;
+        const raw = (typeof comp === "string" ? comp : comp?.name || "").trim();
+        if (!raw) continue;
+        const matched =
+          (typeof comp === "object" && comp?.id != null ? companyById.get(comp.id) : null) ??
+          companyByNorm.get(normalizeCompanyName(raw)) ??
+          null;
+        places.push({ raw, matched, title: e?.title || null, source: "experience" });
+      }
+      if (places.length === 0 && typeof u.company === "string" && u.company.trim()) {
+        const raw = u.company.trim();
+        places.push({
+          raw,
+          matched: companyByNorm.get(normalizeCompanyName(raw)) ?? null,
+          title: u.headline || null,
+          source: "profile",
+        });
+      }
+
+      const employeeOf = (title: string | null, source: "experience" | "profile"): Employee => ({
+        user_id: u.uuid,
+        name: fullName,
+        email: u.email ?? null,
+        title: title || u.headline || null,
+        status: u.status ?? null,
+        role: u.role ?? null,
+        source,
+      });
+
+      if (places.length === 0) {
+        noWorkplace.push(employeeOf(null, "profile"));
+        continue;
+      }
+
+      for (const p of places) {
+        const displayRaw = p.matched?.name || p.raw;
+        const key = normalizeCompanyName(displayRaw) || displayRaw.toLowerCase();
+        let g = groups.get(key);
+        if (!g) {
+          g = { nameCounts: new Map(), company: null, employees: [], seen: new Set() };
+          groups.set(key, g);
+        }
+        g.nameCounts.set(displayRaw, (g.nameCounts.get(displayRaw) ?? 0) + 1);
+        if (!g.company && p.matched) g.company = p.matched;
+        // two current roles at the same company → one row per member
+        if (g.seen.has(u.uuid)) continue;
+        g.seen.add(u.uuid);
+        g.employees.push(employeeOf(p.title, p.source));
+      }
+    }
+
+    const workplaces = [...groups.entries()]
+      .map(([key, g]) => ({
+        key,
+        // display name = most common raw variant (linked company name wins via displayRaw)
+        name: [...g.nameCounts.entries()].sort((a, b) => b[1] - a[1])[0][0],
+        company: g.company
+          ? { id: g.company.id, name: g.company.name, logo: g.company.logo ?? null, website: g.company.website ?? null }
+          : null,
+        count: g.employees.length,
+        employees: g.employees.sort((a, b) => a.name.localeCompare(b.name, "he")),
+      }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "he"));
+
+    noWorkplace.sort((a, b) => a.name.localeCompare(b.name, "he"));
+
+    return c.json({
+      generated_at: new Date().toISOString(),
+      total_users: users.length,
+      with_workplace: users.length - noWorkplace.length,
+      without_workplace: noWorkplace.length,
+      unique_workplaces: workplaces.length,
+      workplaces,
+      no_workplace: noWorkplace,
+    });
+  } catch (err: any) {
+    console.error("workplaces error:", err);
+    return c.json({ error: err?.message ?? "workplaces failed" }, 500);
+  }
+});
+
 // ==================== COMPANY REQUESTS ====================
 
 // Normalize a company name for grouping: lowercase, remove punctuation + common suffixes
