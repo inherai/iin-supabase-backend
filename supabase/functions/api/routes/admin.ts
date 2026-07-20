@@ -1206,9 +1206,9 @@ app.delete("/companies/:id", async (c) => {
 // ==================== WORKPLACES ====================
 
 // GET /admin/workplaces — members grouped by current workplace.
-// A member's workplace comes from experience entries with current=true
-// (entry.company can be a plain string or a linked {id,name,logo} object);
-// falls back to the free-text users.company field when no current entry exists.
+// A member's workplace comes from experience entries with current=true;
+// entry.company can be a plain string, a company id (number), or a linked
+// {id,name,logo} object (there is no users.company column).
 app.get("/workplaces", async (c) => {
   try {
     const db = getAdminClient();
@@ -1218,7 +1218,7 @@ app.get("/workplaces", async (c) => {
       fetchAllRows(
         db,
         "users",
-        "uuid, first_name, last_name, email, status, role, headline, company, experience",
+        "uuid, first_name, last_name, email, status, role, headline, experience",
         (q) => {
           let query = q.not("email", "like", "deleted_%@deleted.local");
           if (roleFilter) query = query.eq("role", roleFilter);
@@ -1242,7 +1242,6 @@ app.get("/workplaces", async (c) => {
       title: string | null;
       status: string | null;
       role: string | null;
-      source: "experience" | "profile";
     };
 
     const groups = new Map<string, {
@@ -1259,39 +1258,36 @@ app.get("/workplaces", async (c) => {
       const fullName = [u.first_name, u.last_name].filter(Boolean).join(" ") || "Unknown";
       const exp = Array.isArray(u.experience) ? u.experience : [];
 
-      const places: { raw: string; matched: any | null; title: string | null; source: "experience" | "profile" }[] = [];
+      const places: { raw: string; matched: any | null; title: string | null }[] = [];
       for (const e of exp.filter(isCurrent)) {
         const comp = e?.company;
-        const raw = (typeof comp === "string" ? comp : comp?.name || "").trim();
+        let raw = "";
+        let matched: any = null;
+        if (typeof comp === "string") {
+          raw = comp.trim();
+        } else if (typeof comp === "number") {
+          matched = companyById.get(comp) ?? null;
+          raw = matched?.name ?? "";
+        } else if (comp && typeof comp === "object") {
+          raw = (comp.name || "").trim();
+          if (comp.id != null) matched = companyById.get(comp.id) ?? null;
+        }
         if (!raw) continue;
-        const matched =
-          (typeof comp === "object" && comp?.id != null ? companyById.get(comp.id) : null) ??
-          companyByNorm.get(normalizeCompanyName(raw)) ??
-          null;
-        places.push({ raw, matched, title: e?.title || null, source: "experience" });
-      }
-      if (places.length === 0 && typeof u.company === "string" && u.company.trim()) {
-        const raw = u.company.trim();
-        places.push({
-          raw,
-          matched: companyByNorm.get(normalizeCompanyName(raw)) ?? null,
-          title: u.headline || null,
-          source: "profile",
-        });
+        matched = matched ?? companyByNorm.get(normalizeCompanyName(raw)) ?? null;
+        places.push({ raw, matched, title: e?.title || null });
       }
 
-      const employeeOf = (title: string | null, source: "experience" | "profile"): Employee => ({
+      const employeeOf = (title: string | null): Employee => ({
         user_id: u.uuid,
         name: fullName,
         email: u.email ?? null,
         title: title || u.headline || null,
         status: u.status ?? null,
         role: u.role ?? null,
-        source,
       });
 
       if (places.length === 0) {
-        noWorkplace.push(employeeOf(null, "profile"));
+        noWorkplace.push(employeeOf(null));
         continue;
       }
 
@@ -1308,7 +1304,7 @@ app.get("/workplaces", async (c) => {
         // two current roles at the same company → one row per member
         if (g.seen.has(u.uuid)) continue;
         g.seen.add(u.uuid);
-        g.employees.push(employeeOf(p.title, p.source));
+        g.employees.push(employeeOf(p.title));
       }
     }
 
