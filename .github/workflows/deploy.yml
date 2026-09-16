@@ -27,3 +27,16 @@ jobs:
         run: supabase functions deploy publish-scheduled-posts --no-verify-jwt --project-ref ${{ secrets.SUPABASE_PROJECT_ID }}
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      # Job-enrichment worker, triggered by the process_job_ai_v3 Database Webhook.
+      # Supabase edge-function webhooks send an Authorization header, so JWT
+      # verification stays on (secure default).
+      - name: Deploy process-job-ai function
+        run: supabase functions deploy process-job-ai --project-ref ${{ secrets.SUPABASE_PROJECT_ID }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Deploy import-linkedin-jobs function
+        run: supabase functions deploy import-linkedin-jobs --project-ref ${{ secrets.SUPABASE_PROJECT_ID }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
