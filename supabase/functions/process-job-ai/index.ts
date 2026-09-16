@@ -133,35 +133,40 @@ Deno.serve(async () => {
     let failed = 0
     let rescued = 0
 
-    // Rescue pass FIRST: rows with a NULL job_description may still carry the
-    // text inside original_source_json (the full Apify item). Recover it into
-    // job_description so the drain loop below can enrich them in this same run.
-    // Bounded to one batch — never blocks the main drain.
-    const { data: orphans } = await supabase
+    // Rescue pass FIRST: rows with a NULL or EMPTY job_description may still
+    // carry the text inside original_source_json (the full Apify item). Recover
+    // it into job_description so the drain loop below can enrich them this run.
+    // Newest first, bounded to one batch — never blocks the main drain.
+    const { data: maybeOrphans } = await supabase
       .from('open_position')
-      .select('job_id, original_source_json')
+      .select('job_id, job_description, original_source_json')
       .is('job_description_html', null)
-      .is('job_description', null)
+      .order('created_at', { ascending: false })
       .limit(BATCH_SIZE)
-    for (const row of orphans || []) {
-      const recovered = extractDescriptionFromJson((row as any).original_source_json)
+    for (const row of (maybeOrphans || []) as any[]) {
+      if (typeof row.job_description === 'string' && row.job_description.trim().length > 0) continue
+      const recovered = extractDescriptionFromJson(row.original_source_json)
       if (!recovered) continue
       const { error } = await supabase
         .from('open_position')
         .update({ job_description: recovered })
-        .eq('job_id', (row as any).job_id)
+        .eq('job_id', row.job_id)
       if (!error) rescued++
     }
 
-    // Drain enrichable rows (job_description present) until empty or out of time.
-    // Requiring job_description IS NOT NULL is what unclogs the queue: rows with
-    // no source text can no longer monopolise the LIMIT fetch and stall everything.
+    // Drain enrichable rows until empty or out of time. Excluding NULL *and*
+    // empty-string job_description is what unclogs the queue: content-less rows
+    // can no longer monopolise the LIMIT fetch and stall everything. Ordering by
+    // created_at DESC processes the newest (user-relevant) jobs first, so any
+    // residual junk sits at the back and is never reached within a batch.
     while (Date.now() - startedAt < TIME_BUDGET_MS) {
       const { data: jobs, error: fetchError } = await supabase
         .from('open_position')
         .select('job_id, job_description, original_source_json')
         .is('job_description_html', null)
         .not('job_description', 'is', null)
+        .neq('job_description', '')
+        .order('created_at', { ascending: false })
         .limit(BATCH_SIZE)
       if (fetchError) throw fetchError
       if (!jobs || jobs.length === 0) break
