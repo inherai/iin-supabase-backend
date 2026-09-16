@@ -46,6 +46,23 @@ Deno.serve(async (req) => {
       companyMap[c.name.toLowerCase()] = c.id;
     });
 
+    // Pick the description defensively — if the Apify actor renames its output
+    // field, `item.job_description` becomes undefined and the job gets stored
+    // with no source text, which makes it un-enrichable and permanently hidden.
+    const pickDescription = (item) => {
+      const keys = ['job_description', 'description', 'descriptionText', 'description_text',
+                    'jobDescription', 'job_description_text', 'descriptionHtml', 'description_html'];
+      for (const k of keys) {
+        if (typeof item[k] === 'string' && item[k].trim().length > 50) return item[k];
+      }
+      // Fallback: the description is almost always the longest string field.
+      let longest = '';
+      for (const v of Object.values(item)) {
+        if (typeof v === 'string' && v.length > longest.length) longest = v;
+      }
+      return longest.trim().length > 200 ? longest : null;
+    };
+
     // מיפוי נתונים - שימי לב ש-job_description_html נשלח כ-null
     const jobsToInsert = items.map((item) => ({
       job_id: String(item.job_id),
@@ -58,7 +75,7 @@ Deno.serve(async (req) => {
       employment_type: item.employment_type,
       source: "LinkedIn", // או Glassdoor בהתאם לפונקציה
       time_posted: item.time_posted,
-      job_description: item.job_description,
+      job_description: pickDescription(item),
       job_description_html: null, // חשוב! זה מה שיפעיל את ה-Webhook
       seniority_level: item.seniority_level,
       salary_range: item.salary_range,
