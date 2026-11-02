@@ -16,7 +16,9 @@ jobs:
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned: newer CLIs reject the [inbucket] section in config.toml and fail before deploying.
+          # Matches the version used for local development.
+          version: 2.107.0
 
       - name: Deploy api function
         run: supabase functions deploy api --project-ref ${{ secrets.SUPABASE_PROJECT_ID }}
