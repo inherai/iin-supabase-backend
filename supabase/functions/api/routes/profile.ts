@@ -722,9 +722,9 @@ app.get('/', async (c) => {
       }
 
       // Exclude anyone already connected (or with a pending request) with the
-      // viewer. match_users' own internal exclusion logic lives only in the DB
-      // function body (not visible/auditable from this repo), so this is enforced
-      // here defensively as well — a suggestion the viewer is already connected
+      // viewer. match_users (migrations/add_match_users_photo_boost.sql) excludes
+      // these too, but this is enforced here defensively as well — a suggestion
+      // the viewer is already connected
       // to is never a valid "people you may know" result.
       if (userIds.length > 0) {
         const { data: existingConnections } = await supabase
@@ -862,8 +862,10 @@ app.get('/', async (c) => {
     }
 
     // 5. לוגיקת סינון
-    const enrichedExperience = await enrichExperience(targetUser.experience, supabase);
-    const enrichedProjects = await enrichExperience(targetUser.projects ?? [], supabase);
+    const [enrichedExperience, enrichedProjects] = await Promise.all([
+      enrichExperience(targetUser.experience, supabase),
+      enrichExperience(targetUser.projects ?? [], supabase),
+    ]);
 
     const isOwner = targetUser.uuid === user.id
 
@@ -961,11 +963,38 @@ app.get('/', async (c) => {
     if (targetUser.uuid !== user.id) {
   // Mutual connections — people both the viewer and the target are connected
   // to. See add_get_mutual_connections.sql.
-  const { data: mutualRows, error: mutualError } = await supabase.rpc('get_mutual_connections', {
-    p_viewer_id: user.id,
-    p_target_id: targetUser.uuid,
-    p_limit: 3
-  })
+  // The three calls below are independent — run them together instead of
+  // paying three sequential round trips on every profile open.
+  const [
+    { data: mutualRows, error: mutualError },
+    { data: suggestionRows, error: suggestionsError },
+    { error: upsertError },
+  ] = await Promise.all([
+    supabase.rpc('get_mutual_connections', {
+      p_viewer_id: user.id,
+      p_target_id: targetUser.uuid,
+      p_limit: 3
+    }),
+    // "People similar to this profile" — second-degree connections of the
+    // target, ranked by shared connections with them. See add_profile_relative_suggestions.sql.
+    supabase.rpc('get_suggested_users_for_profile', {
+      p_viewer_id: user.id,
+      p_target_id: targetUser.uuid,
+      p_limit: 6,
+      p_offset: 0
+    }),
+    // ביצוע Upsert - אם קיים שילוב של viewer_id ו-viewed_id, הוא רק יעדכן את הזמן
+    supabase
+      .from('profile_views')
+      .upsert(
+        {
+          viewer_id: user.id,
+          viewed_id: targetUser.uuid,
+          viewed_at: new Date().toISOString()
+        },
+        { onConflict: 'viewer_id,viewed_id' } // דורש אינדקס ייחודי ב-DB
+      ),
+  ])
 
   if (mutualError) {
     console.error('Failed to fetch mutual connections:', mutualError.message);
@@ -981,15 +1010,6 @@ app.get('/', async (c) => {
     }
   }
 
-  // "People similar to this profile" — second-degree connections of the
-  // target, ranked by shared connections with them. See add_profile_relative_suggestions.sql.
-  const { data: suggestionRows, error: suggestionsError } = await supabase.rpc('get_suggested_users_for_profile', {
-    p_viewer_id: user.id,
-    p_target_id: targetUser.uuid,
-    p_limit: 6,
-    p_offset: 0
-  })
-
   if (suggestionsError) {
     console.error('Failed to fetch profile-relative suggestions:', suggestionsError.message);
   } else {
@@ -1002,18 +1022,6 @@ app.get('/', async (c) => {
       role: row.role,
     }))
   }
-
-  // ביצוע Upsert - אם קיים שילוב של viewer_id ו-viewed_id, הוא רק יעדכן את הזמן
-  const { error: upsertError } = await supabase
-    .from('profile_views')
-    .upsert(
-      {
-        viewer_id: user.id,
-        viewed_id: targetUser.uuid,
-        viewed_at: new Date().toISOString()
-      },
-      { onConflict: 'viewer_id,viewed_id' } // דורש אינדקס ייחודי ב-DB
-    );
 
   if (upsertError) {
     console.error('Failed to upsert profile view:', upsertError.message);
