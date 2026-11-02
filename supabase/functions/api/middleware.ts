@@ -117,10 +117,19 @@ export const authMiddleware = async (c: Context, next: Next) => {
   }
 
   // בניית אובייקט user מה-JWT claims (מקביל ל-data.user מ-getUser())
+  const appMetadata = { ...((payload.app_metadata as Record<string, any>) ?? {}) };
+
+  // אדמין במצב אנונימי: אנונימי כלפי אחרים (users.is_anonymous / users.role ב-DB נשארים),
+  // אבל כצופה הוא מקבל חוויה רגילה — לכן בתוך ה-API הרול שלו כצופה הוא community
+  // ולא feed_participant (שחוסם אותו מ-privacy arrays ומרואוטים).
+  if (appMetadata.is_admin === true && appMetadata.role === 'feed_participant') {
+    appMetadata.role = 'community';
+  }
+
   const user = {
     id: userId,
     email: payload.email as string ?? '',
-    app_metadata: (payload.app_metadata as Record<string, any>) ?? {},
+    app_metadata: appMetadata,
     user_metadata: (payload.user_metadata as Record<string, any>) ?? {},
   };
 
