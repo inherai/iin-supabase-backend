@@ -1,5 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { parsePeopleSearchParams } from "./_peopleSearch.ts";
 
 const app = new Hono();
 
@@ -73,6 +74,8 @@ const CONNECTION_SELECT = `
 // - page: page number (for accepted only, default: 1)
 // - limit: items per page (for accepted only, default: 20)
 // - search: search by name (for accepted only)
+// - q / functions / company / company_scope / recruiters / mutual:
+//   people-search filters (for accepted only) — see _peopleSearch.ts
 app.get("/", async (c) => {
   const supabase = c.get("supabase");
   const user = c.get("user");
@@ -101,6 +104,7 @@ app.get("/", async (c) => {
       p_search: search || null,
       p_limit: limit,
       p_offset: (page - 1) * limit,
+      ...(parsePeopleSearchParams(c) ?? {}),
     });
 
     if (error) {
@@ -165,6 +169,65 @@ app.get("/accepted-ids", async (c) => {
 
 // GET /api/connections/:id
 // Returns only the number of accepted connections for a specific profile user
+// GET /api/connections/companies?scope=connections|all&q=...
+// Workplaces of my connections (or of the whole community) with how many
+// members work there now / worked there before. Powers the company filter.
+app.get("/companies", async (c) => {
+  const supabase = c.get("supabase");
+  const user = c.get("user");
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  const scope = c.req.query("scope") === "all" ? "all" : "connections";
+  const q = (c.req.query("q") || "").trim().slice(0, 100);
+  const limit = Math.min(parseInt(c.req.query("limit") || "30") || 30, 100);
+
+  const { data, error } = await supabase.rpc("people_search_companies", {
+    p_viewer_id: user.id,
+    p_scope: scope,
+    p_query: q || null,
+    p_limit: limit,
+  });
+
+  if (error) {
+    console.error("people_search_companies error:", error);
+    return c.json({ error: error.message }, 400);
+  }
+
+  return c.json({
+    companies: (data ?? []).map((row: any) => ({
+      key: row.company_key,
+      name: row.name,
+      company_id: row.company_id,
+      logo: row.logo,
+      current_count: Number(row.current_count),
+      past_count: Number(row.past_count),
+    })),
+  });
+});
+
+// GET /api/connections/functions?scope=connections|all
+// How many members per job function — the counts in the field filter.
+app.get("/functions", async (c) => {
+  const supabase = c.get("supabase");
+  const user = c.get("user");
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  const scope = c.req.query("scope") === "all" ? "all" : "connections";
+  const { data, error } = await supabase.rpc("people_search_function_counts", {
+    p_viewer_id: user.id,
+    p_scope: scope,
+  });
+
+  if (error) {
+    console.error("people_search_function_counts error:", error);
+    return c.json({ error: error.message }, 400);
+  }
+
+  return c.json({
+    counts: Object.fromEntries((data ?? []).map((row: any) => [row.function_key, Number(row.member_count)])),
+  });
+});
+
 app.get("/:id", async (c) => {
   const supabase = c.get("supabase");
   const targetId = c.req.param("id");

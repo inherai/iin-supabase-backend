@@ -1,6 +1,7 @@
 // supabase/functions/api/routes/profile.ts
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { parsePeopleSearchParams } from './_peopleSearch.ts'
 
 // ⚠️  ADMIN CLIENT usage in this file — bypasses ALL Supabase RLS policies.
 // It is used in two categories:
@@ -510,7 +511,10 @@ app.get('/', async (c) => {
 
     const targetUserId = c.req.query('id')
     const searchQuery = c.req.query('search') || null
-    
+    // Inner-circle people search (q / functions / company / recruiters / mutual).
+    // `search` above stays the plain name search used by @mentions.
+    const peopleSearch = parsePeopleSearchParams(c)
+
     // אם אין id, מחזיר רשימה עם pagination
     if (!targetUserId) {
       const page = parseInt(c.req.query('page') || '1')
@@ -518,24 +522,60 @@ app.get('/', async (c) => {
       const offset = (page - 1) * limit
 
       // אם יש חיפוש, נחפש לפי שם
-      if (searchQuery) {
-        const { data: searchResults, error: searchError } = await supabase
-          .rpc('search_users', {
-            current_user_id: user.id,
-            search_text: searchQuery,
-            page_limit: limit,
-            page_offset: offset
+      if (searchQuery || peopleSearch) {
+        let total = 0
+        let cleanResults: any[] = []
+
+        if (peopleSearch) {
+          // search_people ranks + paginates; profile rows come from the
+          // viewer-aware view, so masking is identical to every other list.
+          const { data: matches, error: matchError } = await supabase.rpc('search_people', {
+            p_viewer_id: user.id,
+            ...peopleSearch,
+            p_limit: limit,
+            p_offset: offset,
           })
 
-        if (searchError) {
-          return c.json({ error: searchError.message }, 500)
-        }
+          if (matchError) {
+            return c.json({ error: matchError.message }, 500)
+          }
 
-        const total = searchResults?.[0]?.total_count || 0
-        let cleanResults = (searchResults || []).map((u: any) => {
-          const { total_count, ...rest } = u
-          return rest
-        })
+          total = Number(matches?.[0]?.total_count || 0)
+          const matchIds = (matches ?? []).map((m: any) => m.user_uuid)
+          if (matchIds.length > 0) {
+            const { data: matchRows } = await supabase
+              .from('public_users_view')
+              .select('*')
+              .in('uuid', matchIds)
+            const rowById = new Map<string, any>((matchRows ?? []).map((r: any) => [r.uuid, r]))
+            cleanResults = (matches ?? [])
+              .filter((m: any) => rowById.has(m.user_uuid))
+              .map((m: any) => ({
+                ...rowById.get(m.user_uuid),
+                search_match: m.match_kind ? { kind: m.match_kind, text: m.match_text ?? null } : null,
+                mutual_count: Number(m.mutual_count ?? 0),
+                current_company: m.current_company ?? null,
+              }))
+          }
+        } else {
+          const { data: searchResults, error: searchError } = await supabase
+            .rpc('search_users', {
+              current_user_id: user.id,
+              search_text: searchQuery,
+              page_limit: limit,
+              page_offset: offset
+            })
+
+          if (searchError) {
+            return c.json({ error: searchError.message }, 500)
+          }
+
+          total = searchResults?.[0]?.total_count || 0
+          cleanResults = (searchResults || []).map((u: any) => {
+            const { total_count, ...rest } = u
+            return rest
+          })
+        }
 
         // Filter out deleted users — must never appear in any suggestions
         if (cleanResults.length > 0) {
@@ -633,7 +673,11 @@ app.get('/', async (c) => {
             contact_details: canSeeContact && (effectiveEmail || effectivePhone) ? {
               email: effectiveEmail,
               phone: effectivePhone
-            } : null
+            } : null,
+            // people search only (undefined → omitted for the name search)
+            search_match: u.search_match,
+            mutual_count: u.mutual_count,
+            current_company: u.current_company,
           }
         })
 
