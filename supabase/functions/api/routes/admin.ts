@@ -763,6 +763,70 @@ app.post("/users/:id/refresh-scores", async (c) => {
   });
 });
 
+// feed_participant is not assignable: going anonymous deletes the member's connections
+// and conversations (see PUT /profile/privacy), so it stays the member's own choice.
+const ASSIGNABLE_ROLES = ["community", "recruiters"];
+
+app.patch("/users/:id/role", async (c) => {
+  const db = getAdminClient();
+  const userId = c.req.param("id");
+
+  const body = await c.req.json().catch(() => null);
+  const role = body?.role;
+  if (!ASSIGNABLE_ROLES.includes(role)) return c.json({ error: "Invalid role" }, 400);
+
+  const { data: user, error: fetchErr } = await db
+    .from("users")
+    .select("uuid,email,is_anonymous")
+    .eq("uuid", userId)
+    .maybeSingle();
+
+  if (fetchErr) return c.json({ error: fetchErr.message }, 500);
+  if (!user || user.email?.endsWith("@deleted.local")) return c.json({ error: "User not found" }, 404);
+
+  // The member may have gone anonymous after the admin's panel loaded, in which case the
+  // admin confirmed without seeing the warning that this reveals their identity.
+  if (user.is_anonymous && body?.reveal_anonymous !== true) {
+    return c.json({ error: "This member is now anonymous. Review the warning and try again." }, 409);
+  }
+
+  // The API authorizes by the JWT's app_metadata.role, so it must match users.role. It goes
+  // first so that a failure here changes nothing, in particular reveals no anonymous member.
+  const { error: authErr } = await db.auth.admin.updateUserById(userId, {
+    app_metadata: { role },
+  });
+  if (authErr) return c.json({ error: authErr.message }, 500);
+
+  // Same update PUT /profile/privacy sends when a member leaves anonymous mode. It stays
+  // separate because setting is_anonymous fires handle_anonymous_transition().
+  if (user.is_anonymous) {
+    const { error: anonErr } = await db
+      .from("users")
+      .update({ is_anonymous: false, role: "community" })
+      .eq("uuid", userId);
+    if (anonErr) return c.json({ error: anonErr.message }, 500);
+  }
+
+  // Recruiters get the same privacy defaults as the invite flow (routes/users.ts),
+  // since the middleware blocks them from changing privacy settings themselves.
+  const updates: Record<string, any> = { role };
+  if (role === "recruiters") {
+    updates.privacy_picture = ["community", "recruiters"];
+    updates.privacy_lastname = ["community", "recruiters"];
+    updates.privacy_contact_details = ["community", "recruiters"];
+  }
+
+  const { data: updated, error: updateErr } = await db
+    .from("users")
+    .update(updates)
+    .eq("uuid", userId)
+    .select("uuid,role,is_anonymous,privacy_picture,privacy_lastname,privacy_contact_details")
+    .single();
+  if (updateErr) return c.json({ error: updateErr.message }, 500);
+
+  return c.json(updated);
+});
+
 app.delete("/users/:id", async (c) => {
   const db = getAdminClient();
   const userId = c.req.param("id");
