@@ -5,6 +5,7 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { isSendWindowOpen } from '../lib/sendWindow.ts'
 import { welcomeJob } from '../lib/emails/welcome.ts'
+import { onboardingRemindersJob } from '../lib/emails/onboardingReminders.ts'
 
 export interface LifecycleJob {
   name: string
@@ -15,6 +16,7 @@ export interface LifecycleJob {
 // Wave 1 (welcome reminders, invitee reminders...) registers its jobs here.
 export const LIFECYCLE_JOBS: LifecycleJob[] = [
   { name: 'welcome', run: welcomeJob },
+  { name: 'onboarding_reminders', run: () => onboardingRemindersJob() },
 ]
 
 const app = new Hono()
