@@ -2168,6 +2168,36 @@ app.get("/email-preferences", async (c) => {
   return c.json({ users: result });
 });
 
+// GET /admin/email-preferences/changes — every member whose email settings differ from the defaults,
+// newest change first: who, which category, the setting, when, and whether she or an admin changed it.
+app.get("/email-preferences/changes", async (c) => {
+  const db = getAdminClient();
+  const limit = Math.min(Number(c.req.query("limit")) || 200, 500);
+  const { data: rows, error } = await db
+    .from("email_preferences")
+    .select("user_id, category, frequency, updated_at, updated_by")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+  if (error) return c.json({ error: error.message }, 500);
+  const ids = [...new Set((rows ?? []).flatMap((r: any) => [r.user_id, r.updated_by].filter(Boolean)))];
+  const { data: people } = ids.length
+    ? await db.from("users").select("uuid, email, first_name, last_name").in("uuid", ids)
+    : { data: [] as any[] };
+  const byId = new Map((people ?? []).map((u: any) => [u.uuid, u]));
+  const nameOf = (u: any) => (u ? [u.first_name, u.last_name].filter(Boolean).join(" ") || u.email : null);
+  return c.json({
+    changes: (rows ?? []).map((r: any) => ({
+      user_id: r.user_id,
+      name: nameOf(byId.get(r.user_id)),
+      email: byId.get(r.user_id)?.email ?? null,
+      category: r.category,
+      frequency: r.frequency,
+      updated_at: r.updated_at,
+      changed_by: r.updated_by ? { id: r.updated_by, name: nameOf(byId.get(r.updated_by)) } : null,
+    })),
+  });
+});
+
 // PUT /admin/email-preferences/:userId  { category, frequency }
 app.put("/email-preferences/:userId", async (c) => {
   const admin = c.get("user");
@@ -2177,15 +2207,23 @@ app.put("/email-preferences/:userId", async (c) => {
   return c.json({ success: true, preferences: await loadPreferences(c.req.param("userId"), { app_metadata: { is_admin: true } }) });
 });
 
-// GET /admin/email-suppressions?q= — addresses we don't email (incl. people without an account)
+// GET /admin/email-suppressions?q=&reason= — addresses we don't email (incl. people without an account),
+// plus how many there are for each reason (so spam complaints and bounces don't get lost among opt-outs).
+const SUPPRESSION_REASONS = ["unsubscribe_invites", "unsubscribe_all", "bounce", "complaint", "admin"];
 app.get("/email-suppressions", async (c) => {
   const db = getAdminClient();
   const q = normalizeEmail(c.req.query("q") ?? "");
-  let query = db.from("email_suppressions").select("email, reason, created_at, note").order("created_at", { ascending: false }).limit(50);
+  const reason = c.req.query("reason") ?? "";
+  let query = db.from("email_suppressions").select("email, reason, created_at, note").order("created_at", { ascending: false }).limit(200);
   if (q) query = query.ilike("email", `%${q}%`);
-  const { data, error } = await query;
-  if (error) return c.json({ error: error.message }, 500);
-  return c.json({ suppressions: data ?? [] });
+  if (SUPPRESSION_REASONS.includes(reason)) query = query.eq("reason", reason);
+  const [list, ...countResults] = await Promise.all([
+    query,
+    ...SUPPRESSION_REASONS.map((r) => db.from("email_suppressions").select("email", { count: "exact", head: true }).eq("reason", r)),
+  ]);
+  if (list.error) return c.json({ error: list.error.message }, 500);
+  const counts = Object.fromEntries(SUPPRESSION_REASONS.map((r, i) => [r, countResults[i].count ?? 0]));
+  return c.json({ suppressions: list.data ?? [], counts });
 });
 
 // POST /admin/email-suppressions  { email, note? } — stop all email to an address
