@@ -1,5 +1,5 @@
 // When non-essential email may go out (email plan: "שבת, חג ושעות").
-//   * Weekdays 08:00–21:30 Israel time.
+//   * Weekdays 07:00–23:15 Israel time (widened from 08:00–21:30 by the product owner, 2026-11-04).
 //   * Not on Shabbat or Yom Tov: from 12:00 on the day of candle lighting (Friday / erev chag)
 //     until one hour after havdalah. Times are computed for Jerusalem with @hebcal/core,
 //     locally — no network call and no yearly table to maintain.
@@ -7,8 +7,8 @@
 import { HebrewCalendar, Location } from 'npm:@hebcal/core@5'
 
 const TZ = 'Asia/Jerusalem'
-const DAY_START = 8 * 60          // 08:00
-const DAY_END = 21 * 60 + 30      // 21:30
+const DAY_START = 7 * 60          // 07:00
+const DAY_END = 23 * 60 + 15      // 23:15
 const HOLD_FROM_HOUR = 12         // stop at noon before Shabbat / chag
 const AFTER_HAVDALAH_MS = 60 * 60 * 1000
 
