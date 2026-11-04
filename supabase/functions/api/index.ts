@@ -40,6 +40,8 @@ import marketStatsRoute from './routes/market-stats.ts'
 import jobApplicationsRoute from './routes/job_applications.ts'
 import emailPreferencesRoute from './routes/email-preferences.ts'
 import emailUnsubscribeRoute from './routes/email-unsubscribe.ts'
+import emailWebhookRoute from './routes/email-webhook.ts'
+import lifecycleEmailsRoute from './routes/lifecycle-emails.ts'
 
 //const app = new Hono()
 // מגדירים שהכל יושב תחת /api
@@ -101,6 +103,8 @@ app.route('/market-stats', marketStatsRoute)
 app.route('/job-applications', jobApplicationsRoute)
 app.route('/email-preferences', emailPreferencesRoute)
 app.route('/email-unsubscribe', emailUnsubscribeRoute)
+app.route('/email-webhook', emailWebhookRoute)
+app.route('/lifecycle-emails', lifecycleEmailsRoute)
 // בדיקה שהכל חי
 app.get('/', (c) => c.text('Inerai API is running 🚀'))
 

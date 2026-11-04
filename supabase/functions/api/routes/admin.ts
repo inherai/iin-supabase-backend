@@ -2226,6 +2226,20 @@ app.get("/email-suppressions", async (c) => {
   return c.json({ suppressions: list.data ?? [], counts });
 });
 
+// GET /admin/email-log?q=&status= — what the system sent (or skipped / failed), newest first
+app.get("/email-log", async (c) => {
+  const q = normalizeEmail(c.req.query("q") ?? "");
+  const status = c.req.query("status") ?? "";
+  let query = getAdminClient().from("email_log")
+    .select("id, kind, category, email, status, skip_reason, error, created_at, updated_at")
+    .order("created_at", { ascending: false }).limit(200);
+  if (q) query = query.ilike("email", `%${q}%`);
+  if (["sent", "skipped", "failed", "delivered", "bounced", "complained"].includes(status)) query = query.eq("status", status);
+  const { data, error } = await query;
+  if (error) return c.json({ error: error.message }, 500);
+  return c.json({ log: data ?? [] });
+});
+
 // POST /admin/email-suppressions  { email, note? } — stop all email to an address
 app.post("/email-suppressions", async (c) => {
   const admin = c.get("user");

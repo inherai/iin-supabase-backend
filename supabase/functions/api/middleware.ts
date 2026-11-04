@@ -84,6 +84,16 @@ export const authMiddleware = async (c: Context, next: Next) => {
     return await next();
   }
 
+  // Hourly lifecycle-email run — authorised by x-cron-secret inside the handler
+  if (c.req.path === '/api/lifecycle-emails/run') {
+    return await next();
+  }
+
+  // Resend delivery events — authorised by Resend's signature inside the handler
+  if (c.req.path === '/api/email-webhook') {
+    return await next();
+  }
+
   // Unsubscribe links in emails — opened without logging in; authorised by the signed token itself
   if (c.req.path === '/api/email-unsubscribe' || c.req.path.startsWith('/api/email-unsubscribe/')) {
     return await next();

@@ -1,5 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { supabaseAdmin } from "../middleware.ts";
+import { sendEmail } from "../lib/mailer.ts";
 
 const app = new Hono();
 
@@ -29,8 +30,6 @@ interface RecruiterPayload {
 type JoinRequestPayload = CandidatePayload | RecruiterPayload;
 
 async function sendAdminNotification(req: JoinRequestPayload): Promise<void> {
-  const apiKey = Deno.env.get("RESEND_API_KEY");
-  if (!apiKey) return;
 
   const isCandidate = req.type === "candidate";
   const c = req as CandidatePayload;
@@ -102,20 +101,16 @@ async function sendAdminNotification(req: JoinRequestPayload): Promise<void> {
       </div>
     </body></html>`;
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from: "duallin System <noreply@duallin.com>",
-      to: [ADMIN_EMAIL],
-      subject,
-      html,
-    }),
+  // Team alert: goes out right away (not held for hours / Shabbat) and is logged like every email.
+  const result = await sendEmail({
+    kind: "admin_join_request",
+    category: "team",
+    to: ADMIN_EMAIL,
+    subject,
+    html: () => html,
+    immediate: true,
   });
-
-  if (!res.ok) {
-    console.error("Resend error:", await res.text());
-  }
+  if (result.status === "failed") console.error("Join request alert failed:", result.error);
 }
 
 app.post("/", async (c) => {

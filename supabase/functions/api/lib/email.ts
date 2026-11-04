@@ -1,4 +1,4 @@
-import { unsubscribeLinks } from './emailPrefs.ts';
+import { sendEmail } from './mailer.ts';
 
 export interface SendInviteEmailParams {
   to: string;
@@ -11,26 +11,15 @@ export interface SendInviteEmailParams {
 export async function sendInviteEmail(params: SendInviteEmailParams): Promise<void> {
   const { to, inviterName, token, personalNote, expiresAt } = params;
 
-  const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-  if (!RESEND_API_KEY) {
-    throw new Error('RESEND_API_KEY is not set');
-  }
-
   const appUrl = Deno.env.get('APP_URL') ?? 'https://www.duallin.com';
 
-  // "Don't invite me again" link + one-click headers. If the signing secret isn't configured yet,
-  // the invitation still goes out exactly as before, just without the link.
-  let unsub: Awaited<ReturnType<typeof unsubscribeLinks>> | null = null;
-  try {
-    unsub = await unsubscribeLinks({ e: to, c: 'invitee' });
-  } catch (err) {
-    console.warn('Invite email sent without unsubscribe link:', (err as Error).message);
-  }
-  const unsubscribeBlock = unsub
+  // "Don't invite me again" link (the page it opens explains everything). Absent when the
+  // unsubscribe secret isn't configured — the invitation then goes out without it.
+  const unsubscribeBlockFor = (url: string | null) => url
     ? `<p style="margin:12px 0 0;font-size:11px;font-weight:500;color:rgba(255,255,255,0.45);">
-                <a href="${unsub.pageUrl}" style="color:rgba(255,255,255,0.65);text-decoration:underline;">לא לקבל הזמנות נוספות</a>
+                <a href="${url}" style="color:rgba(255,255,255,0.65);text-decoration:underline;">לא לקבל הזמנות נוספות</a>
                 &nbsp;·&nbsp;
-                <a href="${unsub.pageUrl}" style="color:rgba(255,255,255,0.65);text-decoration:underline;">Don't send me invitations</a>
+                <a href="${url}" style="color:rgba(255,255,255,0.65);text-decoration:underline;">Don't send me invitations</a>
               </p>`
     : '';
   const inviteUrl = `${appUrl}/invite?token=${encodeURIComponent(token)}`;
@@ -62,7 +51,9 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
           </tr>`
     : '';
 
-  const html = `<!DOCTYPE html>
+  const renderHtml = (unsubscribeUrl: string | null) => {
+  const unsubscribeBlock = unsubscribeBlockFor(unsubscribeUrl);
+  return `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
   <meta charset="UTF-8" />
@@ -229,24 +220,18 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
 
 </body>
 </html>`;
+  };
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: 'duallin <invites@duallin.com>',
-      to: [to],
-      subject: "You've been personally invited to duallin | הוזמנת אישית לדואולין",
-      html,
-      ...(unsub ? { headers: unsub.headers } : {}),
-    }),
+  // Through the shared sender: suppression list, log, one-click headers. Invitations are sent
+  // right away (someone just sent it), not held for the send window.
+  const result = await sendEmail({
+    kind: 'invite',
+    category: 'invitee',
+    to,
+    subject: "You've been personally invited to duallin | הוזמנת אישית לדואולין",
+    html: ({ unsubscribeUrl }) => renderHtml(unsubscribeUrl),
+    immediate: true,
   });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Resend API error ${response.status}: ${body}`);
-  }
+  if (result.status === 'failed') throw new Error(result.error);
+  if (result.status === 'skipped' && result.reason === 'no_api_key') throw new Error('RESEND_API_KEY is not set');
 }
