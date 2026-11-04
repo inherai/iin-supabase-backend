@@ -213,6 +213,7 @@ export async function onboardingRemindersJob(budget: number, now = new Date()): 
       subject: `${stage.subject.he} | ${stage.subject.en}`,
       html: ({ unsubscribeUrl }) => renderOnboardingReminder(stage, name, unsubscribeUrl, stats),
     })
+    if (r.status === 'deferred') attempts-- // held by the per-member cap — doesn't use the hour's budget
     if (r.status === 'sent') sent++
   }
   return { sent, attempts }

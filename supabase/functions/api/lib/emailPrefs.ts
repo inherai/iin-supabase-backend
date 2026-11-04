@@ -25,14 +25,14 @@ export const EMAIL_CATEGORIES: EmailCategory[] = [
   { key: 'onboarding',         options: ['on', 'off'], default: 'on', active: true,  audience: 'members' },  // live: welcome + sign-up reminders
   { key: 'come_back',          options: ['on', 'off'], default: 'on', active: true,  audience: 'members' },  // live: come-back emails for quiet members
   { key: 'invitations',        options: ['on', 'off'], default: 'on', active: true,  audience: 'members' },  // live: invitations unlocked + reminders, invitee joined
-  { key: 'network',            options: ['instant', 'daily', 'off'], default: 'instant', active: false, audience: 'all' },
-  { key: 'content_activity',   options: ['daily', 'weekly', 'off'], default: 'daily', active: false, audience: 'members' },
+  { key: 'network',            options: ['instant', 'daily', 'off'], default: 'instant', active: true,  audience: 'all' },  // live (activity emails)
+  { key: 'content_activity',   options: ['daily', 'weekly', 'off'], default: 'daily', active: true,  audience: 'members' },  // live (activity emails)
   { key: 'weekly_stats',       options: ['weekly', 'off'], default: 'weekly', active: false, audience: 'members' },
-  { key: 'people_suggestions', options: ['weekly', 'biweekly', 'off'], default: 'biweekly', active: false, audience: 'members' },
+  { key: 'people_suggestions', options: ['weekly', 'biweekly', 'off'], default: 'biweekly', active: true,  audience: 'members' },  // live (activity emails)
   { key: 'jobs',               options: ['twice_weekly', 'weekly', 'off'], default: 'weekly', active: false, audience: 'members' },
-  { key: 'community',          options: ['weekly', 'biweekly', 'off'], default: 'weekly', active: false, audience: 'all' },
+  { key: 'community',          options: ['weekly', 'biweekly', 'off'], default: 'weekly', active: true,  audience: 'all' },  // live (activity emails)
   { key: 'product_updates',    options: ['on', 'off'], default: 'on', active: false, audience: 'all' },
-  { key: 'recruiting',         options: ['instant', 'off'], default: 'instant', active: false, audience: 'all' },
+  { key: 'recruiting',         options: ['instant', 'off'], default: 'instant', active: true,  audience: 'all' },  // live (activity emails)
   { key: 'team',               options: ['on', 'off'], default: 'on', active: false, audience: 'admins' },
 ]
 

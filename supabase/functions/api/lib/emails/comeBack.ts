@@ -2,9 +2,8 @@
 // Time-based (the system initiates it), so it respects the send window (hours / Shabbat).
 //   * Email 1 after 21 days without activity; email 2 (the last) after 45 days, and at least
 //     24 days after email 1.
-//   * After email 2: a monthly "this month on duallin" email (fresh numbers + new articles),
-//     every 30 days; after 6 more months without coming back, every 90 days (decided 2026-11-04 —
-//     persistence like LinkedIn, but always with fresh content; the slower pace protects Gmail reputation).
+//   * After email 2 she keeps getting the weekly community email (every member gets it), which
+//     replaced the monthly email (decided 2026-11-04).
 //   * A quiet period is keyed by her last_active_at: if she comes back and later goes quiet again,
 //     a new period starts with email 1.
 //   * Members asleep since before tracking began (no user_activity row) count from sign-up.
@@ -21,10 +20,6 @@ const DAY = 24 * 3600 * 1000
 const FIRST_AFTER_DAYS = 21
 const SECOND_AFTER_DAYS = 45
 const MIN_GAP_DAYS = 24
-const MONTHLY_GAP_DAYS = 30
-const QUARTERLY_GAP_DAYS = 90
-/** Quiet this long (45 + ~6 months) → monthly becomes quarterly. */
-const QUARTERLY_AFTER_DAYS = SECOND_AFTER_DAYS + 180
 const BRAND = '#4b154c'
 const LINE = '#ede0f0'
 const FONT = `-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif`
@@ -112,11 +107,9 @@ export interface ComeBackSent { first?: number; second?: number; lastMonthly?: n
 /** Which email (if any) is due in this quiet period, given when each one went out (ms). */
 export function dueComeBack(quietSince: Date, sent: ComeBackSent, now = new Date()): Stage | null {
   const quietDays = (now.getTime() - quietSince.getTime()) / DAY
-  if (sent.second) {
-    const last = Math.max(sent.second, sent.lastMonthly ?? 0)
-    const gap = quietDays >= QUARTERLY_AFTER_DAYS ? QUARTERLY_GAP_DAYS : MONTHLY_GAP_DAYS
-    return now.getTime() - last >= gap * DAY ? 'monthly' : null
-  }
+  // After email 2 the weekly community email (sent to every member) carries on instead of a
+  // separate monthly one (decided 2026-11-04). The monthly template stays for reference.
+  if (sent.second) return null
   if (sent.first) {
     return quietDays >= SECOND_AFTER_DAYS && now.getTime() - sent.first >= MIN_GAP_DAYS * DAY ? 2 : null
   }
@@ -224,6 +217,7 @@ export async function comeBackJob(budget: number, now = new Date()): Promise<{ s
       subject: `${s.subject.he} | ${s.subject.en}`,
       html: ({ unsubscribeUrl }) => renderComeBack(stage, name, waiting, stats, unsubscribeUrl, articles),
     })
+    if (r.status === 'deferred') attempts-- // held by the per-member cap — doesn't use the hour's budget
     if (r.status === 'sent') sent++
   }
   return { sent, attempts }

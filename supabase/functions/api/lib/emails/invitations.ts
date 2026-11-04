@@ -188,6 +188,7 @@ export async function invitesUnlockedJob(budget: number): Promise<JobResult> {
       subject: `${s.subject.he} | ${s.subject.en}`,
       html: ({ unsubscribeUrl }) => renderInvitesEmail(kind, name, left, unsubscribeUrl),
     })
+    if (r.status === 'deferred') attempts-- // held by the per-member cap — doesn't use the hour's budget
     if (r.status === 'sent') sent++
   }
   return { sent, attempts }
@@ -201,8 +202,8 @@ export function renderInviteeJoined(inviterFirstName: string, inviteeName: strin
   const whoEn = nameSpan(inviteeName) || 'The colleague you invited'
   const body =
     biColumns({
-      he: heading(`${who} הצטרפה לדואולין 🎉`) + paragraph(`${n ? `${n}, ` : ''}בזכות ההזמנה שלך יש לקהילה חברה חדשה. זה רגע טוב לברך אותה ולהתחבר.`),
-      en: heading(`${whoEn} joined duallin 🎉`) + paragraph(`${n ? `${n}, ` : ''}thanks to your invitation the community has a new member. A good moment to welcome her and connect.`),
+      he: heading(`${who} הצטרפה לדואולין`) + paragraph(`${n ? `${n}, ` : ''}בזכות ההזמנה שלך יש לקהילה חברה חדשה. זה רגע טוב לברך אותה ולהתחבר.`),
+      en: heading(`${whoEn} joined duallin`) + paragraph(`${n ? `${n}, ` : ''}thanks to your invitation the community has a new member. A good moment to welcome her and connect.`),
     }) +
     button({ he: 'לפרופיל שלה', en: 'See her profile' }, `${APP_URL()}/profile/${encodeURIComponent(inviteeId)}`) +
     // The best moment to invite one more: her invitation just worked.
@@ -257,6 +258,7 @@ export async function inviteeJoinedJob(budget: number): Promise<JobResult> {
     })
     // A duplicate (already told) doesn't use up the hour's budget.
     if (r.status === 'skipped' && r.reason === 'duplicate') attempts--
+    if (r.status === 'deferred') attempts-- // held by the per-member cap — doesn't use the hour's budget
     if (r.status === 'sent') sent++
   }
   return { sent, attempts }
@@ -323,6 +325,7 @@ export async function inviteeReminderJob(budget: number): Promise<JobResult> {
       html: ({ unsubscribeUrl }) => renderInviteReminder(name, inv.token, daysLeft, unsubscribeUrl),
     })
     if (r.status === 'skipped' && r.reason === 'duplicate') attempts--
+    if (r.status === 'deferred') attempts-- // held by the per-member cap — doesn't use the hour's budget
     if (r.status === 'sent') sent++
   }
   return { sent, attempts }

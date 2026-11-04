@@ -8,6 +8,7 @@ import { welcomeJob } from '../lib/emails/welcome.ts'
 import { onboardingRemindersJob } from '../lib/emails/onboardingReminders.ts'
 import { comeBackJob } from '../lib/emails/comeBack.ts'
 import { inviteeJoinedJob, inviteeReminderJob, invitesUnlockedJob } from '../lib/emails/invitations.ts'
+import { contentDigestJob, networkJob, peopleJob, postViewsJob, requestReminderJob, weeklyCommunityJob } from '../lib/emails/activityJobs.ts'
 
 export interface LifecycleJob {
   name: string
@@ -26,10 +27,18 @@ const hourlyBudget = () => {
 
 export const LIFECYCLE_JOBS: LifecycleJob[] = [
   { name: 'welcome', run: () => welcomeJob() },          // retries only — tiny
+  // Personal & important (never held by the per-member cap)
+  { name: 'network_update', run: (b) => networkJob(b) },          // recruiter, messages, mentions, requests
+  { name: 'request_reminder', run: (b) => requestReminderJob(b) },
   { name: 'invitee_joined', run: (b) => inviteeJoinedJob(b) },      // good news for the inviter — few
   { name: 'invite_reminder', run: (b) => inviteeReminderJob(b) },   // invitations expire in 7 days — time-sensitive
+  // Nice to know (at most 1 a day / 4 a week per member — enforced in sendEmail)
   { name: 'onboarding_reminders', run: (b) => onboardingRemindersJob(b) },
   { name: 'invites_unlocked', run: (b) => invitesUnlockedJob(b) },
+  { name: 'content_digest', run: (b) => contentDigestJob(b) },      // evenings
+  { name: 'post_views', run: (b) => postViewsJob(b) },
+  { name: 'people_suggestions', run: (b) => peopleJob(b) },         // Mondays
+  { name: 'weekly_community', run: (b) => weeklyCommunityJob(b) },  // Wednesday–Thursday
   { name: 'come_back', run: (b) => comeBackJob(b) },              // incl. the monthly email
 ]
 
