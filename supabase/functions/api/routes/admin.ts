@@ -2226,34 +2226,37 @@ app.get("/email-suppressions", async (c) => {
   return c.json({ suppressions: list.data ?? [], counts });
 });
 
-// GET /admin/email-log?q=&status=&kind=&before= — what the system sent (or skipped / failed), newest first.
-// Pages of 100 (pass the last row's id as `before`); `counts` = per status over the last 7 days.
+// GET /admin/email-log?q=&status=&kind=&page= — what the system sent (or skipped / failed), newest first.
+// Pages of 50 with a total (same shape as /admin/users); `counts` = per status over the last 7 days.
 const EMAIL_LOG_STATUSES = ["sent", "skipped", "failed", "delivered", "bounced", "complained"];
 app.get("/email-log", async (c) => {
   const q = normalizeEmail(c.req.query("q") ?? "");
   const status = c.req.query("status") ?? "";
   const kind = c.req.query("kind") ?? "";
-  const before = Number(c.req.query("before") ?? 0);
-  const PAGE = 100;
+  const page = Math.max(1, parseInt(c.req.query("page") || "1") || 1);
+  const limit = 50;
+  const offset = (page - 1) * limit;
   const db = getAdminClient();
   let query = db.from("email_log")
-    .select("id, kind, category, email, status, skip_reason, error, created_at, updated_at")
-    .order("id", { ascending: false }).limit(PAGE + 1);
+    .select("id, kind, category, email, status, skip_reason, error, created_at, updated_at", { count: "exact" })
+    .order("id", { ascending: false }).range(offset, offset + limit - 1);
   if (q) query = query.ilike("email", `%${q}%`);
   if (EMAIL_LOG_STATUSES.includes(status)) query = query.eq("status", status);
   if (kind) query = query.eq("kind", kind);
-  if (before > 0) query = query.lt("id", before);
-  const { data, error } = await query;
+  const { data, error, count } = await query;
   if (error) return c.json({ error: error.message }, 500);
 
-  const rows = data ?? [];
   const since = new Date(Date.now() - 7 * 86400000).toISOString();
   const counts: Record<string, number> = {};
   await Promise.all(EMAIL_LOG_STATUSES.map(async (st) => {
-    const { count } = await db.from("email_log").select("id", { count: "exact", head: true }).eq("status", st).gte("created_at", since);
-    counts[st] = count ?? 0;
+    const { count: n } = await db.from("email_log").select("id", { count: "exact", head: true }).eq("status", st).gte("created_at", since);
+    counts[st] = n ?? 0;
   }));
-  return c.json({ log: rows.slice(0, PAGE), hasMore: rows.length > PAGE, counts });
+  return c.json({
+    log: data ?? [],
+    pagination: { page, limit, total: count ?? 0, totalPages: Math.ceil((count ?? 0) / limit) },
+    counts,
+  });
 });
 
 // POST /admin/email-suppressions  { email, note? } — stop all email to an address
