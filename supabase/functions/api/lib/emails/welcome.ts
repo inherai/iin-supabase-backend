@@ -1,6 +1,6 @@
 // B4 · Welcome — once, when a member finishes onboarding (status onboarding → Active).
-// Sent right away from PUT /me/status; if the send window is closed then (night, Shabbat),
-// the hourly job picks her up later (welcomeJob). Copy comes from the site's he/en.json
+// A reply to what she just did, so it goes out at once from PUT /me/status at any hour,
+// Shabbat included (immediate). The hourly job (welcomeJob) only retries one that failed. Copy comes from the site's he/en.json
 // (onboarding.welcome.*, profileStrength.*).
 import { adminClient } from '../emailPrefs.ts'
 import { sendEmail, type SendResult } from '../mailer.ts'
@@ -123,7 +123,7 @@ export function renderWelcome(d: WelcomeData, unsubscribeUrl: string | null): st
 }
 
 /** Sends the welcome email to one member (at most once — dedupe on kind + ref_key). */
-export async function sendWelcomeEmail(userId: string): Promise<SendResult | null> {
+export async function sendWelcomeEmail(userId: string, opts: { immediate?: boolean } = {}): Promise<SendResult | null> {
   const db = adminClient()
   const { data: user } = await db.from('users').select('uuid, email, first_name, status').eq('uuid', userId).maybeSingle()
   if (!user?.email || user.status !== 'Active') return null
@@ -137,10 +137,11 @@ export async function sendWelcomeEmail(userId: string): Promise<SendResult | nul
     refKey: 'welcome',
     subject: name ? `ברוכה הבאה לדואולין, ${name} | Welcome to duallin, ${name}` : 'ברוכה הבאה לדואולין | Welcome to duallin',
     html: ({ unsubscribeUrl }) => renderWelcome({ firstName: name, strength }, unsubscribeUrl),
+    immediate: opts.immediate,
   })
 }
 
-/** Hourly catch-up: members activated in the last few days who haven't had their welcome yet. */
+/** Hourly retry: members activated in the last few days whose welcome didn't go out (e.g. a send failure). */
 export async function welcomeJob(): Promise<number> {
   const db = adminClient()
   const since = new Date(Date.now() - CATCH_UP_DAYS * 86400000).toISOString()

@@ -318,11 +318,11 @@ app.put('/status', async (c) => {
 
     // Welcome email (email plan B4). Separate from the status update so that neither a missing
     // activated_at column nor a mail problem can ever block finishing onboarding.
-    // Outside sending hours (night, Shabbat) the hourly job sends it later, using activated_at.
+    // A reply to her own action → sent now, at any hour. If it fails, the hourly job retries.
     const welcome = (async () => {
       const { error } = await adminClient().from('users').update({ activated_at: new Date().toISOString() }).eq('uuid', user.id)
       if (error) console.error('activated_at not saved:', error.message)
-      await sendWelcomeEmail(user.id)
+      await sendWelcomeEmail(user.id, { immediate: true })
     })().catch((err) => console.error('welcome email failed:', err))
     // @ts-ignore EdgeRuntime exists on Supabase Edge Functions
     if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(welcome)
