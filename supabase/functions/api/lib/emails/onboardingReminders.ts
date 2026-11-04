@@ -5,7 +5,7 @@
 //     signed up months ago gets ONE email (the last reminder), never the ones she "missed".
 //   * At least 2 days between two reminders to the same person.
 //   * No reminders for sign-ups older than 6 months (stale addresses hurt sender reputation).
-//   * At most 60 per hourly run, so the backlog at launch (~300) goes out over a few hours.
+//   * Sends count against the hourly budget shared by all timed emails (routes/lifecycle-emails.ts).
 // Stops by itself: finishing onboarding changes her status, and the job only looks at 'onboarding'.
 import { adminClient } from '../emailPrefs.ts'
 import { sendEmail } from '../mailer.ts'
@@ -15,7 +15,6 @@ const APP_URL = () => Deno.env.get('APP_URL') ?? 'https://www.duallin.com'
 const HOUR = 3600 * 1000
 const MAX_AGE_DAYS = 180
 const MIN_GAP_HOURS = 48
-const PER_RUN = 60
 
 interface Stage {
   n: 1 | 2 | 3 | 4
@@ -108,7 +107,7 @@ export function roundDownPlus(n: number): string {
   return r === n ? r.toLocaleString('en-US') : `${r.toLocaleString('en-US')}+`
 }
 
-function statsRow(st: CommunityStats): string {
+export function statsRow(st: CommunityStats, opts: { intro?: boolean } = {}): string {
   // [number, label, relative width] — the activity tile has the longest label, so it gets more room
   const tiles: Array<[number, Bi, number]> = ([
     [st.activityLast30d, { he: 'פוסטים, תגובות ולייקים החודש', en: 'posts, comments & likes this month' }, 1.5],
@@ -116,7 +115,7 @@ function statsRow(st: CommunityStats): string {
     [st.articles, { he: 'מאמרים', en: 'articles' }, 1],
   ] as Array<[number, Bi, number]>).filter(([n]) => n > 0)
   if (!tiles.length) return ''
-  const intro = biColumns({
+  const intro = opts.intro === false ? '' : biColumns({
     he: paragraph('<b>אלפי חברות כבר בקהילה.</b> הנה מה שמחכה לך שם:'),
     en: paragraph("<b>Thousands of members are already in.</b> Here's what's waiting for you:"),
   }, { tight: true })
@@ -162,7 +161,8 @@ export function dueStage(signedUpAt: Date, now = new Date()): Stage | null {
 }
 
 /** Hourly: send each member still in onboarding the one reminder that is due for her. */
-export async function onboardingRemindersJob(now = new Date()): Promise<number> {
+export async function onboardingRemindersJob(budget: number, now = new Date()): Promise<{ sent: number; attempts: number }> {
+  if (budget <= 0) return { sent: 0, attempts: 0 }
   const db = adminClient()
   const oldest = new Date(now.getTime() - MAX_AGE_DAYS * 24 * HOUR).toISOString()
   const youngest = new Date(now.getTime() - STAGES[0].afterHours * HOUR).toISOString()
@@ -174,7 +174,7 @@ export async function onboardingRemindersJob(now = new Date()): Promise<number> 
     .order('created_at', { ascending: false }) // newest sign-ups first: most likely to come back
     .limit(2000)
   if (error) throw new Error(error.message)
-  if (!users?.length) return 0
+  if (!users?.length) return { sent: 0, attempts: 0 }
 
   // What each one already got (sent, or skipped because she turned it off — don't retry those).
   const { data: logs } = await db.from('email_log')
@@ -195,7 +195,7 @@ export async function onboardingRemindersJob(now = new Date()): Promise<number> 
   let attempts = 0
   let sent = 0
   for (const u of users) {
-    if (attempts >= PER_RUN) break
+    if (attempts >= budget) break
     const stage = dueStage(new Date(u.created_at), now)
     if (!stage) continue
     const h = history.get(u.uuid)
@@ -215,5 +215,5 @@ export async function onboardingRemindersJob(now = new Date()): Promise<number> 
     })
     if (r.status === 'sent') sent++
   }
-  return sent
+  return { sent, attempts }
 }

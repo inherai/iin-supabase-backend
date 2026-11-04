@@ -142,20 +142,22 @@ export async function sendWelcomeEmail(userId: string, opts: { immediate?: boole
 }
 
 /** Hourly retry: members activated in the last few days whose welcome didn't go out (e.g. a send failure). */
-export async function welcomeJob(): Promise<number> {
+export async function welcomeJob(): Promise<{ sent: number; attempts: number }> {
   const db = adminClient()
   const since = new Date(Date.now() - CATCH_UP_DAYS * 86400000).toISOString()
   const { data: users } = await db.from('users').select('uuid').eq('status', 'Active').gte('activated_at', since).limit(500)
-  if (!users?.length) return 0
+  if (!users?.length) return { sent: 0, attempts: 0 }
   const ids = users.map((u) => u.uuid)
   const { data: done } = await db.from('email_log').select('user_id')
     .eq('kind', 'welcome').in('user_id', ids).in('status', ['sent', 'delivered', 'bounced', 'complained', 'skipped'])
   const skip = new Set((done ?? []).map((r) => r.user_id))
   let sent = 0
+  let attempts = 0
   for (const id of ids) {
     if (skip.has(id)) continue
+    attempts++
     const r = await sendWelcomeEmail(id)
     if (r?.status === 'sent') sent++
   }
-  return sent
+  return { sent, attempts }
 }
