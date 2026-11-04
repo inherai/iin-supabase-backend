@@ -22,7 +22,7 @@ export interface EmailCategory {
 // Flip `active` to true when the first email of that category goes live.
 export const EMAIL_CATEGORIES: EmailCategory[] = [
   { key: 'account',            options: [], default: 'on', essential: true, active: false, audience: 'all' },
-  { key: 'onboarding',         options: ['on', 'off'], default: 'on', active: false, audience: 'members' },
+  { key: 'onboarding',         options: ['on', 'off'], default: 'on', active: true,  audience: 'members' },  // live: welcome + sign-up reminders
   { key: 'invitations',        options: ['on', 'off'], default: 'on', active: false, audience: 'members' },
   { key: 'network',            options: ['instant', 'daily', 'off'], default: 'instant', active: false, audience: 'all' },
   { key: 'content_activity',   options: ['daily', 'weekly', 'off'], default: 'daily', active: false, audience: 'members' },

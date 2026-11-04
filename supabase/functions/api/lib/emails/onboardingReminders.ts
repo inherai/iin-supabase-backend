@@ -5,7 +5,7 @@
 //     signed up months ago gets ONE email (the last reminder), never the ones she "missed".
 //   * At least 2 days between two reminders to the same person.
 //   * No reminders for sign-ups older than 6 months (stale addresses hurt sender reputation).
-//   * At most 30 per hourly run, so the backlog at launch goes out gradually.
+//   * At most 60 per hourly run, so the backlog at launch (~300) goes out over a few hours.
 // Stops by itself: finishing onboarding changes her status, and the job only looks at 'onboarding'.
 import { adminClient } from '../emailPrefs.ts'
 import { sendEmail } from '../mailer.ts'
@@ -15,7 +15,7 @@ const APP_URL = () => Deno.env.get('APP_URL') ?? 'https://www.duallin.com'
 const HOUR = 3600 * 1000
 const MAX_AGE_DAYS = 180
 const MIN_GAP_HOURS = 48
-const PER_RUN = 30
+const PER_RUN = 60
 
 interface Stage {
   n: 1 | 2 | 3 | 4
@@ -149,6 +149,8 @@ export function renderOnboardingReminder(stage: Stage, firstName: string, unsubs
     body,
     reason: { he: 'קיבלת את המייל הזה כי נרשמת לדואולין.', en: 'You received this email because you signed up for duallin.' },
     unsubscribeUrl,
+    // Settings need a finished sign-up (the site sends her back to /onboarding); the stop link works without logging in.
+    hideSettingsLink: true,
   })
 }
 

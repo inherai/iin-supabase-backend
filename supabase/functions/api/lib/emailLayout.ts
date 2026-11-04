@@ -56,17 +56,22 @@ export interface LayoutOptions {
   /** Footer links — omitted for emails that can't be turned off. */
   unsubscribeUrl?: string | null
   showSettingsLink?: boolean
+  /** Unsubscribe link only, no settings link — for people who can't open settings yet (still in onboarding). */
+  hideSettingsLink?: boolean
 }
 
 export function renderLayout(o: LayoutOptions): string {
   const app = APP_URL()
+  const link = (href: string, text: string) => `<a href="${href}" style="color:${INK_2};text-decoration:underline;">${text}</a>`
   const links = o.unsubscribeUrl
-    ? `<br><a href="${app}/settings/notifications" style="color:${INK_2};text-decoration:underline;">הגדרות מייל</a>
-       &nbsp;·&nbsp;<a href="${esc(o.unsubscribeUrl)}" style="color:${INK_2};text-decoration:underline;">לא לקבל מיילים מסוג זה</a>
-       &nbsp;·&nbsp;<a href="${app}/settings/notifications" style="color:${INK_2};text-decoration:underline;">Email settings</a>
-       &nbsp;·&nbsp;<a href="${esc(o.unsubscribeUrl)}" style="color:${INK_2};text-decoration:underline;">Unsubscribe</a>`
+    ? o.hideSettingsLink
+      ? `<br>${link(esc(o.unsubscribeUrl), 'לא לקבל מיילים מסוג זה')}&nbsp;·&nbsp;${link(esc(o.unsubscribeUrl), 'Unsubscribe')}`
+      : `<br>${link(`${app}/settings/notifications`, 'הגדרות מייל')}
+       &nbsp;·&nbsp;${link(esc(o.unsubscribeUrl), 'לא לקבל מיילים מסוג זה')}
+       &nbsp;·&nbsp;${link(`${app}/settings/notifications`, 'Email settings')}
+       &nbsp;·&nbsp;${link(esc(o.unsubscribeUrl), 'Unsubscribe')}`
     : o.showSettingsLink
-      ? `<br><a href="${app}/settings/notifications" style="color:${INK_2};text-decoration:underline;">הגדרות מייל · Email settings</a>`
+      ? `<br>${link(`${app}/settings/notifications`, 'הגדרות מייל · Email settings')}`
       : ''
   return `<!DOCTYPE html>
 <html lang="he"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
