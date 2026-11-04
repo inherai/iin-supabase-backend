@@ -2226,18 +2226,34 @@ app.get("/email-suppressions", async (c) => {
   return c.json({ suppressions: list.data ?? [], counts });
 });
 
-// GET /admin/email-log?q=&status= — what the system sent (or skipped / failed), newest first
+// GET /admin/email-log?q=&status=&kind=&before= — what the system sent (or skipped / failed), newest first.
+// Pages of 100 (pass the last row's id as `before`); `counts` = per status over the last 7 days.
+const EMAIL_LOG_STATUSES = ["sent", "skipped", "failed", "delivered", "bounced", "complained"];
 app.get("/email-log", async (c) => {
   const q = normalizeEmail(c.req.query("q") ?? "");
   const status = c.req.query("status") ?? "";
-  let query = getAdminClient().from("email_log")
+  const kind = c.req.query("kind") ?? "";
+  const before = Number(c.req.query("before") ?? 0);
+  const PAGE = 100;
+  const db = getAdminClient();
+  let query = db.from("email_log")
     .select("id, kind, category, email, status, skip_reason, error, created_at, updated_at")
-    .order("created_at", { ascending: false }).limit(200);
+    .order("id", { ascending: false }).limit(PAGE + 1);
   if (q) query = query.ilike("email", `%${q}%`);
-  if (["sent", "skipped", "failed", "delivered", "bounced", "complained"].includes(status)) query = query.eq("status", status);
+  if (EMAIL_LOG_STATUSES.includes(status)) query = query.eq("status", status);
+  if (kind) query = query.eq("kind", kind);
+  if (before > 0) query = query.lt("id", before);
   const { data, error } = await query;
   if (error) return c.json({ error: error.message }, 500);
-  return c.json({ log: data ?? [] });
+
+  const rows = data ?? [];
+  const since = new Date(Date.now() - 7 * 86400000).toISOString();
+  const counts: Record<string, number> = {};
+  await Promise.all(EMAIL_LOG_STATUSES.map(async (st) => {
+    const { count } = await db.from("email_log").select("id", { count: "exact", head: true }).eq("status", st).gte("created_at", since);
+    counts[st] = count ?? 0;
+  }));
+  return c.json({ log: rows.slice(0, PAGE), hasMore: rows.length > PAGE, counts });
 });
 
 // POST /admin/email-suppressions  { email, note? } — stop all email to an address
