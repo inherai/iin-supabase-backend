@@ -84,6 +84,11 @@ export const authMiddleware = async (c: Context, next: Next) => {
     return await next();
   }
 
+  // Unsubscribe links in emails — opened without logging in; authorised by the signed token itself
+  if (c.req.path === '/api/email-unsubscribe' || c.req.path.startsWith('/api/email-unsubscribe/')) {
+    return await next();
+  }
+
   // Internal cron endpoint — authenticated via service role key inside the handler
   if (c.req.path === '/api/posts/publish-scheduled') {
     return await next();
@@ -176,7 +181,8 @@ export const authMiddleware = async (c: Context, next: Next) => {
       '/api/avatar',
       '/api/saved-resources',
       '/api/company-insights',
-      '/api/market-stats'
+      '/api/market-stats',
+      '/api/email-preferences'
     ];
     if (!allowed.some(p => path === p || path.startsWith(p + '/'))) {
       return c.json({ error: 'Access denied for anonymous users' }, 403);

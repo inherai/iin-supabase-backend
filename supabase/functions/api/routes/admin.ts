@@ -3,6 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { calculateProfileStrength, calculateActivityScore, getWeeklyLimit, startOfCalendarWeek, activeWeekBonus } from './_scoreHelpers.ts';
 import OpenAI from "https://esm.sh/openai@4";
 import { sendInviteEmail } from '../lib/email.ts';
+import { loadPreferences, savePreference } from './email-preferences.ts';
+import { canSendEmail, normalizeEmail } from '../lib/emailPrefs.ts';
 
 const app = new Hono();
 
@@ -1108,6 +1110,9 @@ app.post("/invitations", async (c) => {
 
   if (existingUser) return c.json({ error: "User already exists in the system" }, 409);
   if (existingInvite) return c.json({ error: "A pending invitation already exists for this email" }, 409);
+  if (!(await canSendEmail({ email: normalizedEmail, category: "invitee" }))) {
+    return c.json({ error: "This address is on the do-not-email list (see Email settings in admin)" }, 409);
+  }
 
   const createdAt = new Date();
   const expiresAt = new Date(createdAt);
@@ -2130,3 +2135,79 @@ app.patch("/join-requests/:id", async (c) => {
   if (error) return c.json({ error: error.message }, 500);
   return c.json({ success: true });
 });
+
+// ==================== EMAIL PREFERENCES (support requests) ====================
+
+// GET /admin/email-preferences?q=<email or name> — up to 10 members with their email settings
+app.get("/email-preferences", async (c) => {
+  const db = getAdminClient();
+  const q = (c.req.query("q") ?? "").trim();
+  if (q.length < 2) return c.json({ users: [] });
+  const like = `%${q.replace(/[%_,()]/g, " ")}%`;
+  const { data: users, error } = await db
+    .from("users")
+    .select("uuid, email, first_name, last_name, role")
+    .or(`email.ilike.${like},first_name.ilike.${like},last_name.ilike.${like}`)
+    .limit(10);
+  if (error) return c.json({ error: error.message }, 500);
+  const emails = (users ?? []).map((u: any) => normalizeEmail(u.email ?? "")).filter(Boolean);
+  const { data: sups } = emails.length
+    ? await db.from("email_suppressions").select("email, reason, created_at").in("email", emails)
+    : { data: [] as any[] };
+  const supByEmail = new Map((sups ?? []).map((s: any) => [s.email, s]));
+  // Admin view: every category, active or not, so support can act before a category goes live.
+  const asAdmin = { app_metadata: { is_admin: true } };
+  const result = await Promise.all((users ?? []).map(async (u: any) => ({
+    uuid: u.uuid,
+    email: u.email,
+    name: [u.first_name, u.last_name].filter(Boolean).join(" "),
+    role: u.role,
+    suppression: supByEmail.get(normalizeEmail(u.email ?? "")) ?? null,
+    preferences: await loadPreferences(u.uuid, asAdmin),
+  })));
+  return c.json({ users: result });
+});
+
+// PUT /admin/email-preferences/:userId  { category, frequency }
+app.put("/email-preferences/:userId", async (c) => {
+  const admin = c.get("user");
+  const body = await c.req.json().catch(() => ({} as any));
+  const err = await savePreference(c.req.param("userId"), String(body?.category ?? ""), String(body?.frequency ?? ""), admin.id);
+  if (err) return c.json({ error: err }, 400);
+  return c.json({ success: true, preferences: await loadPreferences(c.req.param("userId"), { app_metadata: { is_admin: true } }) });
+});
+
+// GET /admin/email-suppressions?q= — addresses we don't email (incl. people without an account)
+app.get("/email-suppressions", async (c) => {
+  const db = getAdminClient();
+  const q = normalizeEmail(c.req.query("q") ?? "");
+  let query = db.from("email_suppressions").select("email, reason, created_at, note").order("created_at", { ascending: false }).limit(50);
+  if (q) query = query.ilike("email", `%${q}%`);
+  const { data, error } = await query;
+  if (error) return c.json({ error: error.message }, 500);
+  return c.json({ suppressions: data ?? [] });
+});
+
+// POST /admin/email-suppressions  { email, note? } — stop all email to an address
+app.post("/email-suppressions", async (c) => {
+  const admin = c.get("user");
+  const body = await c.req.json().catch(() => ({} as any));
+  const email = normalizeEmail(String(body?.email ?? ""));
+  if (!email.includes("@")) return c.json({ error: "invalid email" }, 400);
+  const { error } = await getAdminClient().from("email_suppressions").upsert(
+    { email, reason: "admin", created_by: admin.id, note: body?.note?.trim() || null, created_at: new Date().toISOString() },
+    { onConflict: "email" },
+  );
+  if (error) return c.json({ error: error.message }, 500);
+  return c.json({ success: true });
+});
+
+// DELETE /admin/email-suppressions/:email — lift a suppression
+app.delete("/email-suppressions/:email", async (c) => {
+  const email = normalizeEmail(decodeURIComponent(c.req.param("email")));
+  const { error } = await getAdminClient().from("email_suppressions").delete().eq("email", email);
+  if (error) return c.json({ error: error.message }, 500);
+  return c.json({ success: true });
+});
+
+export default app;

@@ -1,5 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { sendInviteEmail } from "../lib/email.ts";
+import { canSendEmail } from "../lib/emailPrefs.ts";
 import { calculateProfileStrength, calculateActivityScore, getWeeklyLimit, startOfCalendarWeek, activeWeekBonus } from "./_scoreHelpers.ts";
 import { supabaseAdmin } from "../middleware.ts";
 
@@ -228,6 +229,12 @@ app.post("/", async (c) => {
     }
     if (existingUser) {
       return c.json({ error: "recipient already exists" }, 409);
+    }
+
+    // The address asked not to receive invitations (or is blocked). Don't say why — that is
+    // information about another person; the inviter only learns it can't be invited.
+    if (!(await canSendEmail({ email: normalizedRecipientEmail, category: "invitee" }))) {
+      return c.json({ error: "recipient unavailable" }, 409);
     }
 
     const { data: pendingInvites, error: existingInviteError } = await supabase

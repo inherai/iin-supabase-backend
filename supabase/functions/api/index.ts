@@ -38,6 +38,8 @@ import articlesRoute from './routes/articles.ts'
 import notificationsRoute from './routes/notifications.ts'
 import marketStatsRoute from './routes/market-stats.ts'
 import jobApplicationsRoute from './routes/job_applications.ts'
+import emailPreferencesRoute from './routes/email-preferences.ts'
+import emailUnsubscribeRoute from './routes/email-unsubscribe.ts'
 
 //const app = new Hono()
 // מגדירים שהכל יושב תחת /api
@@ -97,6 +99,8 @@ app.route('/articles', articlesRoute)
 app.route('/notifications', notificationsRoute)
 app.route('/market-stats', marketStatsRoute)
 app.route('/job-applications', jobApplicationsRoute)
+app.route('/email-preferences', emailPreferencesRoute)
+app.route('/email-unsubscribe', emailUnsubscribeRoute)
 // בדיקה שהכל חי
 app.get('/', (c) => c.text('Inerai API is running 🚀'))
 

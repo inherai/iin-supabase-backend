@@ -166,6 +166,11 @@ app.post("/", async (c) => {
       return c.json({ error: "Failed to save request" }, 500);
     }
 
+    // She is asking to join herself, so an earlier "don't send me invitations" no longer applies.
+    // Bounces, complaints and admin blocks stay.
+    await supabaseAdmin.from("email_suppressions").delete()
+      .eq("email", normalizedEmail).in("reason", ["unsubscribe_invites", "unsubscribe_all"]);
+
     // Fire-and-forget email notification
     sendAdminNotification(body).catch((err) =>
       console.error("Admin notification failed:", err)

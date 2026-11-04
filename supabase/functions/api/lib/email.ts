@@ -1,3 +1,5 @@
+import { unsubscribeLinks } from './emailPrefs.ts';
+
 export interface SendInviteEmailParams {
   to: string;
   inviterName: string;
@@ -15,6 +17,22 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
   }
 
   const appUrl = Deno.env.get('APP_URL') ?? 'https://www.duallin.com';
+
+  // "Don't invite me again" link + one-click headers. If the signing secret isn't configured yet,
+  // the invitation still goes out exactly as before, just without the link.
+  let unsub: Awaited<ReturnType<typeof unsubscribeLinks>> | null = null;
+  try {
+    unsub = await unsubscribeLinks({ e: to, c: 'invitee' });
+  } catch (err) {
+    console.warn('Invite email sent without unsubscribe link:', (err as Error).message);
+  }
+  const unsubscribeBlock = unsub
+    ? `<p style="margin:12px 0 0;font-size:11px;font-weight:500;color:rgba(255,255,255,0.45);">
+                <a href="${unsub.pageUrl}" style="color:rgba(255,255,255,0.65);text-decoration:underline;">לא לקבל הזמנות נוספות</a>
+                &nbsp;·&nbsp;
+                <a href="${unsub.pageUrl}" style="color:rgba(255,255,255,0.65);text-decoration:underline;">Don't send me invitations</a>
+              </p>`
+    : '';
   const inviteUrl = `${appUrl}/invite?token=${encodeURIComponent(token)}`;
 
   const expiryDate = new Date(expiresAt).toLocaleDateString('en-GB', {
@@ -199,6 +217,7 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
             <td style="background:linear-gradient(135deg,#2d0838 0%,#4b154c 60%,#2d0838 100%);padding:28px 40px;text-align:center;">
               <p style="margin:0 0 6px;font-size:12px;font-weight:500;color:rgba(255,255,255,0.55);">Questions? We're here for you.</p>
               <a href="mailto:contact@duallin.com" style="font-size:13px;font-weight:700;color:rgba(255,255,255,0.90);text-decoration:none;">contact@duallin.com</a>
+              ${unsubscribeBlock}
               <p style="margin:14px 0 0;font-size:11px;font-weight:500;color:rgba(255,255,255,0.30);">© 2026 duallin · All rights reserved</p>
             </td>
           </tr>
@@ -222,6 +241,7 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
       to: [to],
       subject: "You've been personally invited to duallin | הוזמנת אישית לדואולין",
       html,
+      ...(unsub ? { headers: unsub.headers } : {}),
     }),
   });
 
