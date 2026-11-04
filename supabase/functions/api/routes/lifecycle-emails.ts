@@ -7,6 +7,7 @@ import { isSendWindowOpen } from '../lib/sendWindow.ts'
 import { welcomeJob } from '../lib/emails/welcome.ts'
 import { onboardingRemindersJob } from '../lib/emails/onboardingReminders.ts'
 import { comeBackJob } from '../lib/emails/comeBack.ts'
+import { inviteeJoinedJob, inviteeReminderJob, invitesUnlockedJob } from '../lib/emails/invitations.ts'
 
 export interface LifecycleJob {
   name: string
@@ -16,12 +17,20 @@ export interface LifecycleJob {
 
 // All timed emails share one hourly budget, so several backlogs at once never become a burst
 // (sender reputation). Jobs run in priority order and take what's left.
-const HOURLY_BUDGET = 60
+// EMAIL_HOURLY_BUDGET (function secret) changes it without a deploy; default 60, capped at 500.
+const DEFAULT_HOURLY_BUDGET = 60
+const hourlyBudget = () => {
+  const n = Number(Deno.env.get('EMAIL_HOURLY_BUDGET'))
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 500) : DEFAULT_HOURLY_BUDGET
+}
 
 export const LIFECYCLE_JOBS: LifecycleJob[] = [
   { name: 'welcome', run: () => welcomeJob() },          // retries only — tiny
+  { name: 'invitee_joined', run: (b) => inviteeJoinedJob(b) },      // good news for the inviter — few
+  { name: 'invite_reminder', run: (b) => inviteeReminderJob(b) },   // invitations expire in 7 days — time-sensitive
   { name: 'onboarding_reminders', run: (b) => onboardingRemindersJob(b) },
-  { name: 'come_back', run: (b) => comeBackJob(b) },
+  { name: 'invites_unlocked', run: (b) => invitesUnlockedJob(b) },
+  { name: 'come_back', run: (b) => comeBackJob(b) },              // incl. the monthly email
 ]
 
 const app = new Hono()
@@ -34,7 +43,7 @@ app.post('/run', async (c) => {
   if (!isSendWindowOpen()) return c.json({ window: 'closed', jobs: [] })
 
   const results = []
-  let budget = HOURLY_BUDGET
+  let budget = hourlyBudget()
   for (const job of LIFECYCLE_JOBS) {
     try {
       const r = await job.run(budget)

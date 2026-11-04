@@ -18,7 +18,7 @@ const isInviteExpired = (expiresAtValue: string | null) => {
 
 type GateFailure = { reason: "new_user"; daysLeft: number } | { reason: "profile" } | { reason: "activity" };
 
-type InviteQuota = {
+export type InviteQuota = {
   unlimited: boolean;
   weekBonus: number;
   scoreLimit: number; // getWeeklyLimit of the scores, even while a gate fails (0 for new users)
@@ -27,10 +27,10 @@ type InviteQuota = {
 
 // Invites allowed this week: the score-based limit (none while a gate fails) plus any
 // admin-granted bonus for this week. An admin grant also lifts the gates.
-const effectiveLimit = (quota: InviteQuota) =>
+export const effectiveLimit = (quota: InviteQuota) =>
   (quota.gateFailure ? 0 : quota.scoreLimit) + quota.weekBonus;
 
-async function getInviteQuota(supabase: any, user: any): Promise<InviteQuota> {
+export async function getInviteQuota(supabase: any, user: any): Promise<InviteQuota> {
   // invite_allowances is service-role only, so members cannot grant themselves invites
   const [inviterRes, allowanceRes] = await Promise.all([
     supabase
@@ -100,7 +100,7 @@ async function getInviteQuota(supabase: any, user: any): Promise<InviteQuota> {
   return { unlimited, weekBonus, scoreLimit, gateFailure: null };
 }
 
-const countInvitesThisWeek = (supabase: any, userId: string) =>
+export const countInvitesThisWeek = (supabase: any, userId: string) =>
   supabase
     .from("invites")
     .select("id", { count: "exact", head: true })

@@ -24,7 +24,7 @@ export const EMAIL_CATEGORIES: EmailCategory[] = [
   { key: 'account',            options: [], default: 'on', essential: true, active: false, audience: 'all' },
   { key: 'onboarding',         options: ['on', 'off'], default: 'on', active: true,  audience: 'members' },  // live: welcome + sign-up reminders
   { key: 'come_back',          options: ['on', 'off'], default: 'on', active: true,  audience: 'members' },  // live: come-back emails for quiet members
-  { key: 'invitations',        options: ['on', 'off'], default: 'on', active: false, audience: 'members' },
+  { key: 'invitations',        options: ['on', 'off'], default: 'on', active: true,  audience: 'members' },  // live: invitations unlocked + reminders, invitee joined
   { key: 'network',            options: ['instant', 'daily', 'off'], default: 'instant', active: false, audience: 'all' },
   { key: 'content_activity',   options: ['daily', 'weekly', 'off'], default: 'daily', active: false, audience: 'members' },
   { key: 'weekly_stats',       options: ['weekly', 'off'], default: 'weekly', active: false, audience: 'members' },
