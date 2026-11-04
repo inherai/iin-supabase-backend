@@ -1,6 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { calculateProfileStrength, calculateActivityScore, getWeeklyLimit } from './_scoreHelpers.ts';
+import { calculateProfileStrength, calculateActivityScore, getWeeklyLimit, startOfCalendarWeek, activeWeekBonus } from './_scoreHelpers.ts';
 import OpenAI from "https://esm.sh/openai@4";
 import { sendInviteEmail } from '../lib/email.ts';
 
@@ -589,6 +589,12 @@ app.get("/analytics", async (c) => {
 
 // ==================== USERS ====================
 
+// Admin-granted invites, as the client sees them: the bonus is 0 once its week is over
+const inviteAllowanceFields = (allowance: any) => ({
+  invite_unlimited: allowance?.unlimited === true,
+  invite_week_bonus: activeWeekBonus(allowance),
+});
+
 app.get("/users", async (c) => {
   const db = getAdminClient();
   const page = parseInt(c.req.query("page") || "1");
@@ -672,8 +678,14 @@ app.get("/users", async (c) => {
     connectionsMap.set(conn.receiver_id, (connectionsMap.get(conn.receiver_id) || 0) + 1);
   }
 
+  const { data: allowances } = uuids.length > 0
+    ? await db.from("invite_allowances").select("user_id, unlimited, week_bonus, week_bonus_start").in("user_id", uuids)
+    : { data: [] };
+  const allowanceMap = new Map((allowances || []).map((a: any) => [a.user_id, a]));
+
   const enriched = (users || []).map((u: any) => ({
     ...u,
+    ...inviteAllowanceFields(allowanceMap.get(u.uuid) ?? null),
     posts_count: postsMap.get(u.email) || 0,
     comments_count: commentsMap.get(u.email) || 0,
     likes_count: likesMap.get(u.uuid) || 0,
@@ -707,6 +719,7 @@ app.get("/users/:id", async (c) => {
     { count: likesCount },
     { count: connectionsCount },
     { count: viewsCount },
+    { data: allowance },
   ] = await Promise.all([
     db.from("posts").select("*", { count: "exact", head: true }).eq("sender", email)
       .not("post_type", "is", null).neq("post_type", "email"),
@@ -717,10 +730,12 @@ app.get("/users/:id", async (c) => {
       .or(`requester_id.eq.${userId},receiver_id.eq.${userId}`)
       .eq("status", "accepted"),
     db.from("profile_views").select("*", { count: "exact", head: true }).eq("viewed_id", userId),
+    db.from("invite_allowances").select("unlimited, week_bonus, week_bonus_start").eq("user_id", userId).maybeSingle(),
   ]);
 
   return c.json({
     ...user,
+    ...inviteAllowanceFields(allowance),
     posts_count: postsCount || 0,
     comments_count: commentsCount || 0,
     likes_count: likesCount || 0,
@@ -761,6 +776,47 @@ app.post("/users/:id/refresh-scores", async (c) => {
     activity_score: activityResult.score,
     scores_cached_at: cachedAt,
   });
+});
+
+// PUT /users/:id/invite-allowance — { unlimited, week_bonus }. week_bonus replaces the
+// current week's bonus and lapses when the week resets (Sunday, same as the weekly limit).
+app.put("/users/:id/invite-allowance", async (c) => {
+  const db = getAdminClient();
+  const admin = c.get("user");
+  const userId = c.req.param("id");
+
+  const body = await c.req.json().catch(() => null);
+  const unlimited = body?.unlimited;
+  const weekBonus = body?.week_bonus;
+  if (typeof unlimited !== "boolean") return c.json({ error: "unlimited must be a boolean" }, 400);
+  if (!Number.isInteger(weekBonus) || weekBonus < 0 || weekBonus > 1000) {
+    return c.json({ error: "week_bonus must be a whole number between 0 and 1000" }, 400);
+  }
+
+  const { data: user, error: fetchErr } = await db
+    .from("users")
+    .select("uuid,email")
+    .eq("uuid", userId)
+    .maybeSingle();
+
+  if (fetchErr) return c.json({ error: fetchErr.message }, 500);
+  if (!user || user.email?.endsWith("@deleted.local")) return c.json({ error: "User not found" }, 404);
+
+  const { data: saved, error } = await db
+    .from("invite_allowances")
+    .upsert({
+      user_id: userId,
+      unlimited,
+      week_bonus: weekBonus,
+      week_bonus_start: startOfCalendarWeek().toISOString(),
+      updated_at: new Date().toISOString(),
+      updated_by: admin.id,
+    })
+    .select("unlimited, week_bonus, week_bonus_start")
+    .single();
+  if (error) return c.json({ error: error.message }, 500);
+
+  return c.json({ uuid: userId, ...inviteAllowanceFields(saved) });
 });
 
 // feed_participant is not assignable: going anonymous deletes the member's connections
@@ -2074,5 +2130,3 @@ app.patch("/join-requests/:id", async (c) => {
   if (error) return c.json({ error: error.message }, 500);
   return c.json({ success: true });
 });
-
-export default app;

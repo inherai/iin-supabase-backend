@@ -1,6 +1,7 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { sendInviteEmail } from "../lib/email.ts";
-import { calculateProfileStrength, calculateActivityScore, getWeeklyLimit } from "./_scoreHelpers.ts";
+import { calculateProfileStrength, calculateActivityScore, getWeeklyLimit, startOfCalendarWeek, activeWeekBonus } from "./_scoreHelpers.ts";
+import { supabaseAdmin } from "../middleware.ts";
 
 const app = new Hono();
 
@@ -14,14 +15,96 @@ const isInviteExpired = (expiresAtValue: string | null) => {
   return expiresAtMs <= Date.now();
 };
 
-function startOfCalendarWeek(): Date {
-  const now = new Date();
-  const day = now.getDay(); // 0 = Sunday
-  const start = new Date(now);
-  start.setDate(now.getDate() - day);
-  start.setHours(0, 0, 0, 0);
-  return start;
+type GateFailure = { reason: "new_user"; daysLeft: number } | { reason: "profile" } | { reason: "activity" };
+
+type InviteQuota = {
+  unlimited: boolean;
+  weekBonus: number;
+  scoreLimit: number; // getWeeklyLimit of the scores, even while a gate fails (0 for new users)
+  gateFailure: GateFailure | null;
+};
+
+// Invites allowed this week: the score-based limit (none while a gate fails) plus any
+// admin-granted bonus for this week. An admin grant also lifts the gates.
+const effectiveLimit = (quota: InviteQuota) =>
+  (quota.gateFailure ? 0 : quota.scoreLimit) + quota.weekBonus;
+
+async function getInviteQuota(supabase: any, user: any): Promise<InviteQuota> {
+  // invite_allowances is service-role only, so members cannot grant themselves invites
+  const [inviterRes, allowanceRes] = await Promise.all([
+    supabase
+      .from("users")
+      .select("created_at, profile_strength_cache, activity_score_cache, scores_cached_at")
+      .eq("uuid", user.id)
+      .single(),
+    supabaseAdmin
+      .from("invite_allowances")
+      .select("unlimited, week_bonus, week_bonus_start")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  ]);
+
+  if (inviterRes.error) throw new Error(inviterRes.error.message);
+  // A failed read only loses the admin grant; the member falls back to the normal rules
+  if (allowanceRes.error) console.error("invite_allowances read failed:", allowanceRes.error.message);
+  const allowance = allowanceRes.error ? null : allowanceRes.data;
+
+  const unlimited = allowance?.unlimited === true;
+  const weekBonus = activeWeekBonus(allowance);
+  if (unlimited) return { unlimited, weekBonus, scoreLimit: 0, gateFailure: null };
+
+  const inviterData = inviterRes.data;
+  const actualDays = inviterData?.created_at
+    ? Math.floor((Date.now() - new Date(inviterData.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    : 0;
+
+  if (actualDays < 7) {
+    return { unlimited, weekBonus, scoreLimit: 0, gateFailure: { reason: "new_user", daysLeft: 7 - actualDays } };
+  }
+
+  const cacheAge = inviterData?.scores_cached_at
+    ? Date.now() - new Date(inviterData.scores_cached_at).getTime()
+    : Infinity;
+  const cacheWarm = cacheAge < 4 * 60 * 60 * 1000
+    && inviterData?.profile_strength_cache != null
+    && inviterData?.activity_score_cache != null;
+
+  let profilePct: number;
+  let activityScore: number;
+
+  if (cacheWarm) {
+    profilePct    = inviterData.profile_strength_cache;
+    activityScore = inviterData.activity_score_cache;
+  } else {
+    const [strength, activity] = await Promise.all([
+      calculateProfileStrength(supabase, user.id),
+      calculateActivityScore(supabase, user.id, user.email, actualDays),
+    ]);
+    profilePct    = strength.percentage;
+    activityScore = activity.score;
+    supabase.from("users").update({
+      profile_strength_cache: profilePct,
+      activity_score_cache: activityScore,
+      scores_cached_at: new Date().toISOString(),
+    }).eq("uuid", user.id).then(() => {});
+  }
+
+  const scoreLimit = getWeeklyLimit(activityScore, profilePct);
+  if (profilePct < 70) {
+    return { unlimited, weekBonus, scoreLimit, gateFailure: { reason: "profile" } };
+  }
+  if (activityScore < 31) {
+    return { unlimited, weekBonus, scoreLimit, gateFailure: { reason: "activity" } };
+  }
+  return { unlimited, weekBonus, scoreLimit, gateFailure: null };
 }
+
+const countInvitesThisWeek = (supabase: any, userId: string) =>
+  supabase
+    .from("invites")
+    .select("id", { count: "exact", head: true })
+    .eq("inviter_id", userId)
+    .gte("created_at", startOfCalendarWeek().toISOString());
 
 // GET / — list invitations sent by the current user
 app.get("/", async (c) => {
@@ -79,59 +162,21 @@ app.get("/count", async (c) => {
     const supabase = c.get("supabase");
     if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-    const [countRes, cacheRes] = await Promise.all([
-      supabase
-        .from("invites")
-        .select("id", { count: "exact", head: true })
-        .eq("inviter_id", user.id)
-        .gte("created_at", startOfCalendarWeek().toISOString()),
-      supabase
-        .from("users")
-        .select("profile_strength_cache, activity_score_cache, scores_cached_at")
-        .eq("uuid", user.id)
-        .single(),
+    const [countRes, quota] = await Promise.all([
+      countInvitesThisWeek(supabase, user.id),
+      getInviteQuota(supabase, user),
     ]);
 
     if (countRes.error) return c.json({ error: countRes.error.message }, 500);
 
-    const cacheData = cacheRes.data;
-    const cacheAge = cacheData?.scores_cached_at
-      ? Date.now() - new Date(cacheData.scores_cached_at).getTime()
-      : Infinity;
-    const cacheWarm = cacheAge < 4 * 60 * 60 * 1000
-      && cacheData?.profile_strength_cache != null
-      && cacheData?.activity_score_cache != null;
-
-    let profilePct: number;
-    let activityScore: number;
-
-    if (cacheWarm) {
-      profilePct    = cacheData.profile_strength_cache;
-      activityScore = cacheData.activity_score_cache;
-    } else {
-      const { data: userData } = await supabase
-        .from("users")
-        .select("created_at")
-        .eq("uuid", user.id)
-        .single();
-      const actualDays = userData?.created_at
-        ? Math.floor((Date.now() - new Date(userData.created_at).getTime()) / (1000 * 60 * 60 * 24))
-        : 0;
-      const [strength, activity] = await Promise.all([
-        calculateProfileStrength(supabase, user.id),
-        calculateActivityScore(supabase, user.id, user.email, actualDays),
-      ]);
-      profilePct    = strength.percentage;
-      activityScore = activity.score;
-      supabase.from("users").update({
-        profile_strength_cache: profilePct,
-        activity_score_cache: activityScore,
-        scores_cached_at: new Date().toISOString(),
-      }).eq("uuid", user.id).then(() => {});
-    }
-
-    const limit = getWeeklyLimit(activityScore, profilePct);
-    return c.json({ used: countRes.count ?? 0, limit });
+    return c.json({
+      used: countRes.count ?? 0,
+      // Without a grant, the gates are the client's to show (its scores are fresher than
+      // this cache), so the limit stays score-based rather than dropping to 0
+      limit: quota.gateFailure && quota.weekBonus === 0 ? quota.scoreLimit : effectiveLimit(quota),
+      week_bonus: quota.weekBonus,
+      unlimited: quota.unlimited,
+    });
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
@@ -215,102 +260,26 @@ app.post("/", async (c) => {
       }
     }
 
-    if (isAdmin) {
-      const createdAt = new Date();
-      const expiresAt = new Date(createdAt);
-      expiresAt.setDate(expiresAt.getDate() + 7);
-      const tokenBytes = crypto.getRandomValues(new Uint8Array(16));
-      const token = Array.from(tokenBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-      const invitePayload = {
-        id: crypto.randomUUID(),
-        inviter_id: user.id,
-        token,
-        recipient_email: normalizedRecipientEmail,
-        personal_note: personalNote || null,
-        acquaintance_source: acquaintanceSource,
-        terms_accepted: true,
-        terms_accepted_at: createdAt.toISOString(),
-        status: "pending",
-        role: requestedRole,
-        views_count: 0,
-        last_viewed_at: null,
-        created_at: createdAt.toISOString(),
-        expires_at: expiresAt.toISOString(),
-      };
-      const { data, error } = await supabase.from("invites").insert([invitePayload]).select("*").single();
-      if (error) return c.json({ error: error.message }, 400);
-      const { data: inviterProfile } = await supabase.from("users").select("first_name, last_name").eq("uuid", user.id).maybeSingle();
-      const inviterName = inviterProfile ? [inviterProfile.first_name, inviterProfile.last_name].filter(Boolean).join(" ") : "a duallin member";
-      sendInviteEmail({ to: normalizedRecipientEmail, inviterName, token, personalNote: personalNote || null, expiresAt: expiresAt.toISOString() }).catch((err) => { console.error("Failed to send invite email:", err.message); });
-      return c.json(data, 201);
-    }
-
-    // Gate check: account age, profile strength, activity score
-    const { data: inviterData, error: inviterDataError } = await supabase
-      .from("users")
-      .select("created_at, profile_strength_cache, activity_score_cache, scores_cached_at")
-      .eq("uuid", user.id)
-      .single();
-
-    if (inviterDataError) {
-      return c.json({ error: inviterDataError.message }, 500);
-    }
-
-    const actualDays = inviterData?.created_at
-      ? Math.floor((Date.now() - new Date(inviterData.created_at).getTime()) / (1000 * 60 * 60 * 24))
-      : 0;
-
-    if (actualDays < 7) {
-      return c.json({ error: "invite_gate_failed", reason: "new_user", daysLeft: 7 - actualDays }, 403);
-    }
-
-    const cacheAge = inviterData?.scores_cached_at
-      ? Date.now() - new Date(inviterData.scores_cached_at).getTime()
-      : Infinity;
-    const cacheWarm = cacheAge < 4 * 60 * 60 * 1000
-      && inviterData?.profile_strength_cache != null
-      && inviterData?.activity_score_cache != null;
-
-    let profilePct: number;
-    let activityScore: number;
-
-    if (cacheWarm) {
-      profilePct    = inviterData.profile_strength_cache;
-      activityScore = inviterData.activity_score_cache;
-    } else {
-      const [strength, activity] = await Promise.all([
-        calculateProfileStrength(supabase, user.id),
-        calculateActivityScore(supabase, user.id, user.email, actualDays),
+    if (!isAdmin) {
+      const [quota, countRes] = await Promise.all([
+        getInviteQuota(supabase, user),
+        countInvitesThisWeek(supabase, user.id),
       ]);
-      profilePct    = strength.percentage;
-      activityScore = activity.score;
-      supabase.from("users").update({
-        profile_strength_cache: profilePct,
-        activity_score_cache: activityScore,
-        scores_cached_at: new Date().toISOString(),
-      }).eq("uuid", user.id).then(() => {});
-    }
 
-    if (profilePct < 70) {
-      return c.json({ error: "invite_gate_failed", reason: "profile" }, 403);
-    }
-    if (activityScore < 31) {
-      return c.json({ error: "invite_gate_failed", reason: "activity" }, 403);
-    }
+      if (!quota.unlimited) {
+        // Gate check: account age, profile strength, activity score — lifted by an admin bonus
+        if (quota.gateFailure && quota.weekBonus === 0) {
+          return c.json({ error: "invite_gate_failed", ...quota.gateFailure }, 403);
+        }
 
-    // Rate limit: dynamic weekly limit based on scores
-    const weeklyLimit = getWeeklyLimit(activityScore, profilePct);
-    const { count, error: countError } = await supabase
-      .from("invites")
-      .select("id", { count: "exact", head: true })
-      .eq("inviter_id", user.id)
-      .gte("created_at", startOfCalendarWeek().toISOString());
-
-    if (countError) {
-      return c.json({ error: countError.message }, 500);
-    }
-    if ((count ?? 0) >= weeklyLimit) {
-      return c.json({ error: "Weekly invitation limit reached" }, 429);
+        // Rate limit: dynamic weekly limit based on scores, plus this week's admin bonus
+        if (countRes.error) {
+          return c.json({ error: countRes.error.message }, 500);
+        }
+        if ((countRes.count ?? 0) >= effectiveLimit(quota)) {
+          return c.json({ error: "Weekly invitation limit reached" }, 429);
+        }
+      }
     }
 
     const createdAt = new Date();
@@ -332,7 +301,7 @@ app.post("/", async (c) => {
       terms_accepted: true,
       terms_accepted_at: createdAt.toISOString(),
       status: "pending",
-      role: "community",
+      role: isAdmin ? requestedRole : "community",
       views_count: 0,
       last_viewed_at: null,
       created_at: createdAt.toISOString(),

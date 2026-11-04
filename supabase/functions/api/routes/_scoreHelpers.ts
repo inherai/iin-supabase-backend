@@ -120,6 +120,22 @@ export function getWeeklyLimit(activityScore: number, profilePct: number): numbe
   return base
 }
 
+export function startOfCalendarWeek(): Date {
+  const now = new Date()
+  const start = new Date(now)
+  start.setDate(now.getDate() - now.getDay()) // 0 = Sunday
+  start.setHours(0, 0, 0, 0)
+  return start
+}
+
+// Admin-granted extra invites count only in the week they were granted for
+export function activeWeekBonus(allowance: { week_bonus: number; week_bonus_start: string | null } | null): number {
+  if (!allowance?.week_bonus || !allowance.week_bonus_start) return 0
+  return new Date(allowance.week_bonus_start).getTime() === startOfCalendarWeek().getTime()
+    ? allowance.week_bonus
+    : 0
+}
+
 // ── Profile strength (async DB) ───────────────────────────────────────────────
 
 export async function calculateProfileStrength(supabase: any, userId: string) {
