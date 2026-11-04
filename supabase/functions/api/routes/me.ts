@@ -3,6 +3,8 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import OpenAI from "https://esm.sh/openai@4";
 import { calculateProfileStrength, calculateActivityScore } from './_scoreHelpers.ts'
+import { sendWelcomeEmail } from '../lib/emails/welcome.ts'
+import { adminClient } from '../lib/emailPrefs.ts'
 
 const app = new Hono()
 
@@ -313,6 +315,17 @@ app.put('/status', async (c) => {
     if (updateErr) {
       return c.json({ error: updateErr.message }, 500)
     }
+
+    // Welcome email (email plan B4). Separate from the status update so that neither a missing
+    // activated_at column nor a mail problem can ever block finishing onboarding.
+    // Outside sending hours (night, Shabbat) the hourly job sends it later, using activated_at.
+    const welcome = (async () => {
+      const { error } = await adminClient().from('users').update({ activated_at: new Date().toISOString() }).eq('uuid', user.id)
+      if (error) console.error('activated_at not saved:', error.message)
+      await sendWelcomeEmail(user.id)
+    })().catch((err) => console.error('welcome email failed:', err))
+    // @ts-ignore EdgeRuntime exists on Supabase Edge Functions
+    if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(welcome)
 
     return c.json({ updated: true, status: 'active' })
   } catch (e: any) {

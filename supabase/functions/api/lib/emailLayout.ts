@@ -22,8 +22,9 @@ export interface Bi { he: string; en: string }
  * Hebrew comes first in the source (an RTL table puts it on the right), so on phones,
  * where the columns stack, Hebrew is on top.
  */
-export function biColumns(c: Bi): string {
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="bi" dir="rtl"><tr>
+export function biColumns(c: Bi, opts: { tight?: boolean } = {}): string {
+  // tight: inside a list or box — on phones, no divider line between the Hebrew and the English
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="bi${opts.tight ? ' bi-tight' : ''}" dir="rtl"><tr>
     <td class="bi-he" width="50%" valign="top" dir="rtl" style="padding:0 0 0 16px;border-left:1px solid ${LINE};text-align:right;">${c.he}</td>
     <td class="bi-en" width="50%" valign="top" dir="ltr" style="padding:0 16px 0 0;text-align:left;">${c.en}</td>
   </tr></table>`
@@ -72,7 +73,8 @@ export function renderLayout(o: LayoutOptions): string {
 <meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light">
 <style>
   @media (max-width:560px){ .bi td{display:block!important;width:100%!important;padding:0!important;border:0!important;}
-    .bi .bi-he{padding-bottom:12px!important;} .bi .bi-en{border-top:1px solid ${LINE}!important;padding-top:10px!important;} }
+    .bi .bi-he{padding-bottom:12px!important;} .bi .bi-en{border-top:1px solid ${LINE}!important;padding-top:10px!important;}
+    .bi-tight .bi-he{padding-bottom:6px!important;} .bi-tight .bi-en{border-top:0!important;padding-top:0!important;} }
 </style></head>
 <body style="margin:0;padding:0;background:#f7f0fa;">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${o.preheader.he} · ${o.preheader.en}</div>
