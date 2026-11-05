@@ -944,6 +944,9 @@ app.delete("/users/:id", async (c) => {
   await Promise.all([
     db.from("messages").update({ sender_id: null }).eq("sender_id", userId),
     db.from("post_impressions").delete().eq("user_id", userId),
+    // article_impressions.user_id → auth.users is NO ACTION: left behind, it blocked deleting the
+    // auth user ("Database error deleting user", found 2026-11-05)
+    db.from("article_impressions").delete().eq("user_id", userId),
     db.from("saved_resources").delete().eq("user_id", userId),
     db.from("profile_views").delete().or(`viewer_id.eq.${userId},viewed_id.eq.${userId}`),
     db.from("likes").delete().eq("user_id", userId),

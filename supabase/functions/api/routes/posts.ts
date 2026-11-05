@@ -328,39 +328,9 @@ function toStoragePath(v: any): string | null {
 }
 //support all types of attachment.
 
-function extractMentionedUserIds(message: string): string[] {
-  const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-  // Plain text format: @[Name](uuid)
-  const plainMatches = [...message.matchAll(new RegExp(`@\\[[^\\]]+\\]\\((${uuidPattern})\\)`, 'gi'))].map(m => m[1]);
-  // HTML format: data-user-id="uuid"
-  const htmlMatches = [...message.matchAll(new RegExp(`data-user-id="(${uuidPattern})"`, 'gi'))].map(m => m[1]);
-  return [...new Set([...plainMatches, ...htmlMatches])];
-}
-
-async function insertMentionNotifications(
-  supabase: any,
-  message: string,
-  actorId: string,
-  targetId: string,
-  excludeIds: string[] = [],
-) {
-  const mentionedIds = extractMentionedUserIds(message);
-  if (mentionedIds.length === 0) return;
-
-  for (const mentionedId of mentionedIds) {
-    if (mentionedId === actorId) continue;
-    if (excludeIds.includes(mentionedId)) continue;
-    const { error } = await supabase.from('notifications').insert({
-      user_id: mentionedId,
-      actor_id: actorId,
-      target_id: targetId,
-      type: 'MENTION',
-      count: 1,
-      is_read: false,
-    });
-    if (error) console.error('[mention] failed to insert notification:', error.message, { mentionedId, actorId, targetId });
-  }
-}
+// MENTION / REPLY notifications are created by the database (triggers on_post_mentions and
+// on_comment_reply_and_mentions, migrations/add_notification_triggers.sql). The API used to insert them with the
+// member's session, which `notifications` RLS rejects — none were ever saved.
 
 function buildCompanyAuthor(company: { name: string; logo?: string | null }) {
   return {
@@ -369,19 +339,6 @@ function buildCompanyAuthor(company: { name: string; logo?: string | null }) {
     image: company.logo ?? null,
     is_anonymous: false,
   }
-}
-
-async function insertReplyNotification(supabase: any, actorId: string, parentCommentAuthorId: string, postId: string) {
-  if (actorId === parentCommentAuthorId) return;
-  const { error } = await supabase.from('notifications').insert({
-    user_id: parentCommentAuthorId,
-    actor_id: actorId,
-    target_id: postId,
-    type: 'REPLY',
-    count: 1,
-    is_read: false,
-  });
-  if (error) console.error('[reply] failed to insert notification:', error.message, { parentCommentAuthorId, actorId, postId });
 }
 
 // ====================================================================
@@ -2065,8 +2022,7 @@ app.post('/publish-scheduled', async (c) => {
     // Duplicate key = already published (concurrent cron run) — still clean up
     if (insertError && insertError.code !== '23505') throw insertError
 
-    // 2. Mention notifications — sent at actual publish time
-    await insertMentionNotifications(supabaseAdmin, sp.message, sp.posted_by_uuid, sp.id)
+    // 2. Mention notifications: created by the on_post_mentions trigger when the post row is inserted
 
     // 3. Vector embedding (fire-and-forget)
     updatePostVector(sp.id)
@@ -2488,8 +2444,6 @@ app.post('/', async (c) => {
 
       if (error) throw error;
       updatePostVector(data.id);
-
-      await insertMentionNotifications(supabase, message, user.id, data.id);
 
       // enrichment: שליפת הפוסט כמו GET /:id
       // נשתמש בלוגיקה של GET /:id כדי להחזיר פוסט מועשר
@@ -2937,7 +2891,6 @@ app.post('/comments', async (c) => {
     }
 
     let resolvedCommunityMembersOnly = communityMembersOnlyInput === true
-    let parentCommentAuthorId: string | null = null
 
     // אם זו תגובה לתגובה — מאמתים ויורשים community_members_only מהתגובה הראשית
     if (parent_comment_id) {
@@ -2951,14 +2904,6 @@ app.post('/comments', async (c) => {
       if (parentComment.parent_comment_id) return c.json({ error: "Cannot reply to a reply" }, 400)
 
       resolvedCommunityMembersOnly = parentComment.community_members_only === true
-
-      // שליפת ה-uuid של כותב התגובה הראשית לצורך נוטיפיקציה
-      const { data: parentAuthorData } = await supabase
-        .from('public_users_view')
-        .select('uuid')
-        .eq('email', parentComment.sender)
-        .single()
-      if (parentAuthorData?.uuid) parentCommentAuthorId = parentAuthorData.uuid
     }
 
     const normalizedAttachments = normalizeAttachments(attachments)
@@ -2980,12 +2925,7 @@ app.post('/comments', async (c) => {
 
     if (commentError) throw commentError
 
-    await insertMentionNotifications(supabase, message, user.id, postId,
-      parentCommentAuthorId ? [parentCommentAuthorId] : [])
-
-    if (parentCommentAuthorId) {
-      await insertReplyNotification(supabase, user.id, parentCommentAuthorId, postId)
-    }
+    // REPLY + MENTION notifications: created by the on_comment_reply_and_mentions trigger
 
     // 2. שליפת ה-uuid וה-first_name, last_name מטבלת public_users_view לפי המייל
     const { data: userData, error: userError } = await supabase

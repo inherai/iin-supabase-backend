@@ -1023,20 +1023,7 @@ app.post('/follow/:userId', async (c) => {
     await supabase.from('article_author_follows')
       .upsert({ follower_uuid: user.id, author_uuid: authorId }, { onConflict: 'follower_uuid,author_uuid' })
 
-    if (isNewFollow) {
-      try {
-        await supabase.from('notifications').insert({
-          user_id: authorId,
-          actor_id: user.id,
-          target_id: null,
-          type: 'FOLLOW',
-          count: 1,
-          is_read: false,
-        })
-      } catch (e) {
-        console.error('[FOLLOW] notification insert failed:', e)
-      }
-    }
+    // FOLLOW notification: created by the on_new_follow trigger (migrations/add_notification_triggers.sql).
 
     return c.json({ is_following: true })
   } catch (err) {
@@ -1763,59 +1750,8 @@ app.post('/:id/publish', async (c) => {
 
     if (error) throw error
 
-    // Notify author's personal followers
-    const { data: authorFollowers } = await supabase
-      .from('article_author_follows')
-      .select('follower_uuid')
-      .eq('author_uuid', article.author_uuid)
-
-    const authorFollowerIds = new Set((authorFollowers ?? []).map((f: any) => f.follower_uuid))
-
-    const authorNotifications = (authorFollowers ?? [])
-      .filter((f: any) => f.follower_uuid !== user.id)
-      .map((f: any) => ({
-        user_id: f.follower_uuid,
-        actor_id: user.id,
-        target_id: articleId,
-        type: 'NEW_ARTICLE',
-        count: 1,
-        is_read: false,
-      }))
-
-    try {
-      if (authorNotifications.length > 0) {
-        await supabase.from('notifications').insert(authorNotifications)
-      }
-    } catch (e) {
-      console.error('[NEW_ARTICLE] notification insert failed:', e)
-    }
-
-    // Notify company followers (excluding those already notified as author followers)
-    if (article.company_id) {
-      const { data: companyFollowers } = await supabase
-        .from('article_company_follows')
-        .select('follower_uuid')
-        .eq('company_id', article.company_id)
-
-      const companyNotifications = (companyFollowers ?? [])
-        .filter((f: any) => f.follower_uuid !== user.id && !authorFollowerIds.has(f.follower_uuid))
-        .map((f: any) => ({
-          user_id: f.follower_uuid,
-          actor_id: user.id,
-          target_id: articleId,
-          type: 'NEW_COMPANY_ARTICLE',
-          count: 1,
-          is_read: false,
-        }))
-
-      try {
-        if (companyNotifications.length > 0) {
-          await supabase.from('notifications').insert(companyNotifications)
-        }
-      } catch (e) {
-        console.error('[NEW_COMPANY_ARTICLE] notification insert failed:', e)
-      }
-    }
+    // NEW_ARTICLE / NEW_COMPANY_ARTICLE notifications to followers: created by the on_article_published
+    // trigger (migrations/add_notification_triggers.sql).
 
     return c.json({ success: true })
   } catch (err) {
@@ -2099,12 +2035,6 @@ app.get('/:id/comments', async (c) => {
 
 // ─── POST /articles/:id/comments ─────────────────────────────────────────────
 
-function extractArticleCommentMentionIds(html: string): string[] {
-  const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-  const matches = [...html.matchAll(new RegExp(`data-user-id="(${uuidPattern})"`, 'gi'))].map(m => m[1]);
-  return [...new Set(matches)];
-}
-
 app.post('/:id/comments', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
@@ -2117,8 +2047,6 @@ app.post('/:id/comments', async (c) => {
   const sanitizedContent = sanitizeHtml(content)
 
   try {
-    let parentCommentAuthorId: string | null = null
-
     if (parent_comment_id) {
       const { data: parentComment, error: parentError } = await supabase
         .from('article_comments')
@@ -2129,8 +2057,6 @@ app.post('/:id/comments', async (c) => {
       if (parentError || !parentComment) return c.json({ error: 'Parent comment not found' }, 404)
       if (parentComment.article_id !== articleId) return c.json({ error: 'Parent comment not found' }, 404)
       if (parentComment.parent_comment_id) return c.json({ error: 'Cannot reply to a reply' }, 400)
-
-      parentCommentAuthorId = parentComment.author_uuid
     }
 
     const { data: comment, error } = await supabase
@@ -2141,54 +2067,11 @@ app.post('/:id/comments', async (c) => {
 
     if (error) throw error
 
-    // Fetch article author + commenter data in parallel
-    const [articleRes, authorDataRes] = await Promise.all([
-      supabase.from('articles').select('author_uuid').eq('id', articleId).maybeSingle(),
-      supabase.from('public_users_view').select('uuid, first_name, last_name, image, headline').eq('uuid', user.id).maybeSingle(),
-    ])
+    const { data: authorData } = await supabase.from('public_users_view')
+      .select('uuid, first_name, last_name, image, headline').eq('uuid', user.id).maybeSingle()
 
-    const articleAuthorId: string | null = articleRes.data?.author_uuid ?? null
-    const authorData = authorDataRes.data
-
-    // Notify the article author about the new comment (skip if they wrote it themselves,
-    // or if they're the parent comment's author — they'll get the more specific ARTICLE_REPLY below)
-    if (articleAuthorId && articleAuthorId !== user.id && articleAuthorId !== parentCommentAuthorId) {
-      await supabase.from('notifications').insert({
-        user_id: articleAuthorId,
-        actor_id: user.id,
-        target_id: articleId,
-        type: 'ARTICLE_COMMENT',
-        count: 1,
-        is_read: false,
-      })
-    }
-
-    // Notify the parent comment's author about the reply (skip if replying to own comment)
-    if (parentCommentAuthorId && parentCommentAuthorId !== user.id) {
-      await supabase.from('notifications').insert({
-        user_id: parentCommentAuthorId,
-        actor_id: user.id,
-        target_id: articleId,
-        type: 'ARTICLE_REPLY',
-        count: 1,
-        is_read: false,
-      })
-    }
-
-    // Notify mentioned users (exclude the commenter and anyone who already got a notification above)
-    const mentionedIds = extractArticleCommentMentionIds(sanitizedContent)
-    const excludeFromMention = [user.id, ...(articleAuthorId ? [articleAuthorId] : []), ...(parentCommentAuthorId ? [parentCommentAuthorId] : [])]
-    for (const mentionedId of mentionedIds) {
-      if (excludeFromMention.includes(mentionedId)) continue
-      await supabase.from('notifications').insert({
-        user_id: mentionedId,
-        actor_id: user.id,
-        target_id: articleId,
-        type: 'ARTICLE_MENTION',
-        count: 1,
-        is_read: false,
-      })
-    }
+    // Notifications: ARTICLE_COMMENT by notify_article_comment, ARTICLE_REPLY / ARTICLE_MENTION by
+    // on_article_comment_reply_and_mentions (migrations/add_notification_triggers.sql).
 
     const enrichedComment = {
       ...comment,
