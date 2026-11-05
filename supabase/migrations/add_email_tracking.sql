@@ -44,12 +44,14 @@ RETURNS TABLE (
   failed      bigint,
   opened      bigint,   -- at least one open (approximate — Apple Mail pre-opens)
   clicked     bigint,   -- at least one click on a link
-  returned          bigint,  -- came back within 48h — of returned_base
-  returned_base     bigint,  -- member emails whose 48h window has closed
-  returned_pending  bigint,  -- member emails still inside their 48h window
-  goal_base         bigint,  -- emails with a goal whose window has closed (0 = no goal, or none closed yet)
-  goal_met          bigint,  -- of those, how many reached it
-  goal_pending      bigint   -- emails with a goal still inside their window
+  -- A success counts as soon as it happens; a "no" only once the window has closed
+  -- (48 hours / 7 days). Emails still inside their window without a result are "in progress".
+  returned          bigint,  -- came back within 48h (as soon as it happened)
+  returned_base     bigint,  -- returned + member emails whose 48h passed without coming back
+  returned_pending  bigint,  -- member emails still inside their 48h and not back yet
+  goal_base         bigint,  -- goal_met + emails whose window closed without reaching it (0 = no goal)
+  goal_met          bigint,  -- reached the goal (as soon as it happened)
+  goal_pending      bigint   -- emails with a goal still inside their window and not reached yet
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   WITH l AS (
@@ -108,13 +110,13 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     count(*) FILTER (WHERE l.status = 'failed'),
     count(*) FILTER (WHERE l.went_out AND l.opened_at IS NOT NULL),
     count(*) FILTER (WHERE l.went_out AND l.clicked_at IS NOT NULL),
-    -- only emails whose window has closed count; the rest are "still in progress"
-    count(*) FILTER (WHERE g.came_back AND l.user_id IS NOT NULL AND l.created_at <= now() - interval '48 hours'),
-    count(*) FILTER (WHERE l.went_out AND l.user_id IS NOT NULL AND l.created_at <= now() - interval '48 hours'),
-    count(*) FILTER (WHERE l.went_out AND l.user_id IS NOT NULL AND l.created_at > now() - interval '48 hours'),
-    count(*) FILTER (WHERE g.goal IS NOT NULL AND l.created_at <= now() - g.goal_window),
-    count(*) FILTER (WHERE g.goal IS TRUE AND l.created_at <= now() - g.goal_window),
-    count(*) FILTER (WHERE g.goal IS NOT NULL AND l.created_at > now() - g.goal_window)
+    -- a success counts at once; a "no" only once the window has closed; the rest are in progress
+    count(*) FILTER (WHERE l.user_id IS NOT NULL AND g.came_back),
+    count(*) FILTER (WHERE l.user_id IS NOT NULL AND (g.came_back OR l.created_at <= now() - interval '48 hours')),
+    count(*) FILTER (WHERE l.user_id IS NOT NULL AND NOT g.came_back AND l.created_at > now() - interval '48 hours'),
+    count(*) FILTER (WHERE g.goal IS TRUE OR (g.goal IS FALSE AND l.created_at <= now() - g.goal_window)),
+    count(*) FILTER (WHERE g.goal IS TRUE),
+    count(*) FILTER (WHERE g.goal IS FALSE AND l.created_at > now() - g.goal_window)
   FROM l LEFT JOIN g ON g.id = l.id
   GROUP BY l.kind
   ORDER BY 3 DESC;
