@@ -44,9 +44,12 @@ RETURNS TABLE (
   failed      bigint,
   opened      bigint,   -- at least one open (approximate — Apple Mail pre-opens)
   clicked     bigint,   -- at least one click on a link
-  returned    bigint,   -- used the site within 48h after the email (members only)
-  goal_base   bigint,   -- emails that have a goal (0 = this kind has none)
-  goal_met    bigint    -- of those, how many reached it within 7 days
+  returned          bigint,  -- came back within 48h — of returned_base
+  returned_base     bigint,  -- member emails whose 48h window has closed
+  returned_pending  bigint,  -- member emails still inside their 48h window
+  goal_base         bigint,  -- emails with a goal whose window has closed (0 = no goal, or none closed yet)
+  goal_met          bigint,  -- of those, how many reached it
+  goal_pending      bigint   -- emails with a goal still inside their window
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   WITH l AS (
@@ -85,9 +88,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
                   AND cm.created_at BETWEEN l.created_at AND l.created_at + interval '48 hours')
         ELSE NULL   -- no single goal: "came back to the site" is the measure (the admin page shows it)
       END AS goal,
-      -- came back: active later the same day, or on one of the next 2 days
+      -- how long the goal is given (a result is only counted once this window has closed)
+      CASE WHEN l.kind = 'content_digest' THEN interval '48 hours' ELSE interval '7 days' END AS goal_window,
+      -- came back: active later the same day, or on one of the next 2 days. Not the same day for
+      -- welcome: it goes out while she is still on the site, so that visit isn't "coming back".
       EXISTS (SELECT 1 FROM user_active_days d WHERE d.user_id = l.user_id
-              AND ((d.day = l.created_at::date AND d.last_at > l.created_at)
+              AND ((d.day = l.created_at::date AND d.last_at > l.created_at AND l.kind <> 'welcome')
                    OR (d.day > l.created_at::date AND d.day <= (l.created_at + interval '48 hours')::date))) AS came_back
     FROM l WHERE l.went_out
   )
@@ -102,9 +108,13 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     count(*) FILTER (WHERE l.status = 'failed'),
     count(*) FILTER (WHERE l.went_out AND l.opened_at IS NOT NULL),
     count(*) FILTER (WHERE l.went_out AND l.clicked_at IS NOT NULL),
-    count(*) FILTER (WHERE g.came_back AND l.user_id IS NOT NULL),
-    count(*) FILTER (WHERE g.goal IS NOT NULL),
-    count(*) FILTER (WHERE g.goal IS TRUE)
+    -- only emails whose window has closed count; the rest are "still in progress"
+    count(*) FILTER (WHERE g.came_back AND l.user_id IS NOT NULL AND l.created_at <= now() - interval '48 hours'),
+    count(*) FILTER (WHERE l.went_out AND l.user_id IS NOT NULL AND l.created_at <= now() - interval '48 hours'),
+    count(*) FILTER (WHERE l.went_out AND l.user_id IS NOT NULL AND l.created_at > now() - interval '48 hours'),
+    count(*) FILTER (WHERE g.goal IS NOT NULL AND l.created_at <= now() - g.goal_window),
+    count(*) FILTER (WHERE g.goal IS TRUE AND l.created_at <= now() - g.goal_window),
+    count(*) FILTER (WHERE g.goal IS NOT NULL AND l.created_at > now() - g.goal_window)
   FROM l LEFT JOIN g ON g.id = l.id
   GROUP BY l.kind
   ORDER BY 3 DESC;
