@@ -72,6 +72,11 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
           -- (connections has no updated_at, so "accepted after the email" can't be timed exactly)
           EXISTS (SELECT 1 FROM connections c WHERE c.receiver_id = l.user_id AND c.status = 'accepted'
                   AND c.created_at BETWEEN l.created_at - interval '8 days' AND l.created_at - interval '4 days')
+        WHEN l.kind = 'welcome' THEN
+          -- it goes out while she is still on the site (right after sign-up), so "came back within
+          -- 48h" counts that same visit; the real question is a visit on ANOTHER day within 7 days
+          EXISTS (SELECT 1 FROM user_active_days d WHERE d.user_id = l.user_id
+                  AND d.day > l.created_at::date AND d.day <= (l.created_at + interval '7 days')::date)
         WHEN l.kind = 'people_suggestions' THEN
           EXISTS (SELECT 1 FROM connections c WHERE c.requester_id = l.user_id
                   AND c.created_at BETWEEN l.created_at AND l.created_at + interval '7 days')
