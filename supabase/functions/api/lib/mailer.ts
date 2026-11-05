@@ -11,7 +11,7 @@ import { isSendWindowOpen } from './sendWindow.ts'
 
 export type SendResult =
   | { status: 'sent'; resendId: string | null }
-  | { status: 'skipped'; reason: 'duplicate' | 'not_allowed' | 'no_api_key' }
+  | { status: 'skipped'; reason: 'duplicate' | 'not_allowed' | 'no_api_key' | 'invalid_address' }
   | { status: 'deferred'; reason?: 'window' | 'cap' }
   | { status: 'failed'; error: string }
 
@@ -62,10 +62,22 @@ async function log(row: Record<string, unknown>) {
   if (error) console.error('email_log insert failed:', error.message)
 }
 
+// Deleted accounts keep a placeholder address (deleted_<uuid>@deleted.local, set by the admin delete),
+// and their status stays as it was — never email those, or anything that isn't a real address:
+// every bounce hurts the sender reputation (found 2026-11-05: 4 bounces from deleted sign-ups).
+const isDeliverable = (email: string) =>
+  /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email) && !/@deleted\.local$/i.test(email) && !email.startsWith('deleted_')
+
 export async function sendEmail(o: SendEmailOptions): Promise<SendResult> {
   const email = normalizeEmail(o.to)
   const db = adminClient()
   const base = { kind: o.kind, category: o.category, email, user_id: o.userId ?? null, ref_key: o.refKey ?? null }
+
+  // 0. a real address at all? (logged as skipped, so jobs don't retry it every hour)
+  if (!isDeliverable(email)) {
+    await log({ ...base, status: 'skipped', skip_reason: 'invalid_address' })
+    return { status: 'skipped', reason: 'invalid_address' }
+  }
 
   // 1. duplicate
   if (o.refKey) {
