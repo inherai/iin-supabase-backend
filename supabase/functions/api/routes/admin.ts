@@ -2259,6 +2259,21 @@ app.get("/email-log", async (c) => {
   });
 });
 
+// GET /admin/email-log/:id/html — the email exactly as it was sent, fetched from Resend
+// (Resend keeps a copy of every email it sends; nothing is stored on our side).
+app.get("/email-log/:id/html", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) return c.json({ error: "Bad id" }, 400);
+  const { data: row } = await getAdminClient().from("email_log").select("resend_id, status").eq("id", id).maybeSingle();
+  if (!row?.resend_id) return c.json({ error: row?.status === "skipped" ? "This email was not sent." : "No copy of this email." }, 404);
+  const apiKey = Deno.env.get("RESEND_API_KEY");
+  if (!apiKey) return c.json({ error: "RESEND_API_KEY is not set" }, 500);
+  const res = await fetch(`https://api.resend.com/emails/${encodeURIComponent(row.resend_id)}`, { headers: { Authorization: `Bearer ${apiKey}` } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body?.html) return c.json({ error: "Resend no longer has a copy of this email." }, 404);
+  return c.json({ html: body.html, subject: body.subject ?? null, to: body.to ?? null, created_at: body.created_at ?? null });
+});
+
 // POST /admin/email-suppressions  { email, note? } — stop all email to an address
 app.post("/email-suppressions", async (c) => {
   const admin = c.get("user");
