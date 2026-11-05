@@ -573,7 +573,9 @@ export async function weeklyCommunityJob(budget: number, now = new Date()): Prom
     const freq = await getFrequency(uid, 'community')
     if (freq === 'off') continue
     const p = prev.get(uid)
-    if (freq === 'biweekly' && p && t - p.at < 13 * DAY) continue
+    // the week's sending spans Wednesday→Sunday, so keep at least 5 days between two of them
+    // (got it on Sunday → next one on Friday, not Wednesday)
+    if (p && t - p.at < (freq === 'biweekly' ? 13 : 5) * DAY) continue
     const w: WeeklyCommunity = {
       firstName: (m.first_name ?? '').trim(),
       questions: questions.filter((q) => q.posted_by_uuid !== uid).slice(0, 2).map((q) => ({ author: N(q.posted_by_uuid), text: plain(q.message) })),

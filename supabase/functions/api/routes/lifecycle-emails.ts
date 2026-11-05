@@ -27,7 +27,7 @@ export interface LifecycleJob {
 // of the queue (come-back) never ran. Now each run is small, and the heavier jobs take turns:
 //   every run      — the personal emails (they should not wait), and the small time-sensitive ones
 //   runs 0 and 3   — sign-up reminders, request reminders, expired invitations
-//   runs 1 and 4   — the week on duallin, evening comments digest, post views
+//   runs 1 and 4   — the week on duallin (every run on Wednesday from 10:00), evening comments digest, post views
 //   runs 2 and 5   — come-back, invitations unlocked, people you may know
 // All timed emails still share one hourly budget (sender reputation).
 // EMAIL_HOURLY_BUDGET (function secret, default 60, max 500) — the hourly total.
@@ -60,6 +60,12 @@ export const LIFECYCLE_JOBS: LifecycleJob[] = [
   { name: 'people_suggestions', run: (b) => peopleJob(b), slots: [2, 5] },         // Mondays
 ]
 
+const israelDayHour = () => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', hourCycle: 'h23', weekday: 'short' })
+    .formatToParts(new Date()).map((x) => [x.type, x.value]))
+  return { weekday: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday), hour: Number(p.hour) }
+}
+
 const app = new Hono()
 
 app.post('/run', async (c) => {
@@ -85,8 +91,20 @@ app.post('/run', async (c) => {
     .in('status', ['sent', 'delivered', 'bounced', 'complained']).gte('created_at', new Date(Date.now() - 3600_000).toISOString())
   let budget = Math.min(envInt('EMAIL_PER_RUN', DEFAULT_PER_RUN, 100), Math.max(0, envInt('EMAIL_HOURLY_BUDGET', DEFAULT_HOURLY_BUDGET, 500) - (lastHour ?? 0)))
 
+  // Wednesday from 10:00 belongs to the week on duallin (2026-11-05): it takes every run and goes
+  // first among the nice-to-know emails, so everyone has it within a few hours.
+  const { weekday, hour } = israelDayHour()
+  const weeklyDay = weekday === 3 && hour >= 10
+  const jobs = weeklyDay
+    ? [
+      ...LIFECYCLE_JOBS.filter((j) => j.slots === EVERY),
+      { ...LIFECYCLE_JOBS.find((j) => j.name === 'weekly_community')!, slots: EVERY },
+      ...LIFECYCLE_JOBS.filter((j) => j.slots !== EVERY && j.name !== 'weekly_community'),
+    ]
+    : LIFECYCLE_JOBS
+
   const results = []
-  for (const job of LIFECYCLE_JOBS) {
+  for (const job of jobs) {
     if (!job.slots.includes(slot)) continue
     if (outOfTime()) { results.push({ job: job.name, skipped: 'out of time' }); continue }
     try {

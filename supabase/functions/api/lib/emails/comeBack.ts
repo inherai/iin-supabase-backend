@@ -38,28 +38,11 @@ const STAGE = {
     subject: { he: 'הקהילה שלך עדיין כאן', en: 'Your community is still here' },
     preheader: { he: 'כמה דברים עדיין מחכים לך', en: 'A few things are still waiting for you' },
     heading: (nm: string): Bi => ({ he: nm ? `${nm}, הקהילה שלך עדיין כאן` : 'הקהילה שלך עדיין כאן', en: nm ? `${nm}, your community is still here` : 'Your community is still here' }),
-    // No "we won't email you again": a monthly community email follows (planned, 2026-11-04).
+    // No "we won't email you again": the weekly community email keeps coming (2026-11-04).
     footnote: { he: 'כשתרצי לחזור, אנחנו כאן.', en: "Whenever you want to come back, we're here." } as Bi | null,
-  },
-  monthly: {
-    subject: { he: 'החודש בדואולין', en: 'This month on duallin' },
-    preheader: { he: 'מה חדש בקהילה החודש', en: "What's new in the community this month" },
-    heading: (nm: string): Bi => ({ he: nm ? `${nm}, הנה מה שקרה החודש בדואולין` : 'הנה מה שקרה החודש בדואולין', en: nm ? `${nm}, here's what happened on duallin this month` : "Here's what happened on duallin this month" }),
-    footnote: null as Bi | null,
   },
 } as const
 type Stage = keyof typeof STAGE
-
-export interface NewArticle { id: string | number; title: string }
-
-function articlesList(list: NewArticle[]): string {
-  if (!list.length) return ''
-  const items = list.map((a) => `<tr><td style="padding:8px 0;border-top:1px solid ${LINE};" dir="auto">
-      <a href="${APP_URL()}/articles/article/${encodeURIComponent(String(a.id))}" style="font-family:${FONT};font-size:14px;font-weight:600;color:${BRAND};text-decoration:none;">${esc(a.title)}</a>
-    </td></tr>`).join('')
-  return `<div style="height:10px"></div>${biColumns({ he: paragraph('<b>מאמרים חדשים מהקהילה:</b>'), en: paragraph('<b>New articles from the community:</b>') }, { tight: true })}
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 6px;">${items}</table>`
-}
 
 function waitingRows(w: Waiting): string {
   const rows: Array<[number, Bi]> = ([
@@ -75,24 +58,19 @@ function waitingRows(w: Waiting): string {
     }, { tight: true })}</td></tr>`).join('')}</table>`
 }
 
-export function renderComeBack(stage: Stage, firstName: string, waiting: Waiting, stats: CommunityStats | null, unsubscribeUrl: string | null, articles: NewArticle[] = []): string {
+export function renderComeBack(stage: Stage, firstName: string, waiting: Waiting, stats: CommunityStats | null, unsubscribeUrl: string | null): string {
   const s = STAGE[stage]
   // dir="auto": a Hebrew name inside the English line (and vice versa) keeps its own direction
   const nm = firstName.trim() ? `<span dir="auto">${esc(firstName.trim())}</span>` : ''
   const h = s.heading(nm)
   const personal = waitingRows(waiting)
-  const lead: Bi = stage === 'monthly'
-    ? (personal
-      ? { he: 'כמה דברים מחכים לך, וזה מה שקרה בקהילה:', en: "A few things are waiting for you, and here's what happened in the community:" }
-      : { he: 'זה מה שקרה בקהילה בחודש האחרון:', en: "Here's what happened in the community this past month:" })
-    : personal
-      ? { he: 'בזמן שלא היית, כמה דברים חיכו לך:', en: 'While you were away, a few things were waiting for you:' }
-      : { he: 'בזמן שלא היית, הקהילה המשיכה לצמוח.', en: 'While you were away, the community kept growing.' }
+  const lead: Bi = personal
+    ? { he: 'בזמן שלא היית, כמה דברים חיכו לך:', en: 'While you were away, a few things were waiting for you:' }
+    : { he: 'בזמן שלא היית, הקהילה המשיכה לצמוח.', en: 'While you were away, the community kept growing.' }
   const body =
     biColumns({ he: heading(h.he) + paragraph(lead.he), en: heading(h.en) + paragraph(lead.en) }) +
     personal +
     (stats ? statsRow(stats, { intro: false }) : '') +
-    (stage === 'monthly' ? articlesList(articles) : '') +
     button({ he: 'לחזור לדואולין', en: 'Back to duallin' }, `${APP_URL()}/`) +
     (s.footnote ? `<div style="height:14px"></div>${biColumns({ he: paragraph(s.footnote.he), en: paragraph(s.footnote.en) }, { tight: true })}` : '')
   return renderLayout({
@@ -103,27 +81,17 @@ export function renderComeBack(stage: Stage, firstName: string, waiting: Waiting
   })
 }
 
-export interface ComeBackSent { first?: number; second?: number; lastMonthly?: number }
+export interface ComeBackSent { first?: number; second?: number }
 
 /** Which email (if any) is due in this quiet period, given when each one went out (ms). */
 export function dueComeBack(quietSince: Date, sent: ComeBackSent, now = new Date()): Stage | null {
   const quietDays = (now.getTime() - quietSince.getTime()) / DAY
-  // After email 2 the weekly community email (sent to every member) carries on instead of a
-  // separate monthly one (decided 2026-11-04). The monthly template stays for reference.
+  // After email 2 the weekly community email (sent to every member) carries on (decided 2026-11-04).
   if (sent.second) return null
   if (sent.first) {
     return quietDays >= SECOND_AFTER_DAYS && now.getTime() - sent.first >= MIN_GAP_DAYS * DAY ? 2 : null
   }
   return quietDays >= FIRST_AFTER_DAYS ? 1 : null
-}
-
-/** Up to 3 articles published in the last 30 days, newest first (read once per run). */
-async function newArticles(now: Date): Promise<NewArticle[]> {
-  const { data } = await adminClient().from('articles').select('id, title')
-    .eq('status', 'published').is('deleted_at', null)
-    .gte('published_at', new Date(now.getTime() - 30 * DAY).toISOString())
-    .order('published_at', { ascending: false }).limit(3)
-  return (data ?? []).filter((a) => a.title) as NewArticle[]
 }
 
 /** PostgREST returns at most 1000 rows per request — page through. */
@@ -182,23 +150,20 @@ export async function comeBackJob(budget: number, now = new Date()): Promise<{ s
   // What each got in its current quiet period (skipped counts too: she turned it off, don't retry).
   const logs = await fetchAll<{ user_id: string; kind: string; ref_key: string; created_at: string }>((f, t) =>
     db.from('email_log').select('user_id, kind, ref_key, created_at')
-      .in('kind', ['come_back_1', 'come_back_2', 'come_back_monthly'])
+      .in('kind', ['come_back_1', 'come_back_2'])
       .in('status', ['sent', 'delivered', 'bounced', 'complained', 'skipped'])
       .order('id').range(f, t))
   const history = new Map<string, ComeBackSent>()
   for (const l of logs) {
-    // monthly ref_key = "<period>|<YYYY-MM>"; the others = "<period>"
-    const key = `${l.user_id}|${String(l.ref_key).split('|')[0]}`
+    const key = `${l.user_id}|${l.ref_key}`
     const h = history.get(key) ?? {}
     const at = new Date(l.created_at).getTime()
     if (l.kind === 'come_back_1') h.first = at
     if (l.kind === 'come_back_2') h.second = at
-    if (l.kind === 'come_back_monthly') h.lastMonthly = Math.max(h.lastMonthly ?? 0, at)
     history.set(key, h)
   }
 
   const stats = await communityStats()
-  const articles = await newArticles(now)
   let attempts = 0
   let sent = 0
   for (const m of quiet) {
@@ -214,9 +179,9 @@ export async function comeBackJob(budget: number, now = new Date()): Promise<{ s
       category: 'come_back',
       to: m.email!,
       userId: m.uuid,
-      refKey: stage === 'monthly' ? `${m.period}|${now.toISOString().slice(0, 7)}` : m.period,
+      refKey: m.period,
       subject: `${s.subject.he} | ${s.subject.en}`,
-      html: ({ unsubscribeUrl }) => renderComeBack(stage, name, waiting, stats, unsubscribeUrl, articles),
+      html: ({ unsubscribeUrl }) => renderComeBack(stage, name, waiting, stats, unsubscribeUrl),
     })
     if (r.status === 'deferred') attempts-- // held by the per-member cap — doesn't use the hour's budget
     if (r.status === 'sent') sent++
