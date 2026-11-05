@@ -116,6 +116,19 @@ export function dueInvitesEmail(
   return now - sent.reminder1At >= REMINDER_2_AFTER_DAYS * DAY ? 'invites_reminder_2' : null
 }
 
+/** Members with app_metadata.is_admin (the admin flag lives in auth, not in public.users). */
+async function adminIds(): Promise<Set<string>> {
+  const ids = new Set<string>()
+  const db = adminClient()
+  for (let page = 1; page <= 20; page++) {
+    const { data, error } = await db.auth.admin.listUsers({ page, perPage: 1000 })
+    if (error || !data?.users?.length) break
+    for (const u of data.users) if (u.app_metadata?.is_admin === true) ids.add(u.id)
+    if (data.users.length < 1000) break
+  }
+  return ids
+}
+
 export async function invitesUnlockedJob(budget: number): Promise<JobResult> {
   if (budget <= 0) return none
   const db = adminClient()
@@ -153,11 +166,14 @@ export async function invitesUnlockedJob(budget: number): Promise<JobResult> {
     if (!data || data.length < 1000) break
   }
 
+  // Admins invite as part of their job — no "invite more" emails for them (2026-11-05).
+  const admins = await adminIds()
+
   let attempts = 0
   let sent = 0
   for (const m of members) {
     if (attempts >= budget || outOfTime()) break
-    if (!m.email) continue
+    if (!m.email || admins.has(m.uuid)) continue
     const h = history.get(m.uuid) ?? {}
     // Time first (no queries); only a reminder that is due needs "did she invite since?".
     const due = dueInvitesEmail(h, false)
@@ -173,6 +189,7 @@ export async function invitesUnlockedJob(budget: number): Promise<JobResult> {
     // Same gate as POST /invite (fresh scores, admin grants), and what's left this week.
     const quota = await getInviteQuota(db, { id: m.uuid, email: m.email }).catch(() => null)
     if (!quota || quota.gateFailure) continue
+    if (quota.unlimited) continue // granted unlimited invitations by an admin: they invite a lot already
     const used = (await countInvitesThisWeek(db, m.uuid))?.count ?? 0
     const left = quota.unlimited ? 0 : Math.max(0, effectiveLimit(quota) - used)
     if (!quota.unlimited && left === 0) continue // nothing to invite with right now; try next hour
@@ -221,6 +238,31 @@ export function renderInviteeJoined(inviterFirstName: string, inviteeName: strin
   })
 }
 
+/** Several colleagues joined on the same day — one email instead of one per colleague. */
+export function renderInviteesJoined(inviterFirstName: string, people: Array<{ name: string; id: string }>, total: number, unsubscribeUrl: string | null): string {
+  const n = nameSpan(inviterFirstName)
+  const shown = people.slice(0, 5)
+  const list = shown.map((p) => `<li style="margin:0 0 4px;"><a href="${APP_URL()}/profile/${encodeURIComponent(p.id)}" style="color:${BRAND};font-weight:700;text-decoration:none;">${nameSpan(p.name) || 'חברה בדואולין'}</a></li>`).join('')
+  const more = total - shown.length
+  const body =
+    biColumns({
+      he: heading(`${total} עמיתות שהזמנת הצטרפו לדואולין`) + paragraph(`${n ? `${n}, ` : ''}בזכות ההזמנות שלך יש לקהילה חברות חדשות. זה רגע טוב לברך אותן ולהתחבר.`) +
+        `<ul style="margin:6px 0 0;padding-right:18px;font-family:${FONT};font-size:14px;" dir="rtl">${list}</ul>` + (more > 0 ? paragraph(`ועוד ${more}`) : ''),
+      en: heading(`${total} colleagues you invited joined duallin`) + paragraph(`${n ? `${n}, ` : ''}thanks to your invitations the community has new members. A good moment to welcome them and connect.`) +
+        `<ul style="margin:6px 0 0;padding-left:18px;font-family:${FONT};font-size:14px;" dir="ltr">${list}</ul>` + (more > 0 ? paragraph(`and ${more} more`) : ''),
+    }) +
+    button({ he: 'לרשת שלך', en: 'Your network' }, `${APP_URL()}/innercircle/connections`)
+  return renderLayout({
+    preheader: { he: 'ההזמנות שלך הצליחו', en: 'Your invitations worked' },
+    body,
+    reason: { he: 'קיבלת את המייל הזה כי הזמנת אותן לדואולין.', en: 'You received this email because you invited them to duallin.' },
+    unsubscribeUrl,
+  })
+}
+
+// Merged per inviter (2026-11-05: members who invite a lot — e.g. admins — got one email per
+// colleague and turned the whole "invitations" type off): at most one email a day per inviter,
+// listing everyone who joined since the last one.
 export async function inviteeJoinedJob(budget: number): Promise<JobResult> {
   if (budget <= 0) return none
   const db = adminClient()
@@ -229,35 +271,62 @@ export async function inviteeJoinedJob(budget: number): Promise<JobResult> {
   const { data: joined } = await db.from('users').select('uuid, email, first_name, last_name')
     .eq('status', 'Active').gte('activated_at', since).limit(500)
   if (!joined?.length) return none
-  const { data: done } = await db.from('email_log').select('ref_key').eq('kind', 'invitee_joined')
+  const { data: done } = await db.from('email_log').select('ref_key, user_id, status, created_at').eq('kind', 'invitee_joined')
     .gte('created_at', new Date(Date.now() - (JOINED_LOOKBACK_DAYS + 1) * DAY).toISOString())
     .in('status', ['sent', 'delivered', 'bounced', 'complained', 'skipped'])
   const told = new Set((done ?? []).map((r) => r.ref_key))
+  const today = new Date().toISOString().slice(0, 10)
+  const emailedToday = new Set((done ?? []).filter((r) => r.status !== 'skipped' && r.created_at.slice(0, 10) === today).map((r) => r.user_id))
+
+  // Who invited each of them — one query for all.
+  const byEmail = new Map(joined.filter((j) => j.email).map((j) => [normalizeEmail(j.email!), j]))
+  const emails = [...byEmail.keys()]
+  const invites: Array<{ id: string; inviter_id: string; recipient_email: string }> = []
+  for (let i = 0; i < emails.length; i += 100) {
+    const { data } = await db.from('invites').select('id, inviter_id, recipient_email')
+      .eq('status', 'accepted').in('recipient_email', emails.slice(i, i + 100))
+    invites.push(...((data ?? []) as typeof invites))
+  }
+  const perInviter = new Map<string, Array<{ inviteId: string; person: { name: string; id: string } }>>()
+  for (const inv of invites) {
+    if (!inv.inviter_id || told.has(String(inv.id))) continue
+    const j = byEmail.get(normalizeEmail(inv.recipient_email))
+    if (!j) continue
+    const list = perInviter.get(inv.inviter_id) ?? []
+    if (!list.some((x) => x.person.id === j.uuid)) list.push({ inviteId: String(inv.id), person: { name: fullName(j), id: j.uuid } })
+    perInviter.set(inv.inviter_id, list)
+  }
 
   let attempts = 0
   let sent = 0
-  for (const j of joined) {
+  for (const [inviterId, items] of perInviter) {
     if (attempts >= budget || outOfTime()) break
-    if (!j.email) continue
-    const { data: invite } = await db.from('invites').select('id, inviter_id')
-      .eq('recipient_email', normalizeEmail(j.email)).eq('status', 'accepted')
-      .order('created_at', { ascending: false }).limit(1).maybeSingle()
-    if (!invite?.inviter_id || told.has(String(invite.id))) continue
-    const { data: inviter } = await db.from('users').select('uuid, email, first_name, status')
-      .eq('uuid', invite.inviter_id).maybeSingle()
+    if (emailedToday.has(inviterId)) continue // one a day — the rest goes in tomorrow's email
+    const { data: inviter } = await db.from('users').select('uuid, email, first_name, status').eq('uuid', inviterId).maybeSingle()
     if (!inviter?.email || inviter.status !== 'Active') continue
 
     attempts++
+    const one = items.length === 1 ? items[0].person : null
     const r = await sendEmail({
       kind: 'invitee_joined',
       category: 'invitations',
       to: inviter.email,
       userId: inviter.uuid,
-      refKey: String(invite.id),
-      subject: fullName(j) ? `${fullName(j)} הצטרפה לדואולין | ${fullName(j)} joined duallin` : 'העמיתה שהזמנת הצטרפה | Your colleague joined duallin',
-      html: ({ unsubscribeUrl }) => renderInviteeJoined(inviter.first_name ?? '', fullName(j), j.uuid, unsubscribeUrl),
+      refKey: items[0].inviteId,
+      subject: one
+        ? (one.name ? `${one.name} הצטרפה לדואולין | ${one.name} joined duallin` : 'העמיתה שהזמנת הצטרפה | Your colleague joined duallin')
+        : `${items.length} עמיתות שהזמנת הצטרפו | ${items.length} colleagues you invited joined`,
+      html: ({ unsubscribeUrl }) => one
+        ? renderInviteeJoined(inviter.first_name ?? '', one.name, one.id, unsubscribeUrl)
+        : renderInviteesJoined(inviter.first_name ?? '', items.map((x) => x.person), items.length, unsubscribeUrl),
     })
-    // A duplicate (already told) doesn't use up the hour's budget.
+    // The other invitations in this email are now told too.
+    if (r.status === 'sent' && items.length > 1) {
+      await db.from('email_log').insert(items.slice(1).map((x) => ({
+        kind: 'invitee_joined', category: 'invitations', email: normalizeEmail(inviter.email), user_id: inviter.uuid,
+        ref_key: x.inviteId, status: 'skipped', skip_reason: 'merged_into_one_email',
+      })))
+    }
     if (r.status === 'skipped' && r.reason === 'duplicate') attempts--
     if (r.status === 'deferred') attempts-- // held by the per-member cap — doesn't use the hour's budget
     if (r.status === 'sent') sent++
