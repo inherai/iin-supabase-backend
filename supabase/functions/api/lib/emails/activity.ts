@@ -21,6 +21,8 @@ const INK_2 = '#4a4a50'
 const INK_3 = '#86838b'
 const LINE = '#ede0f0'
 const SOFT = '#faf5fb'
+/** Section header bar in the weekly email — a light tint of the brand purple. */
+const HEADER_TINT = '#f7eff8'
 const FONT = `-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif`
 const MAX_PER_BLOCK = 3
 const MEMBER_REASON: Bi = { he: 'קיבלת את המייל הזה כי את חברה בדואולין.', en: "You received this email because you're a duallin member." }
@@ -300,6 +302,12 @@ export function renderPeopleYouMayKnow(firstName: string, people: Person[], tota
 
 export interface WeeklyCommunity {
   firstName: string
+  /** Personal part (2026-11-05): what her own connections shared this week. */
+  network: {
+    hasConnections: boolean
+    milestones: Array<{ author: { name: string; avatarUrl: string }; text: string; likes: number; comments: number }>
+    posts: Array<{ author: { name: string; avatarUrl: string }; text: string; likes: number; comments: number }>
+  }
   /** Only posts the author marked as "question" (post_type = 'question'), with at most 1 comment. */
   questions: Array<{ author: { name: string; avatarUrl: string }; text: string }>
   topPosts: Array<{ author: { name: string; avatarUrl: string }; text: string; likes: number; comments: number }>
@@ -310,25 +318,67 @@ export interface WeeklyCommunity {
 
 export function renderWeeklyCommunity(w: WeeklyCommunity, nudge: Nudge, unsubscribeUrl: string | null): string {
   const n = nm(w.firstName)
-  const sectionTitle = (i: IconName, t: Bi) => `<div style="margin:18px 0 4px;">${titleRow(i, t, null)}</div>`
+  // One clear frame per section: a tinted header bar (icon + title), then plain rows separated by
+  // thin lines — no card inside a card, so the eye sees where each part starts and ends.
+  const frame = (i: IconName, t: Bi, inner: string, footer = '') =>
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:18px 0 0;border:1px solid ${LINE};border-radius:12px;border-collapse:separate;overflow:hidden;">
+      <tr><td style="background:${HEADER_TINT};padding:10px 14px;border-bottom:1px solid ${LINE};border-radius:12px 12px 0 0;">${titleRow(i, t, null)}</td></tr>
+      <tr><td style="padding:2px 14px 4px;background:#fff;">${inner}</td></tr>
+      ${footer ? `<tr><td style="padding:8px 14px 12px;background:#fff;border-radius:0 0 12px 12px;">${footer}</td></tr>` : ''}
+    </table>`
+  const postRow = (p: { author: { name: string; avatarUrl: string }; text: string; likes?: number; comments?: number }, first: boolean, extra = '') => {
+    const stat = (i: IconName, v?: number) => (v ? `<td style="padding-left:12px;"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-left:4px;">${icon(i, 14)}</td><td style="font-family:${FONT};font-size:12px;color:${INK_3};">${v}</td></tr></table></td>` : '')
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" dir="rtl" style="${first ? '' : `border-top:1px solid ${LINE};`}"><tr>
+      <td width="40" valign="top" style="padding:12px 0 12px 10px;"><img src="${p.author.avatarUrl}" width="32" height="32" alt="" style="display:block;border-radius:50%;border:0;"></td>
+      <td valign="top" style="padding:12px 0;">
+        <div style="font-family:${FONT};font-size:13px;font-weight:700;color:${INK};text-align:right;" dir="auto">${esc(p.author.name)}</div>
+        <div style="font-family:${FONT};font-size:14px;line-height:1.5;color:${INK_2};margin-top:2px;text-align:right;" dir="auto"><a href="${URL.feed()}" style="color:${INK_2};text-decoration:none;">${cut(p.text, 120)}</a></div>
+        ${(p.likes || p.comments) ? `<table role="presentation" cellpadding="0" cellspacing="0" dir="rtl" style="margin-top:6px;"><tr>${stat('like', p.likes)}${stat('comment', p.comments)}</tr></table>` : ''}
+        ${extra}
+      </td></tr></table>`
+  }
+  const link2 = (href: string, t: Bi) =>
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" dir="rtl"><tr>
+      <td style="font-family:${FONT};font-size:13px;text-align:right;" dir="rtl"><a href="${href}" style="color:${BRAND};font-weight:700;">${t.he}</a></td>
+      <td style="font-family:${FONT};font-size:13px;text-align:left;" dir="ltr"><a href="${href}" style="color:${BRAND};">${t.en}</a></td>
+    </tr></table>`
+
   let rest = ''
+  // 1. From your network — people she knows are what makes the email worth opening.
+  const net = w.network
+  const netItems = [
+    ...net.milestones.slice(0, 1).map((m) => ({ ...m, milestone: true })),
+    ...net.posts.map((p) => ({ ...p, milestone: false })),
+  ].slice(0, 2)
+  if (netItems.length) {
+    rest += frame('connection-accepted', { he: 'מהרשת שלך', en: 'From your network' },
+      netItems.map((p, i) => postRow(p, i === 0, p.milestone
+        ? `<div style="margin-top:6px;font-family:${FONT};font-size:12.5px;" dir="rtl"><a href="${URL.feed()}" style="color:${BRAND};font-weight:700;">שיתפה אבן דרך - ברכי אותה</a> <span style="color:${INK_3};" dir="ltr">· Congratulate her</span></div>`
+        : '')).join(''))
+  } else if (!net.hasConnections) {
+    rest += frame('connection-accepted', { he: 'מהרשת שלך', en: 'From your network' },
+      `<div style="padding:10px 0;">${biColumns({
+        he: paragraph(`עוד אין לך חיבורים בדואולין. <a href="${URL.connections()}" style="color:${BRAND};font-weight:700;">התחברי לעמיתות</a> כדי לראות כאן מה הן משתפות.`),
+        en: paragraph(`No connections yet. <a href="${URL.connections()}" style="color:${BRAND};font-weight:700;">Connect with colleagues</a> to see what they share here.`),
+      }, { tight: true })}</div>`)
+  }
+  // 2. A question waiting for an answer
   if (w.questions.length) {
-    rest += sectionTitle('question', { he: 'שאלות שמחכות לתשובה', en: 'Questions waiting for an answer' }) +
-      w.questions.slice(0, 2).map((q) => postCard(q.text, q.author, undefined, URL.feed())).join('') +
-      `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" dir="rtl" style="margin:2px 0 6px;"><tr>
-        <td style="font-family:${FONT};font-size:13px;text-align:right;" dir="rtl"><a href="${URL.feed()}" style="color:${BRAND};font-weight:700;">אולי את יודעת את התשובה?</a></td>
-        <td style="font-family:${FONT};font-size:13px;text-align:left;" dir="ltr"><a href="${URL.feed()}" style="color:${BRAND};">Maybe you know the answer?</a></td>
-      </tr></table>`
+    rest += frame('question', { he: 'שאלה שמחכה לתשובה', en: 'A question waiting for an answer' },
+      postRow(w.questions[0], true),
+      link2(URL.feed(), { he: 'אולי את יודעת את התשובה?', en: 'Maybe you know the answer?' }))
   }
+  // 3. Talked about this week
   if (w.topPosts.length) {
-    rest += sectionTitle('comment', { he: 'דיברו על זה השבוע', en: 'Talked about this week' }) +
-      w.topPosts.slice(0, 3).map((p) => postCard(p.text, p.author, { likes: p.likes, comments: p.comments }, URL.feed())).join('')
+    rest += frame('comment', { he: 'דיברו על זה השבוע', en: 'Talked about this week' },
+      w.topPosts.slice(0, 2).map((p, i) => postRow(p, i === 0)).join(''))
   }
+  // 4. New articles
   if (w.articles.length) {
-    rest += sectionTitle('article', { he: 'מאמרים חדשים', en: 'New articles' }) +
-      `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${w.articles.slice(0, 3).map((a) => `<tr><td style="padding:8px 0;border-top:1px solid ${LINE};" dir="auto"><a href="${APP_URL()}/articles/article/${encodeURIComponent(String(a.id))}" style="font-family:${FONT};font-size:14px;font-weight:600;color:${BRAND};text-decoration:none;">${esc(a.title)}</a></td></tr>`).join('')}</table>`
+    rest += frame('article', { he: 'מאמרים חדשים', en: 'New articles' },
+      w.articles.slice(0, 2).map((a, i) => `<div style="padding:10px 0;${i ? `border-top:1px solid ${LINE};` : ''}text-align:right;" dir="auto"><a href="${APP_URL()}/articles/article/${encodeURIComponent(String(a.id))}" style="font-family:${FONT};font-size:14px;font-weight:600;color:${BRAND};text-decoration:none;">${esc(a.title)}</a></div>`).join(''))
   }
-  if (w.stats) rest += statsRow(w.stats, { intro: false })
+  if (w.stats) rest += `<div style="height:6px"></div>${statsRow(w.stats, { intro: false })}`
   const joined: Bi | null = w.newMembers >= 5
     ? { he: `השבוע הצטרפו ${w.newMembers} חברות חדשות לקהילה.`, en: `${w.newMembers} new members joined the community this week.` }
     : null

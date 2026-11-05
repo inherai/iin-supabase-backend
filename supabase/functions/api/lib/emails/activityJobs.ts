@@ -559,7 +559,8 @@ export async function weeklyCommunityJob(budget: number, now = new Date()): Prom
   const { data: arts } = await db.from('articles').select('id, title').eq('status', 'published').is('deleted_at', null).gte('published_at', since7).order('published_at', { ascending: false }).limit(3)
   const { count: newMembers } = await db.from('users').select('uuid', { count: 'exact', head: true }).eq('status', 'Active').gte('activated_at', since7)
   const stats = await communityStats()
-  const names = await people([...top, ...questions].map((p) => p.posted_by_uuid))
+  // names for every author of the week (the network part can show any of them)
+  const names = await people(visible.map((p) => p.posted_by_uuid))
   const N = (id: string) => names.get(id) ?? { name: 'חברה בדואולין', avatarUrl: AVATAR() }
   if (!top.length && !questions.length && !(arts ?? []).length) return none // nothing worth a weekly email
 
@@ -576,10 +577,22 @@ export async function weeklyCommunityJob(budget: number, now = new Date()): Prom
     // the week's sending spans Wednesday→Sunday, so keep at least 5 days between two of them
     // (got it on Sunday → next one on Friday, not Wednesday)
     if (p && t - p.at < (freq === 'biweekly' ? 13 : 5) * DAY) continue
+    // From her network: posts by her accepted connections this week (milestones first).
+    const { data: conns } = await db.rpc('get_accepted_connection_ids', { p_user_id: uid }).then((r) => r, () => ({ data: null }))
+    const connIds = new Set(((conns ?? []) as Array<{ other_id: string }>).map((c) => c.other_id))
+    const card = (p: any) => ({ author: N(p.posted_by_uuid), text: plain(p.message), likes: lc.get(String(p.id)) ?? 0, comments: cc.get(String(p.id)) ?? 0 })
+    const netPosts = visible
+      .filter((p) => connIds.has(p.posted_by_uuid) && p.posted_by_uuid !== uid && p.post_type !== 'question')
+      .sort((a, b) => score(b) - score(a))
+    const milestones = netPosts.filter((p) => p.post_type === 'milestone').slice(0, 2)
+    const netOthers = netPosts.filter((p) => p.post_type !== 'milestone').slice(0, 3)
+    const inNetwork = new Set([...milestones, ...netOthers].map((p) => String(p.id)))
+
     const w: WeeklyCommunity = {
       firstName: (m.first_name ?? '').trim(),
+      network: { hasConnections: connIds.size > 0, milestones: milestones.map(card), posts: netOthers.map(card) },
       questions: questions.filter((q) => q.posted_by_uuid !== uid).slice(0, 2).map((q) => ({ author: N(q.posted_by_uuid), text: plain(q.message) })),
-      topPosts: top.filter((p) => p.posted_by_uuid !== uid).slice(0, 3).map((p) => ({ author: N(p.posted_by_uuid), text: plain(p.message), likes: lc.get(String(p.id)) ?? 0, comments: cc.get(String(p.id)) ?? 0 })),
+      topPosts: top.filter((p) => p.posted_by_uuid !== uid && !inNetwork.has(String(p.id))).slice(0, 3).map((p) => ({ author: N(p.posted_by_uuid), text: plain(p.message), likes: lc.get(String(p.id)) ?? 0, comments: cc.get(String(p.id)) ?? 0 })),
       articles: (arts ?? []).filter((a) => a.title),
       newMembers: newMembers ?? 0,
       stats,
@@ -587,7 +600,9 @@ export async function weeklyCommunityJob(budget: number, now = new Date()): Prom
     attempts++
     const r = await sendEmail({
       kind: 'weekly_community', category: 'community', to: m.email, userId: uid, refKey: weekKey,
-      subject: 'זה מה שקרה השבוע בדואולין | This week on duallin',
+      subject: inNetwork.size
+        ? 'מה שיתפו השבוע אנשים מהרשת שלך | What your network shared this week'
+        : 'זה מה שקרה השבוע בדואולין | This week on duallin',
       html: ({ unsubscribeUrl }) => renderWeeklyCommunity(w, nudgeFor(m), unsubscribeUrl),
     })
     if (r.status === 'deferred') attempts--
