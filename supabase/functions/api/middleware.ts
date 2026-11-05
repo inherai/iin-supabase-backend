@@ -68,6 +68,19 @@ async function isUserActive(userId: string): Promise<boolean> {
   return !!data;
 }
 
+// ── active days, for "did she come back after the email?" (migrations/add_email_tracking.sql) ──
+const lastMark = new Map<string, number>();
+function markActiveDay(userId: string) {
+  const now = Date.now();
+  if (now - (lastMark.get(userId) ?? 0) < 30 * 60 * 1000) return;
+  lastMark.set(userId, now);
+  if (lastMark.size > 20000) lastMark.clear();
+  const at = new Date(now).toISOString();
+  supabaseAdmin.from('user_active_days')
+    .upsert({ user_id: userId, day: at.slice(0, 10), last_at: at }, { onConflict: 'user_id,day' })
+    .then(({ error }) => { if (error && !/user_active_days/.test(error.message)) console.error('active day:', error.message); });
+}
+
 export const authMiddleware = async (c: Context, next: Next) => {
   // 1. דילוג מהיר על בקשות CORS Preflight
   if (c.req.method === 'OPTIONS') {
@@ -158,6 +171,10 @@ export const authMiddleware = async (c: Context, next: Next) => {
   // הכל תקין! מזריקים לקונטקסט וממשיכים הלאה
   c.set('supabase', supabaseClient);
   c.set('user', user);
+
+  // Email measurement: one row per member per day she used the site (user_active_days).
+  // Written at most every 30 minutes per member per server instance, in the background.
+  markActiveDay(user.id);
 
   // אדמינים עוקפים את כל בדיקות הרול
   if (user.app_metadata?.is_admin === true) {

@@ -2175,7 +2175,7 @@ app.get("/email-preferences/changes", async (c) => {
   const limit = Math.min(Number(c.req.query("limit")) || 200, 500);
   const { data: rows, error } = await db
     .from("email_preferences")
-    .select("user_id, category, frequency, updated_at, updated_by")
+    .select("*") // "*": includes `source` once migrations/add_email_tracking.sql ran, works before it too
     .order("updated_at", { ascending: false })
     .limit(limit);
   if (error) return c.json({ error: error.message }, 500);
@@ -2194,6 +2194,7 @@ app.get("/email-preferences/changes", async (c) => {
       frequency: r.frequency,
       updated_at: r.updated_at,
       changed_by: r.updated_by ? { id: r.updated_by, name: nameOf(byId.get(r.updated_by)) } : null,
+      source: r.source ?? null, // settings | email_link | one_click | admin (null = before it was recorded)
     })),
   });
 });
@@ -2202,7 +2203,7 @@ app.get("/email-preferences/changes", async (c) => {
 app.put("/email-preferences/:userId", async (c) => {
   const admin = c.get("user");
   const body = await c.req.json().catch(() => ({} as any));
-  const err = await savePreference(c.req.param("userId"), String(body?.category ?? ""), String(body?.frequency ?? ""), admin.id);
+  const err = await savePreference(c.req.param("userId"), String(body?.category ?? ""), String(body?.frequency ?? ""), admin.id, "admin");
   if (err) return c.json({ error: err }, 400);
   return c.json({ success: true, preferences: await loadPreferences(c.req.param("userId"), { app_metadata: { is_admin: true } }) });
 });
@@ -2257,6 +2258,26 @@ app.get("/email-log", async (c) => {
     pagination: { page, limit, total: count ?? 0, totalPages: Math.ceil((count ?? 0) / limit) },
     counts,
   });
+});
+
+// GET /admin/email-stats?days=30 — per email kind: sent / delivered / bounced / spam / not sent / clicked,
+// and opt-outs per category by where they came from. Counting is done in the DB (email_stats function).
+app.get("/email-stats", async (c) => {
+  const days = Math.min(Math.max(Number(c.req.query("days")) || 30, 1), 365);
+  const db = getAdminClient();
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const [stats, offs] = await Promise.all([
+    db.rpc("email_stats", { p_days: days }),
+    db.from("email_preferences").select("*").eq("frequency", "off").gte("updated_at", since).limit(5000),
+  ]);
+  if (stats.error) return c.json({ error: /email_stats/.test(stats.error.message) ? "Run migrations/add_email_tracking.sql to see statistics." : stats.error.message }, 500);
+  const optOuts: Record<string, Record<string, number>> = {};
+  for (const r of (offs.data ?? []) as any[]) {
+    const by = (optOuts[r.category] ??= {});
+    const src = r.source ?? "unknown";
+    by[src] = (by[src] ?? 0) + 1;
+  }
+  return c.json({ days, kinds: stats.data ?? [], optOuts });
 });
 
 // GET /admin/email-log/:id/html — the email exactly as it was sent, fetched from Resend

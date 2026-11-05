@@ -37,8 +37,11 @@ export async function loadPreferences(userId: string, user: any) {
   }
 }
 
+/** Where a change came from (shown in admin): settings page, the link in an email, the mail app's button, admin. */
+export type PreferenceSource = 'settings' | 'email_link' | 'one_click' | 'admin'
+
 /** Validates and stores one change. Returns an error message, or null when saved. */
-export async function savePreference(userId: string, category: string, frequency: string, updatedBy: string | null) {
+export async function savePreference(userId: string, category: string, frequency: string, updatedBy: string | null, source: PreferenceSource | null = null) {
   const db = adminClient()
   if (category === ALL_CATEGORY) {
     if (frequency !== 'on' && frequency !== 'off') return 'invalid frequency'
@@ -57,10 +60,10 @@ export async function savePreference(userId: string, category: string, frequency
       return error?.message ?? null
     }
   }
-  const { error } = await db.from('email_preferences').upsert(
-    { user_id: userId, category, frequency, updated_at: new Date().toISOString(), updated_by: updatedBy },
-    { onConflict: 'user_id,category' },
-  )
+  const row = { user_id: userId, category, frequency, updated_at: new Date().toISOString(), updated_by: updatedBy }
+  let { error } = await db.from('email_preferences').upsert({ ...row, source }, { onConflict: 'user_id,category' })
+  // Before migrations/add_email_tracking.sql the column doesn't exist — save without it.
+  if (error && /source/.test(error.message)) ({ error } = await db.from('email_preferences').upsert(row, { onConflict: 'user_id,category' }))
   return error?.message ?? null
 }
 
@@ -79,7 +82,7 @@ app.put('/', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
   const body = await c.req.json().catch(() => ({} as any))
-  const err = await savePreference(user.id, String(body?.category ?? ''), String(body?.frequency ?? ''), null)
+  const err = await savePreference(user.id, String(body?.category ?? ''), String(body?.frequency ?? ''), null, 'settings')
   if (err) return c.json({ error: err }, 400)
   return c.json(await loadPreferences(user.id, user))
 })

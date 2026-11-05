@@ -1,6 +1,7 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { supabaseAdmin } from "../middleware.ts";
 import { sendEmail } from "../lib/mailer.ts";
+import { sendJoinRequestReceived } from '../lib/emails/service.ts';
 
 const app = new Hono();
 
@@ -169,6 +170,11 @@ app.post("/", async (c) => {
     // Fire-and-forget email notification
     sendAdminNotification(body).catch((err) =>
       console.error("Admin notification failed:", err)
+    );
+
+    // "We got your request" to her (email plan A5) — her own action, so it goes out right away.
+    sendJoinRequestReceived({ type: body.type, full_name: body.full_name.trim(), email: normalizedEmail }).catch((err) =>
+      console.error("Join request confirmation failed:", err)
     );
 
     return c.json({ success: true });

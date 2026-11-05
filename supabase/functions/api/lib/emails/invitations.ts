@@ -330,3 +330,59 @@ export async function inviteeReminderJob(budget: number): Promise<JobResult> {
   }
   return { sent, attempts }
 }
+
+// ───────────────────────── C4 · your invitation expired (to the inviter) ─────────────────────────
+// Once per invitation, within 2 days after it expired unused — so she can send it again.
+
+export function renderInviteExpired(inviterFirstName: string, inviteeEmail: string, unsubscribeUrl: string | null): string {
+  const n = nameSpan(inviterFirstName)
+  const who = `<b dir="ltr">${esc(inviteeEmail)}</b>`
+  const body =
+    biColumns({
+      he: heading(n ? `${n}, ההזמנה ששלחת פגה` : 'ההזמנה ששלחת פגה') +
+        paragraph(`ההזמנה ל-${who} פגה לפני שהיא הצטרפה. לפעמים מייל הולך לאיבוד או נשכח - אפשר לשלוח אותה שוב, או לכתוב לה כמה מילים אישיות.`),
+      en: heading(n ? `${n}, your invitation expired` : 'Your invitation expired') +
+        paragraph(`Your invitation to ${who} expired before she joined. Emails sometimes get lost or forgotten - you can send it again, or add a personal note.`),
+    }) +
+    button({ he: 'לשליחה מחדש', en: 'Send it again' }, `${APP_URL()}/innercircle/sent-invitations`)
+  return renderLayout({
+    preheader: { he: 'אפשר לשלוח את ההזמנה שוב', en: 'You can send the invitation again' },
+    body,
+    reason: { he: 'קיבלת את המייל הזה כי הזמנת עמיתה לדואולין.', en: 'You received this email because you invited a colleague to duallin.' },
+    unsubscribeUrl,
+  })
+}
+
+export async function inviteExpiredJob(budget: number): Promise<JobResult> {
+  if (budget <= 0) return none
+  const db = adminClient()
+  const now = Date.now()
+  const { data: invites } = await db.from('invites').select('id, inviter_id, recipient_email, expires_at')
+    .in('status', ['pending', 'expired'])
+    .lte('expires_at', new Date(now).toISOString()).gte('expires_at', new Date(now - 2 * DAY).toISOString()).limit(500)
+  if (!invites?.length) return none
+  const { data: done } = await db.from('email_log').select('ref_key').eq('kind', 'invite_expired')
+    .gte('created_at', new Date(now - 4 * DAY).toISOString())
+  const told = new Set((done ?? []).map((r) => r.ref_key))
+
+  let attempts = 0
+  let sent = 0
+  for (const inv of invites) {
+    if (attempts >= budget) break
+    if (!inv.inviter_id || !inv.recipient_email || told.has(String(inv.id))) continue
+    const email = normalizeEmail(inv.recipient_email)
+    const { data: member } = await db.from('users').select('uuid').eq('email', email).maybeSingle()
+    if (member) continue // she joined after all
+    const { data: inviter } = await db.from('users').select('uuid, email, first_name, status').eq('uuid', inv.inviter_id).maybeSingle()
+    if (!inviter?.email || inviter.status !== 'Active') continue
+    attempts++
+    const r = await sendEmail({
+      kind: 'invite_expired', category: 'invitations', to: inviter.email, userId: inviter.uuid, refKey: String(inv.id),
+      subject: 'ההזמנה ששלחת פגה | Your invitation expired',
+      html: ({ unsubscribeUrl }) => renderInviteExpired(inviter.first_name ?? '', email, unsubscribeUrl),
+    })
+    if (r.status === 'deferred') attempts--
+    if (r.status === 'sent') sent++
+  }
+  return { sent, attempts }
+}

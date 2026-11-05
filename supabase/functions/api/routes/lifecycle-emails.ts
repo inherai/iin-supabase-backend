@@ -7,7 +7,8 @@ import { isSendWindowOpen } from '../lib/sendWindow.ts'
 import { welcomeJob } from '../lib/emails/welcome.ts'
 import { onboardingRemindersJob } from '../lib/emails/onboardingReminders.ts'
 import { comeBackJob } from '../lib/emails/comeBack.ts'
-import { inviteeJoinedJob, inviteeReminderJob, invitesUnlockedJob } from '../lib/emails/invitations.ts'
+import { inviteeJoinedJob, inviteeReminderJob, invitesUnlockedJob, inviteExpiredJob } from '../lib/emails/invitations.ts'
+import { accessReplyJob } from '../lib/emails/service.ts'
 import { contentDigestJob, networkJob, peopleJob, postViewsJob, requestReminderJob, weeklyCommunityJob } from '../lib/emails/activityJobs.ts'
 
 export interface LifecycleJob {
@@ -29,9 +30,11 @@ export const LIFECYCLE_JOBS: LifecycleJob[] = [
   { name: 'welcome', run: () => welcomeJob() },          // retries only — tiny
   // Personal & important (never held by the per-member cap)
   { name: 'network_update', run: (b) => networkJob(b) },          // recruiter, messages, mentions, requests
+  { name: 'access_reply', run: (b) => accessReplyJob(b) },          // to recruiters: a candidate answered
   { name: 'request_reminder', run: (b) => requestReminderJob(b) },
   { name: 'invitee_joined', run: (b) => inviteeJoinedJob(b) },      // good news for the inviter — few
   { name: 'invite_reminder', run: (b) => inviteeReminderJob(b) },   // invitations expire in 7 days — time-sensitive
+  { name: 'invite_expired', run: (b) => inviteExpiredJob(b) },     // to the inviter: send it again
   // Nice to know (at most 1 a day / 4 a week per member — enforced in sendEmail)
   { name: 'onboarding_reminders', run: (b) => onboardingRemindersJob(b) },
   { name: 'invites_unlocked', run: (b) => invitesUnlockedJob(b) },

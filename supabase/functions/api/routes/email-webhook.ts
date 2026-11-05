@@ -3,6 +3,8 @@
 //   email.delivered  → log row: delivered
 //   email.bounced    → log row: bounced; permanent bounce → address goes on the do-not-email list
 //   email.complained → log row: complained; address goes on the do-not-email list (marked as spam)
+//   email.opened     → log row: opened_at = first open (needs open tracking on in Resend)
+//   email.clicked    → log row: click_count + 1, clicked_at = first click (needs click tracking on in Resend)
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { adminClient, normalizeEmail } from '../lib/emailPrefs.ts'
 
@@ -60,6 +62,18 @@ app.post('/', async (c) => {
       // Temporary problems (full mailbox, server down) are retried by Resend; only stop on permanent ones.
       const kind = (event.data?.bounce?.type ?? '').toLowerCase()
       if (!['transient', 'temporary', 'undetermined'].includes(kind)) await suppress('bounce')
+      break
+    }
+    case 'email.opened': {
+      // First open only. Not exact (Apple Mail opens every email by itself) — a trend between kinds.
+      if (resendId) await db.from('email_log').update({ opened_at: now }).eq('resend_id', resendId).is('opened_at', null)
+      break
+    }
+    case 'email.clicked': {
+      if (!resendId) break
+      const { data: row } = await db.from('email_log').select('id, clicked_at, click_count').eq('resend_id', resendId).maybeSingle()
+      // Before migrations/add_email_tracking.sql the columns don't exist — then this is a no-op.
+      if (row) await db.from('email_log').update({ clicked_at: row.clicked_at ?? now, click_count: (row.click_count ?? 0) + 1 }).eq('id', row.id)
       break
     }
     case 'email.complained':
