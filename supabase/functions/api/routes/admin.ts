@@ -2269,9 +2269,10 @@ app.get("/email-stats", async (c) => {
   const days = Math.min(Math.max(Number(c.req.query("days")) || 30, 1), 365);
   const db = getAdminClient();
   const since = new Date(Date.now() - days * 86400000).toISOString();
-  const [stats, offs] = await Promise.all([
+  const [stats, offs, volume] = await Promise.all([
     db.rpc("email_stats", { p_days: days }),
     db.from("email_preferences").select("*").eq("frequency", "off").gte("updated_at", since).limit(5000),
+    db.rpc("email_member_volume", { p_days: 7 }), // how many emails each member got this week
   ]);
   if (stats.error) return c.json({ error: /email_stats/.test(stats.error.message) ? "Run migrations/add_email_tracking.sql to see statistics." : stats.error.message }, 500);
   const optOuts: Record<string, Record<string, number>> = {};
@@ -2280,7 +2281,7 @@ app.get("/email-stats", async (c) => {
     const src = r.source ?? "unknown";
     by[src] = (by[src] ?? 0) + 1;
   }
-  return c.json({ days, kinds: stats.data ?? [], optOuts });
+  return c.json({ days, kinds: stats.data ?? [], optOuts, volume: volume.error ? null : volume.data ?? [] });
 });
 
 // GET /admin/email-log/:id/html — the email exactly as it was sent, fetched from Resend

@@ -6,6 +6,7 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { isSendWindowOpen } from '../lib/sendWindow.ts'
 import { adminClient } from '../lib/emailPrefs.ts'
 import { outOfTime, startRunClock } from '../lib/emails/runClock.ts'
+import { emailHealthJob } from '../lib/emails/health.ts'
 import { welcomeJob } from '../lib/emails/welcome.ts'
 import { onboardingRemindersJob } from '../lib/emails/onboardingReminders.ts'
 import { comeBackJob } from '../lib/emails/comeBack.ts'
@@ -65,13 +66,19 @@ app.post('/run', async (c) => {
   const secret = Deno.env.get('CRON_LIFECYCLE_SECRET')
   if (!secret || c.req.header('x-cron-secret') !== secret) return c.json({ error: 'Unauthorized' }, 401)
 
-  // Outside the window nothing non-essential can go out anyway; skip the work entirely.
-  if (!isSendWindowOpen()) return c.json({ window: 'closed', jobs: [] })
-  startRunClock(RUN_TIME_MS)
-
   // Which 10-minute run of the hour this is (also works if the timer is still hourly: slot 0).
   const minute = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', minute: '2-digit' }).format(new Date()))
   const slot = Math.min(5, Math.floor(minute / 10))
+
+  // Email health check for the team — once an hour, at any hour (problems don't wait for morning).
+  let health: unknown = null
+  if (slot === 0) {
+    try { health = await emailHealthJob() } catch (err) { console.error('email health check failed:', err) }
+  }
+
+  // Outside the window nothing non-essential can go out anyway; skip the work entirely.
+  if (!isSendWindowOpen()) return c.json({ window: 'closed', slot, health, jobs: [] })
+  startRunClock(RUN_TIME_MS)
 
   // This run's budget: what's left of the hourly total, at most EMAIL_PER_RUN.
   const { count: lastHour } = await adminClient().from('email_log').select('id', { count: 'exact', head: true })
@@ -91,7 +98,7 @@ app.post('/run', async (c) => {
       results.push({ job: job.name, error: (err as Error).message })
     }
   }
-  return c.json({ window: 'open', slot, jobs: results })
+  return c.json({ window: 'open', slot, health, jobs: results })
 })
 
 export default app

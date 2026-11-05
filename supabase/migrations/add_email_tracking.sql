@@ -35,6 +35,7 @@ DROP FUNCTION IF EXISTS public.email_stats(integer);
 CREATE FUNCTION public.email_stats(p_days integer DEFAULT 30)
 RETURNS TABLE (
   kind        text,
+  category    text,     -- the settings category (opt-outs are counted per category)
   sent        bigint,   -- went out (sent + delivered + bounced + complained)
   delivered   bigint,
   bounced     bigint,
@@ -63,7 +64,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
         WHEN l.kind IN ('invites_unlocked', 'invites_thanks', 'invites_reminder_1', 'invites_reminder_2', 'invitee_joined', 'invite_expired') THEN
           EXISTS (SELECT 1 FROM invites i WHERE i.inviter_id = l.user_id
                   AND i.created_at BETWEEN l.created_at AND l.created_at + interval '7 days')
-        WHEN l.kind = 'invite_reminder' THEN
+        WHEN l.kind IN ('invite', 'invite_reminder') THEN
           EXISTS (SELECT 1 FROM users u WHERE lower(u.email) = l.email
                   AND u.created_at BETWEEN l.created_at AND l.created_at + interval '7 days')
         WHEN l.kind = 'request_reminder' THEN
@@ -71,7 +72,13 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
           -- (connections has no updated_at, so "accepted after the email" can't be timed exactly)
           EXISTS (SELECT 1 FROM connections c WHERE c.receiver_id = l.user_id AND c.status = 'accepted'
                   AND c.created_at BETWEEN l.created_at - interval '8 days' AND l.created_at - interval '4 days')
-        ELSE NULL
+        WHEN l.kind = 'people_suggestions' THEN
+          EXISTS (SELECT 1 FROM connections c WHERE c.requester_id = l.user_id
+                  AND c.created_at BETWEEN l.created_at AND l.created_at + interval '7 days')
+        WHEN l.kind = 'content_digest' THEN
+          EXISTS (SELECT 1 FROM comments cm WHERE lower(cm.sender) = l.email
+                  AND cm.created_at BETWEEN l.created_at AND l.created_at + interval '48 hours')
+        ELSE NULL   -- no single goal: "came back to the site" is the measure (the admin page shows it)
       END AS goal,
       -- came back: active later the same day, or on one of the next 2 days
       EXISTS (SELECT 1 FROM user_active_days d WHERE d.user_id = l.user_id
@@ -81,6 +88,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   )
   SELECT
     l.kind,
+    max(l.category),
     count(*) FILTER (WHERE l.went_out),
     count(*) FILTER (WHERE l.status = 'delivered'),
     count(*) FILTER (WHERE l.status = 'bounced'),
@@ -94,8 +102,29 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     count(*) FILTER (WHERE g.goal IS TRUE)
   FROM l LEFT JOIN g ON g.id = l.id
   GROUP BY l.kind
-  ORDER BY 2 DESC;
+  ORDER BY 3 DESC;
 $$;
 
 REVOKE ALL ON FUNCTION public.email_stats(integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.email_stats(integer) TO service_role;
+
+-- How many emails each member got in the last `p_days` (members only, not service/team emails):
+-- one row per bucket (1, 2, 3 … 6 = "6 or more"), to see that nobody is flooded.
+CREATE OR REPLACE FUNCTION public.email_member_volume(p_days integer DEFAULT 7)
+RETURNS TABLE (emails integer, members bigint, max_emails integer)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH per AS (
+    SELECT user_id, count(*)::int AS n
+    FROM email_log
+    WHERE user_id IS NOT NULL
+      AND status IN ('sent', 'delivered', 'bounced', 'complained')
+      AND category NOT IN ('account', 'team', 'invitee')
+      AND created_at >= now() - make_interval(days => p_days)
+    GROUP BY user_id
+  )
+  SELECT least(n, 6) AS emails, count(*) AS members, (SELECT max(n) FROM per) AS max_emails
+  FROM per GROUP BY 1 ORDER BY 1;
+$$;
+
+REVOKE ALL ON FUNCTION public.email_member_volume(integer) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.email_member_volume(integer) TO service_role;
