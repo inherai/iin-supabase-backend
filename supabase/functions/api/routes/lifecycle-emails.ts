@@ -1,9 +1,11 @@
-// POST /api/lifecycle-emails/run — called hourly by pg_cron (see migrations/schedule_lifecycle_emails.sql).
+// POST /api/lifecycle-emails/run — called every 10 minutes by pg_cron (see migrations/schedule_lifecycle_emails.sql).
 // Authorised by the x-cron-secret header (CRON_LIFECYCLE_SECRET), not a user session.
 // Runs every registered job; each job decides whom to email and sends through sendEmail(),
 // which applies preferences, the send window (hours / Shabbat / Yom Tov) and dedupe.
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { isSendWindowOpen } from '../lib/sendWindow.ts'
+import { adminClient } from '../lib/emailPrefs.ts'
+import { outOfTime, startRunClock } from '../lib/emails/runClock.ts'
 import { welcomeJob } from '../lib/emails/welcome.ts'
 import { onboardingRemindersJob } from '../lib/emails/onboardingReminders.ts'
 import { comeBackJob } from '../lib/emails/comeBack.ts'
@@ -15,34 +17,46 @@ export interface LifecycleJob {
   name: string
   /** Sends at most `budget` emails; returns how many it sent and how many it tried. */
   run: (budget: number) => Promise<{ sent: number; attempts: number }>
+  /** Which of the six 10-minute runs of the hour it takes part in (0 = :05, 1 = :15 … 5 = :55). */
+  slots: number[]
 }
 
-// All timed emails share one hourly budget, so several backlogs at once never become a burst
-// (sender reputation). Jobs run in priority order and take what's left.
-// EMAIL_HOURLY_BUDGET (function secret) changes it without a deploy; default 60, capped at 500.
+// The timer runs every 10 minutes (migrations/schedule_lifecycle_emails.sql). Found 2026-11-05:
+// one big hourly run went over Supabase's 2 s CPU limit and was cut off, so the jobs at the end
+// of the queue (come-back) never ran. Now each run is small, and the heavier jobs take turns:
+//   every run      — the personal emails (they should not wait), and the small time-sensitive ones
+//   runs 0 and 3   — sign-up reminders, request reminders, expired invitations
+//   runs 1 and 4   — the week on duallin, evening comments digest, post views
+//   runs 2 and 5   — come-back, invitations unlocked, people you may know
+// All timed emails still share one hourly budget (sender reputation).
+// EMAIL_HOURLY_BUDGET (function secret, default 60, max 500) — the hourly total.
+// EMAIL_PER_RUN (function secret, default 40, max 100) — at most this many per 10-minute run.
 const DEFAULT_HOURLY_BUDGET = 60
-const hourlyBudget = () => {
-  const n = Number(Deno.env.get('EMAIL_HOURLY_BUDGET'))
-  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 500) : DEFAULT_HOURLY_BUDGET
+const DEFAULT_PER_RUN = 40
+const RUN_TIME_MS = 60_000
+const envInt = (name: string, def: number, max: number) => {
+  const n = Number(Deno.env.get(name))
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), max) : def
 }
+const EVERY = [0, 1, 2, 3, 4, 5]
 
 export const LIFECYCLE_JOBS: LifecycleJob[] = [
-  { name: 'welcome', run: () => welcomeJob() },          // retries only — tiny
+  { name: 'welcome', run: () => welcomeJob(), slots: EVERY },                      // retries only — tiny
   // Personal & important (never held by the per-member cap)
-  { name: 'network_update', run: (b) => networkJob(b) },          // recruiter, messages, mentions, requests
-  { name: 'access_reply', run: (b) => accessReplyJob(b) },          // to recruiters: a candidate answered
-  { name: 'request_reminder', run: (b) => requestReminderJob(b) },
-  { name: 'invitee_joined', run: (b) => inviteeJoinedJob(b) },      // good news for the inviter — few
-  { name: 'invite_reminder', run: (b) => inviteeReminderJob(b) },   // invitations expire in 7 days — time-sensitive
-  { name: 'invite_expired', run: (b) => inviteExpiredJob(b) },     // to the inviter: send it again
+  { name: 'network_update', run: (b) => networkJob(b), slots: EVERY },             // recruiter, messages, mentions, requests
+  { name: 'access_reply', run: (b) => accessReplyJob(b), slots: EVERY },           // to recruiters: a candidate answered
+  { name: 'invitee_joined', run: (b) => inviteeJoinedJob(b), slots: EVERY },       // good news for the inviter — few
+  { name: 'invite_reminder', run: (b) => inviteeReminderJob(b), slots: EVERY },    // invitations expire in 7 days
+  { name: 'request_reminder', run: (b) => requestReminderJob(b), slots: [0, 3] },
+  { name: 'invite_expired', run: (b) => inviteExpiredJob(b), slots: [0, 3] },
   // Nice to know (at most 1 a day / 4 a week per member — enforced in sendEmail)
-  { name: 'onboarding_reminders', run: (b) => onboardingRemindersJob(b) },
-  { name: 'invites_unlocked', run: (b) => invitesUnlockedJob(b) },
-  { name: 'content_digest', run: (b) => contentDigestJob(b) },      // evenings
-  { name: 'post_views', run: (b) => postViewsJob(b) },
-  { name: 'people_suggestions', run: (b) => peopleJob(b) },         // Mondays
-  { name: 'weekly_community', run: (b) => weeklyCommunityJob(b) },  // Wednesday–Thursday
-  { name: 'come_back', run: (b) => comeBackJob(b) },              // incl. the monthly email
+  { name: 'onboarding_reminders', run: (b) => onboardingRemindersJob(b), slots: [0, 3] },
+  { name: 'weekly_community', run: (b) => weeklyCommunityJob(b), slots: [1, 4] },  // Wednesday 10:00 → Sunday
+  { name: 'content_digest', run: (b) => contentDigestJob(b), slots: [1, 4] },      // evenings
+  { name: 'post_views', run: (b) => postViewsJob(b), slots: [1, 4] },
+  { name: 'come_back', run: (b) => comeBackJob(b), slots: [2, 5] },
+  { name: 'invites_unlocked', run: (b) => invitesUnlockedJob(b), slots: [2, 5] },
+  { name: 'people_suggestions', run: (b) => peopleJob(b), slots: [2, 5] },         // Mondays
 ]
 
 const app = new Hono()
@@ -53,10 +67,21 @@ app.post('/run', async (c) => {
 
   // Outside the window nothing non-essential can go out anyway; skip the work entirely.
   if (!isSendWindowOpen()) return c.json({ window: 'closed', jobs: [] })
+  startRunClock(RUN_TIME_MS)
+
+  // Which 10-minute run of the hour this is (also works if the timer is still hourly: slot 0).
+  const minute = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', minute: '2-digit' }).format(new Date()))
+  const slot = Math.min(5, Math.floor(minute / 10))
+
+  // This run's budget: what's left of the hourly total, at most EMAIL_PER_RUN.
+  const { count: lastHour } = await adminClient().from('email_log').select('id', { count: 'exact', head: true })
+    .in('status', ['sent', 'delivered', 'bounced', 'complained']).gte('created_at', new Date(Date.now() - 3600_000).toISOString())
+  let budget = Math.min(envInt('EMAIL_PER_RUN', DEFAULT_PER_RUN, 100), Math.max(0, envInt('EMAIL_HOURLY_BUDGET', DEFAULT_HOURLY_BUDGET, 500) - (lastHour ?? 0)))
 
   const results = []
-  let budget = hourlyBudget()
   for (const job of LIFECYCLE_JOBS) {
+    if (!job.slots.includes(slot)) continue
+    if (outOfTime()) { results.push({ job: job.name, skipped: 'out of time' }); continue }
     try {
       const r = await job.run(budget)
       budget -= r.attempts
@@ -66,7 +91,7 @@ app.post('/run', async (c) => {
       results.push({ job: job.name, error: (err as Error).message })
     }
   }
-  return c.json({ window: 'open', jobs: results })
+  return c.json({ window: 'open', slot, jobs: results })
 })
 
 export default app

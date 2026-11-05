@@ -7,6 +7,7 @@
 import { adminClient } from '../emailPrefs.ts'
 import { sendEmail, type SendResult } from '../mailer.ts'
 import { biColumns, button, esc, heading, paragraph, renderLayout, type Bi } from '../emailLayout.ts'
+import { outOfTime } from './runClock.ts'
 
 const APP_URL = () => Deno.env.get('APP_URL') ?? 'https://www.duallin.com'
 const DAY = 24 * 3600 * 1000
@@ -112,7 +113,7 @@ export async function accessReplyJob(budget: number, now = new Date()): Promise<
   let attempts = 0
   let sent = 0
   for (const r of todo) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     const rec = byId.get(r.recruiter_id)
     if (!rec?.email) continue
     const cand = byId.get(r.candidate_id)

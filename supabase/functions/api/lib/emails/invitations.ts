@@ -13,6 +13,7 @@ import { adminClient, normalizeEmail } from '../emailPrefs.ts'
 import { sendEmail } from '../mailer.ts'
 import { biColumns, button, esc, heading, paragraph, renderLayout, type Bi } from '../emailLayout.ts'
 import { countInvitesThisWeek, effectiveLimit, getInviteQuota } from '../../routes/invite.ts'
+import { outOfTime } from './runClock.ts'
 
 const APP_URL = () => Deno.env.get('APP_URL') ?? 'https://www.duallin.com'
 const DAY = 24 * 3600 * 1000
@@ -155,7 +156,7 @@ export async function invitesUnlockedJob(budget: number): Promise<JobResult> {
   let attempts = 0
   let sent = 0
   for (const m of members) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     if (!m.email) continue
     const h = history.get(m.uuid) ?? {}
     // Time first (no queries); only a reminder that is due needs "did she invite since?".
@@ -236,7 +237,7 @@ export async function inviteeJoinedJob(budget: number): Promise<JobResult> {
   let attempts = 0
   let sent = 0
   for (const j of joined) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     if (!j.email) continue
     const { data: invite } = await db.from('invites').select('id, inviter_id')
       .eq('recipient_email', normalizeEmail(j.email)).eq('status', 'accepted')
@@ -306,7 +307,7 @@ export async function inviteeReminderJob(budget: number): Promise<JobResult> {
   let attempts = 0
   let sent = 0
   for (const inv of invites) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     if (!inv.recipient_email || !inv.token || reminded.has(String(inv.id))) continue
     const email = normalizeEmail(inv.recipient_email)
     const { data: member } = await db.from('users').select('uuid').eq('email', email).maybeSingle()
@@ -368,7 +369,7 @@ export async function inviteExpiredJob(budget: number): Promise<JobResult> {
   let attempts = 0
   let sent = 0
   for (const inv of invites) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     if (!inv.inviter_id || !inv.recipient_email || told.has(String(inv.id))) continue
     const email = normalizeEmail(inv.recipient_email)
     const { data: member } = await db.from('users').select('uuid').eq('email', email).maybeSingle()

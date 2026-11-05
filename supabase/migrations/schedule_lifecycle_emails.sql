@@ -1,5 +1,6 @@
 -- ============================================================
--- Hourly lifecycle-email run (email plan, phase 0b). Run in Supabase SQL Editor
+-- Lifecycle-email run every 10 minutes (email plan; was hourly until 2026-11-05 — one big hourly
+-- run went over Supabase's 2 s CPU limit and was cut off). Run in Supabase SQL Editor
 -- WHEN THE FIRST LIFECYCLE EMAIL IS READY (wave 1) — until then the run has no jobs.
 --
 -- Before running, replace the two placeholders:
@@ -13,7 +14,7 @@ WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'lifecycle-emails-hourly');
 
 SELECT cron.schedule(
   'lifecycle-emails-hourly',
-  '5 * * * *',   -- five past every hour
+  '5,15,25,35,45,55 * * * *',   -- every 10 minutes, at :05, :15 … :55
   $$
   SELECT net.http_post(
     url     := 'https://<PROJECT_REF>.supabase.co/functions/v1/api/lifecycle-emails/run',

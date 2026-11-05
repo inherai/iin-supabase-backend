@@ -15,6 +15,7 @@ import {
   type ContentDigest, type NetworkUpdate, type Nudge, type Person, type WeeklyCommunity,
 } from './activity.ts'
 import { communityStats } from './onboardingReminders.ts'
+import { outOfTime } from './runClock.ts'
 
 type JobResult = { sent: number; attempts: number }
 const none: JobResult = { sent: 0, attempts: 0 }
@@ -184,7 +185,7 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
   let attempts = 0
   let sent = 0
   for (const { uid, b } of due) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     const m = mem.get(uid)!
     const [netFreq, recFreq] = await Promise.all([getFrequency(uid, 'network'), getFrequency(uid, 'recruiting')])
     if (recFreq === 'off') b.recruiters = []
@@ -292,7 +293,7 @@ export async function requestReminderJob(budget: number, now = new Date()): Prom
   let attempts = 0
   let sent = 0
   for (const [uid, requesters] of byReceiver) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     const m = mem.get(uid)
     if (!m?.email || m.status !== 'Active') continue
     const names = await people(requesters.slice(0, 3))
@@ -362,7 +363,7 @@ export async function contentDigestJob(budget: number, now = new Date()): Promis
   let attempts = 0
   let sent = 0
   for (const [uid, s] of byAuthor) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     const m = mem.get(uid)
     if (!m?.email || m.status !== 'Active') continue
     const p = prev.get(uid)
@@ -428,7 +429,7 @@ export async function postViewsJob(budget: number, now = new Date()): Promise<Jo
   let attempts = 0
   let sent = 0
   for (const p of posts) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     const m = mem.get(p.posted_by_uuid)
     if (!m?.email || m.status !== 'Active') continue
     const age = t - Date.parse(p.sent_at)
@@ -483,7 +484,7 @@ export async function peopleJob(budget: number, now = new Date()): Promise<JobRe
   let sent = 0
   let checks = 0
   for (const uid of ids) {
-    if (attempts >= budget || checks >= MAX_CHECKS) break
+    if (attempts >= budget || checks >= MAX_CHECKS || outOfTime()) break
     const m = mem.get(uid)
     if (!m?.email || m.status !== 'Active' || skipToday.has(uid)) continue
     const p = prev.get(uid)
@@ -513,17 +514,18 @@ export async function peopleJob(budget: number, now = new Date()): Promise<JobRe
   return { sent, attempts }
 }
 
-// ───────────────────────── C · the week in the community (Wednesday from 10:00) ─────────────────────────
+// ───────────────────────── C · the week in the community (Wednesday 10:00 → Sunday) ─────────────────────────
 // For every Active member (decided 2026-11-04). For quiet members it replaces the old monthly email;
 // the per-member cap keeps it from piling on top of a come-back email the same day.
-// Built once per run; sent over Wednesday–Thursday as the hourly budget allows.
+// Sent from Wednesday 10:00 until Sunday as the budget allows (Friday afternoon / Shabbat are closed
+// by the send window anyway) — one week's email per member, keyed by that week's Wednesday.
 
 export async function weeklyCommunityJob(budget: number, now = new Date()): Promise<JobResult> {
   const { hour, weekday } = israelNow(now)
-  if (budget <= 0 || !((weekday === 3 && hour >= 10) || weekday === 4)) return none
+  if (budget <= 0 || (weekday === 3 && hour < 10) || weekday === 1 || weekday === 2) return none
   const db = adminClient()
   const t = now.getTime()
-  const weekKey = `week:${new Date(t - (weekday - 3) * DAY).toISOString().slice(0, 10)}`
+  const weekKey = `week:${new Date(t - ((weekday - 3 + 7) % 7) * DAY).toISOString().slice(0, 10)}` // that week's Wednesday
   const since7 = new Date(t - 7 * DAY).toISOString()
 
   const all = await fetchAll<{ uuid: string }>((f, to) => db.from('users').select('uuid')
@@ -565,7 +567,7 @@ export async function weeklyCommunityJob(budget: number, now = new Date()): Prom
   let attempts = 0
   let sent = 0
   for (const uid of todo) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     const m = mem.get(uid)
     if (!m?.email || m.status !== 'Active') continue
     const freq = await getFrequency(uid, 'community')

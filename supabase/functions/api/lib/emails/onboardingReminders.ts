@@ -10,6 +10,7 @@
 import { adminClient } from '../emailPrefs.ts'
 import { sendEmail } from '../mailer.ts'
 import { biColumns, button, esc, heading, paragraph, renderLayout, type Bi } from '../emailLayout.ts'
+import { outOfTime } from './runClock.ts'
 
 const APP_URL = () => Deno.env.get('APP_URL') ?? 'https://www.duallin.com'
 const HOUR = 3600 * 1000
@@ -195,7 +196,7 @@ export async function onboardingRemindersJob(budget: number, now = new Date()): 
   let attempts = 0
   let sent = 0
   for (const u of users) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     const stage = dueStage(new Date(u.created_at), now)
     if (!stage) continue
     const h = history.get(u.uuid)

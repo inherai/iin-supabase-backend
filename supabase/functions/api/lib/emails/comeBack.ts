@@ -14,6 +14,7 @@ import { adminClient } from '../emailPrefs.ts'
 import { sendEmail } from '../mailer.ts'
 import { biColumns, button, esc, heading, paragraph, renderLayout, type Bi } from '../emailLayout.ts'
 import { communityStats, statsRow, type CommunityStats } from './onboardingReminders.ts'
+import { outOfTime } from './runClock.ts'
 
 const APP_URL = () => Deno.env.get('APP_URL') ?? 'https://www.duallin.com'
 const DAY = 24 * 3600 * 1000
@@ -201,7 +202,7 @@ export async function comeBackJob(budget: number, now = new Date()): Promise<{ s
   let attempts = 0
   let sent = 0
   for (const m of quiet) {
-    if (attempts >= budget) break
+    if (attempts >= budget || outOfTime()) break
     const stage = dueComeBack(m.quietSince, history.get(`${m.uuid}|${m.period}`) ?? {}, now)
     if (!stage) continue
     attempts++
