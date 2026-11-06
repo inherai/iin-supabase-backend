@@ -48,6 +48,13 @@ async function inChunks<T>(ids: string[], q: (chunk: string[]) => PromiseLike<{ 
 }
 
 /** PostgREST returns at most 1000 rows — page through (with a hard stop, to stay light). */
+/** Comments store the author's email (sender), not a uuid — map those emails to member ids. */
+async function uuidsByEmail(emails: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const keys = emails.filter((e): e is string => !!e).flatMap((e) => [e, e.toLowerCase()])
+  const rows = await inChunks<{ uuid: string; email: string }>(keys, (c) => adminClient().from('users').select('uuid, email').in('email', c))
+  return new Map(rows.map((u) => [u.email.toLowerCase(), u.uuid]))
+}
+
 async function fetchAll<T>(page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>, max = 10000): Promise<T[]> {
   const out: T[] = []
   for (let from = 0; from < max; from += 1000) {
@@ -219,11 +226,12 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
     const postIds = show.mentions.filter((x) => x.extra?.startsWith('MENTION|')).map((x) => x.extra!.split('|')[1])
     const artIds = show.mentions.filter((x) => x.extra?.startsWith('ARTICLE_MENTION|')).map((x) => x.extra!.split('|')[1])
     if (postIds.length) {
-      const { data: cms } = await db.from('comments').select('post_id, posted_by_uuid, message, created_at').in('post_id', postIds).order('created_at', { ascending: false }).limit(50)
+      const { data: cms } = await db.from('comments').select('post_id, sender, message, created_at').in('post_id', postIds).order('created_at', { ascending: false }).limit(50)
       const { data: pts } = await db.from('posts').select('id, message, posted_by_uuid').in('id', postIds)
+      const commenter = await uuidsByEmail((cms ?? []).map((c) => c.sender))
       for (const x of show.mentions) {
         const pid = x.extra!.split('|')[1]
-        const c = (cms ?? []).find((c) => String(c.post_id) === pid && c.posted_by_uuid === x.actor)
+        const c = (cms ?? []).find((c) => String(c.post_id) === pid && commenter.get(String(c.sender ?? '').toLowerCase()) === x.actor)
         const p = (pts ?? []).find((p) => String(p.id) === pid)
         mentionText.set(`${x.actor}|${pid}`, plain(c?.message ?? p?.message))
       }
@@ -326,10 +334,13 @@ export async function contentDigestJob(budget: number, now = new Date()): Promis
 
   // Comments on posts (with the post's author) and likes on posts — two queries for everyone.
   const [cms, lks] = await Promise.all([
-    db.from('comments').select('id, post_id, posted_by_uuid, message, parent_comment_id, created_at, posts!inner(posted_by_uuid, message)')
+    db.from('comments').select('id, post_id, sender, message, parent_comment_id, created_at, posts!inner(posted_by_uuid, message)')
       .gte('created_at', since).order('created_at', { ascending: false }).limit(5000),
     db.from('likes').select('target_id, user_id, created_at').eq('target_type', 'post').gte('created_at', since).limit(10000),
   ])
+  if (cms.error) console.error('[content-digest] comments query failed:', cms.error.message)
+  const commenter = await uuidsByEmail((cms.data ?? []).map((c: any) => c.sender))
+  for (const c of (cms.data ?? []) as any[]) c.posted_by_uuid = commenter.get(String(c.sender ?? '').toLowerCase())
   type C = { by: string; kind: 'comment' | 'reply'; text: string; at: number }
   const byAuthor = new Map<string, { comments: C[]; likes: Map<string, { likers: Array<{ by: string; at: number }> }> }>()
   const slot = (uid: string) => byAuthor.get(uid) ?? (byAuthor.set(uid, { comments: [], likes: new Map() }), byAuthor.get(uid)!)
