@@ -37,7 +37,7 @@ function israelNow(now = new Date()) {
 }
 
 /** `.in()` in chunks, so a long id list never makes a too-long URL. */
-async function inChunks<T>(ids: string[], q: (chunk: string[]) => PromiseLike<{ data: T[] | null }>): Promise<T[]> {
+export async function inChunks<T>(ids: string[], q: (chunk: string[]) => PromiseLike<{ data: T[] | null }>): Promise<T[]> {
   const out: T[] = []
   const uniq = [...new Set(ids.filter(Boolean))]
   for (let i = 0; i < uniq.length; i += 150) {
@@ -75,7 +75,7 @@ async function members(ids: string[]): Promise<Map<string, Member>> {
 }
 
 /** People as the site shows them to a member (anonymity + last-name privacy). */
-async function people(ids: string[]): Promise<Map<string, Person>> {
+export async function people(ids: string[]): Promise<Map<string, Person>> {
   const rows = await inChunks<{ uuid: string; first_name: string | null; last_name: string | null; headline: string | null; is_anonymous: boolean | null; privacy_lastname: string[] | null }>(
     ids, (c) => adminClient().from('users').select('uuid, first_name, last_name, headline, is_anonymous, privacy_lastname').in('uuid', c))
   return new Map(rows.map((u) => {
@@ -85,7 +85,7 @@ async function people(ids: string[]): Promise<Map<string, Person>> {
   }))
 }
 
-async function lastActive(ids: string[]): Promise<Map<string, number>> {
+export async function lastActive(ids: string[]): Promise<Map<string, number>> {
   const rows = await inChunks<{ user_id: string; last_active_at: string | null }>(ids, (c) => adminClient().from('user_activity').select('user_id, last_active_at').in('user_id', c))
   return new Map(rows.filter((r) => r.last_active_at).map((r) => [r.user_id, new Date(r.last_active_at!).getTime()]))
 }
@@ -106,7 +106,7 @@ async function lastSent(kind: string, ids: string[]): Promise<Map<string, { at: 
 }
 
 /** Plain text from a post/comment (tags removed, mention markup "@[Name](id)" → "@Name"). */
-const plain = (s: string | null | undefined) =>
+export const plain = (s: string | null | undefined) =>
   (s ?? '').replace(/@\[([^\]]+)\]\([^)]*\)/g, '@$1').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
 
 /** The one small nudge that fits her (cheap: uses what's already loaded). */

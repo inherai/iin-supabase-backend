@@ -43,11 +43,11 @@ const plural = (n: number, one: Bi, many: (n: number) => Bi): Bi => (n === 1 ? o
 
 export interface Person { name: string; avatarUrl: string; headline?: string | null; mutual?: number }
 
-const mutualLine = (p: Person): Bi | null =>
+export const mutualLine = (p: Person): Bi | null =>
   p.mutual ? plural(p.mutual, { he: 'חיבור משותף אחד', en: '1 mutual connection' }, (k) => ({ he: `${k} חיבורים משותפים`, en: `${k} mutual connections` })) : null
 
 /** One row: photo, name (+ what she did), headline / quote, small line. */
-function row(p: { name: string; avatarUrl: string }, opts: { action?: Bi; headline?: string | null; quote?: string | null; sub?: Bi | null }): string {
+export function row(p: { name: string; avatarUrl: string }, opts: { action?: Bi; headline?: string | null; quote?: string | null; sub?: Bi | null }): string {
   return `<tr><td style="padding:10px 0;border-top:1px solid ${LINE};">
     <table role="presentation" cellpadding="0" cellspacing="0" dir="rtl" width="100%"><tr>
       <td width="44" valign="top" style="padding-left:10px;"><img src="${p.avatarUrl}" width="40" height="40" alt="" style="display:block;border-radius:50%;border:0;object-fit:cover;"></td>
@@ -61,7 +61,7 @@ function row(p: { name: string; avatarUrl: string }, opts: { action?: Bi; headli
 }
 
 /** Title line: icon + Hebrew on the right, English on the left (like the bilingual columns). */
-function titleRow(i: IconName, t: Bi, count: number | null): string {
+export function titleRow(i: IconName, t: Bi, count: number | null): string {
   const c = count === null ? '' : ` (${count})`
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" dir="rtl"><tr>
     <td valign="middle" width="30" style="padding-left:8px;">${icon(i, 22)}</td>
@@ -71,7 +71,7 @@ function titleRow(i: IconName, t: Bi, count: number | null): string {
 }
 
 /** A framed block: icon + title + count, up to 3 rows, then "and N more". */
-function block(i: IconName, title: Bi, total: number, rows: string[], moreUrl: string, more: (n: number) => Bi, opts: { showCount?: boolean } = {}): string {
+export function block(i: IconName, title: Bi, total: number, rows: string[], moreUrl: string, more: (n: number) => Bi, opts: { showCount?: boolean } = {}): string {
   const extra = total - Math.min(rows.length, MAX_PER_BLOCK)
   const moreLine = extra > 0
     ? `<tr><td style="padding:10px 0 2px;border-top:1px solid ${LINE};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" dir="rtl"><tr>
@@ -86,7 +86,7 @@ function block(i: IconName, title: Bi, total: number, rows: string[], moreUrl: s
 }
 
 /** A post with its first words and counts (site icons, no emoji). */
-function postCard(text: string, author?: { name: string; avatarUrl: string } | null, counts?: { likes?: number; comments?: number; views?: number }, link?: string): string {
+export function postCard(text: string, author?: { name: string; avatarUrl: string } | null, counts?: { likes?: number; comments?: number; views?: number }, link?: string): string {
   const stat = (i: IconName, n?: number) => (n ? `<td style="padding-left:12px;"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-left:4px;">${icon(i, 16)}</td><td style="font-family:${FONT};font-size:12.5px;color:${INK_2};">${n.toLocaleString('en-US')}</td></tr></table></td>` : '')
   const stats = counts ? stat('views', counts.views) + stat('like', counts.likes) + stat('comment', counts.comments) : ''
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0;background:#fff;border:1px solid ${LINE};border-radius:10px;"><tr><td style="padding:12px 14px;">
@@ -105,7 +105,7 @@ export type Nudge =
   | { kind: 'post' }
   | null
 
-function nudgeLine(n: Nudge): string {
+export function nudgeLine(n: Nudge): string {
   if (!n) return ''
   const a = (href: string, t: string) => `<a href="${href}" style="color:${BRAND};font-weight:700;">${t}</a>`
   let line: Bi
