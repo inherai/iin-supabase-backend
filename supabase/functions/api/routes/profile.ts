@@ -1060,13 +1060,38 @@ function isValidPublicSlugFormat(slug: string): boolean {
   return /^[a-z0-9-]{3,50}$/.test(slug) && !RESERVED_PUBLIC_SLUGS.has(slug)
 }
 
-async function isPublicSlugTaken(admin: any, slug: string, ownerUuid: string): Promise<boolean> {
+// 'free'  — never claimed by anyone
+// 'own'   — already in this member's own history (e.g. a slug they used before and are
+//           switching back to); still theirs, no new history row is needed
+// 'taken' — claimed by someone else, now or in the past, and never freed
+type PublicSlugOwnership = 'free' | 'own' | 'taken'
+
+async function getPublicSlugOwnership(admin: any, slug: string, ownerUuid: string): Promise<PublicSlugOwnership> {
   const { data } = await admin
     .from('public_profile_slug_history')
     .select('user_uuid')
     .eq('slug', slug)
     .maybeSingle()
-  return Boolean(data) && data.user_uuid !== ownerUuid
+  if (!data) return 'free'
+  return data.user_uuid === ownerUuid ? 'own' : 'taken'
+}
+
+async function isPublicSlugTaken(admin: any, slug: string, ownerUuid: string): Promise<boolean> {
+  return (await getPublicSlugOwnership(admin, slug, ownerUuid)) === 'taken'
+}
+
+// Records the slug in the member's history (unless it's already there) so it can never be
+// handed to anyone else. Returns false when someone else owns it — including when a
+// concurrent request claimed it between the ownership check and the insert (the PK on
+// public_profile_slug_history.slug rejects the second insert).
+async function claimPublicSlug(admin: any, slug: string, ownerUuid: string): Promise<boolean> {
+  const ownership = await getPublicSlugOwnership(admin, slug, ownerUuid)
+  if (ownership === 'taken') return false
+  if (ownership === 'own') return true
+  const { error } = await admin
+    .from('public_profile_slug_history')
+    .insert({ slug, user_uuid: ownerUuid })
+  return !error
 }
 
 async function generateUniquePublicSlug(admin: any, firstName: string, lastName: string, ownerUuid: string): Promise<string> {
@@ -1139,23 +1164,21 @@ app.put('/public-link', async (c) => {
     // so a stale shared link can never later resolve to a different person.
     if (enabled === true && !currentUser.public_profile_slug && !requestedSlug) {
       const generated = await generateUniquePublicSlug(supabaseAdmin, currentUser.first_name, currentUser.last_name, user.id)
-      const { error: historyError } = await supabaseAdmin
-        .from('public_profile_slug_history')
-        .insert({ slug: generated, user_uuid: user.id })
-      if (historyError) return c.json({ error: 'Could not assign a slug, please try again' }, 500)
+      if (!(await claimPublicSlug(supabaseAdmin, generated, user.id))) {
+        return c.json({ error: 'Could not assign a slug, please try again' }, 500)
+      }
       updates.public_profile_slug = generated
     } else if (typeof requestedSlug === 'string' && requestedSlug.trim() && requestedSlug !== currentUser.public_profile_slug) {
       const normalized = slugifyPublicLink(requestedSlug)
       if (!isValidPublicSlugFormat(normalized)) {
         return c.json({ error: 'invalid_slug' }, 400)
       }
-      if (await isPublicSlugTaken(supabaseAdmin, normalized, user.id)) {
+      // Switching back to a slug this member used before must work: the history row is
+      // theirs already, so claimPublicSlug only confirms ownership instead of re-inserting
+      // it (which would hit the PK and wrongly surface as slug_taken).
+      if (!(await claimPublicSlug(supabaseAdmin, normalized, user.id))) {
         return c.json({ error: 'slug_taken' }, 409)
       }
-      const { error: historyError } = await supabaseAdmin
-        .from('public_profile_slug_history')
-        .insert({ slug: normalized, user_uuid: user.id })
-      if (historyError) return c.json({ error: 'slug_taken' }, 409)
       updates.public_profile_slug = normalized
     }
 
