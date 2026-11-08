@@ -88,6 +88,23 @@ export async function canSendEmail(opts: { email: string; category: string; user
   return freq !== 'off'
 }
 
+/** getFrequency for many members at once (one query per 150 members) — for jobs that walk a long list. */
+export async function getFrequencies(userIds: string[], category: string): Promise<Map<string, Frequency>> {
+  const cat = getCategory(category)
+  const out = new Map<string, Frequency>()
+  const ids = [...new Set(userIds.filter(Boolean))]
+  for (const id of ids) out.set(id, cat?.essential ? 'on' : ((cat?.default ?? 'on') as Frequency))
+  if (cat?.essential) return out
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data } = await adminClient().from('email_preferences').select('user_id, category, frequency')
+      .in('user_id', ids.slice(i, i + 150)).in('category', [category, ALL_CATEGORY])
+    const own = (data ?? []).filter((p) => p.category === category)
+    for (const p of own) out.set(p.user_id, p.frequency as Frequency)
+    for (const p of data ?? []) if (p.category === ALL_CATEGORY && p.frequency === 'off') out.set(p.user_id, 'off')
+  }
+  return out
+}
+
 /** The member's effective frequency for a category (what the digest jobs will use). */
 export async function getFrequency(userId: string, category: string): Promise<Frequency> {
   const cat = getCategory(category)

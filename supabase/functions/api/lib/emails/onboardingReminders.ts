@@ -109,12 +109,17 @@ export function roundDownPlus(n: number): string {
 }
 
 export function statsRow(st: CommunityStats, opts: { intro?: boolean } = {}): string {
-  // [number, label, relative width] — the activity tile has the longest label, so it gets more room
-  const tiles: Array<[number, Bi, number]> = ([
-    [st.activityLast30d, { he: 'פוסטים, תגובות ולייקים החודש', en: 'posts, comments & likes this month' }, 1.5],
-    [st.jobs, { he: 'משרות פתוחות', en: 'open jobs' }, 1],
-    [st.articles, { he: 'מאמרים', en: 'articles' }, 1],
-  ] as Array<[number, Bi, number]>).filter(([n]) => n > 0)
+  // [number, label, relative width, heading] — the activity tile has the longest label, so it gets
+  // more room. Each tile says above its number what it counts (2026-11-08): with only a label under
+  // it, readers took the activity number for an all-time total.
+  const tiles: Array<[number, Bi, number, Bi]> = ([
+    [st.activityLast30d, { he: 'פוסטים, תגובות ולייקים', en: 'posts, comments & likes' }, 1.5, { he: 'רק בחודש האחרון', en: 'In the last month alone' }],
+    [st.jobs, { he: 'משרות', en: 'jobs' }, 1, { he: 'פתוחות עכשיו', en: 'Open now' }],
+    [st.articles, { he: 'מאמרים', en: 'articles' }, 1, { he: 'לקריאה באתר', en: 'To read' }],
+  ] as Array<[number, Bi, number, Bi]>).filter(([n]) => n > 0)
+  // Hebrew above English (one line was too long next to the English)
+  const tag = (hd: Bi) => `<div style="font-family:${FONT};font-size:11.5px;font-weight:700;color:#86838b;line-height:1.35;" dir="rtl">${hd.he}</div>` +
+    `<div style="font-family:${FONT};font-size:10.5px;color:#86838b;line-height:1.35;margin-bottom:4px;" dir="ltr">${hd.en}</div>`
   if (!tiles.length) return ''
   const intro = opts.intro === false ? '' : biColumns({
     he: paragraph('<b>אלפי חברות כבר בקהילה.</b> הנה מה שמחכה לך שם:'),
@@ -122,8 +127,8 @@ export function statsRow(st: CommunityStats, opts: { intro?: boolean } = {}): st
   }, { tight: true })
   const totalWeight = tiles.reduce((sum, [, , wt]) => sum + wt, 0)
   return `<div style="height:14px"></div>${intro}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" dir="rtl" style="margin:8px 0 6px;background:#faf5fb;border:1px solid ${LINE};border-radius:10px;"><tr>${
-    tiles.map(([n, l, wt], i) => `<td width="${Math.floor((100 * wt) / totalWeight)}%" align="center" valign="top" style="padding:14px 6px;${i ? `border-right:1px solid ${LINE};` : ''}">
-      <div style="font-family:${FONT};font-size:22px;font-weight:800;color:${BRAND};line-height:1.2;" dir="ltr">${roundDownPlus(n)}</div>
+    tiles.map(([n, l, wt, pd], i) => `<td width="${Math.floor((100 * wt) / totalWeight)}%" align="center" valign="top" style="padding:12px 6px 14px;${i ? `border-right:1px solid ${LINE};` : ''}">
+      ${tag(pd)}<div style="font-family:${FONT};font-size:22px;font-weight:800;color:${BRAND};line-height:1.2;" dir="ltr">${roundDownPlus(n)}</div>
       <div style="font-family:${FONT};font-size:12.5px;color:#4a4a50;margin-top:2px;" dir="rtl">${l.he}</div>
       <div style="font-family:${FONT};font-size:11.5px;color:#86838b;" dir="ltr">${l.en}</div>
     </td>`).join('')

@@ -42,16 +42,38 @@ const CAPPED_CATEGORIES = ['onboarding', 'invitations', 'come_back', 'content_ac
 const CAP_PER_DAY = 1
 const CAP_PER_WEEK = 4
 
+const capReached = (sentAt: string[]) => {
+  if (sentAt.length >= CAP_PER_WEEK) return true
+  const dayAgo = Date.now() - 86400000
+  return sentAt.filter((at) => new Date(at).getTime() >= dayAgo).length >= CAP_PER_DAY
+}
+
 async function overCap(userId: string): Promise<boolean> {
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString()
   const { data } = await adminClient().from('email_log').select('created_at')
     .eq('user_id', userId).in('category', CAPPED_CATEGORIES)
     .in('status', ['sent', 'delivered', 'bounced', 'complained'])
     .gte('created_at', weekAgo).limit(CAP_PER_WEEK + 1)
-  const rows = data ?? []
-  if (rows.length >= CAP_PER_WEEK) return true
-  const dayAgo = Date.now() - 86400000
-  return rows.filter((r) => new Date(r.created_at).getTime() >= dayAgo).length >= CAP_PER_DAY
+  return capReached((data ?? []).map((r) => r.created_at))
+}
+
+/**
+ * The members (of `userIds`) whose nice-to-know cap is full right now — the same rule sendEmail
+ * applies, checked for a whole list in a few queries, so a job walking a long list doesn't spend
+ * its run on members it would only be deferred for (found 2026-11-06: the weekly email stalled).
+ */
+export async function cappedNow(userIds: string[]): Promise<Set<string>> {
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString()
+  const sent = new Map<string, string[]>()
+  const ids = [...new Set(userIds.filter(Boolean))]
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data } = await adminClient().from('email_log').select('user_id, created_at')
+      .in('user_id', ids.slice(i, i + 150)).in('category', CAPPED_CATEGORIES)
+      .in('status', ['sent', 'delivered', 'bounced', 'complained'])
+      .gte('created_at', weekAgo).limit(5000)
+    for (const r of data ?? []) sent.set(r.user_id, [...(sent.get(r.user_id) ?? []), r.created_at])
+  }
+  return new Set([...sent].filter(([, at]) => capReached(at)).map(([id]) => id))
 }
 
 const FROM = () => Deno.env.get('EMAIL_FROM') ?? 'duallin <contact@duallin.com>'

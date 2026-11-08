@@ -7,8 +7,8 @@
 // stores the cut-off time) and after she was last active on the site (she already saw it there).
 // Names follow the site's rules (routes/profile.ts /feed): anonymous → "אנונימית",
 // last name only if privacy_lastname allows members. Photos: our default avatar (decided 2026-11-04).
-import { adminClient, getFrequency } from '../emailPrefs.ts'
-import { sendEmail } from '../mailer.ts'
+import { adminClient, getFrequencies, getFrequency } from '../emailPrefs.ts'
+import { cappedNow, sendEmail } from '../mailer.ts'
 import {
   networkSubject, renderContentDigest, renderFirstPost, renderNetworkUpdate, renderPeopleYouMayKnow,
   renderPostViews, renderRequestReminder, renderWeeklyCommunity,
@@ -575,19 +575,27 @@ export async function weeklyCommunityJob(budget: number, now = new Date()): Prom
   const N = (id: string) => names.get(id) ?? { name: 'חברה בדואולין', avatarUrl: AVATAR() }
   if (!top.length && !questions.length && !(arts ?? []).length) return none // nothing worth a weekly email
 
-  const [mem, prev] = await Promise.all([members(todo), lastSent('weekly_community', todo)])
-  let attempts = 0
-  let sent = 0
-  for (const uid of todo) {
-    if (attempts >= budget || outOfTime()) break
+  // Who can get it right now — decided for the whole list up front (a few queries), so the run's
+  // time goes to sending, not to members it would skip or that the daily cap would hold back.
+  // (Found 2026-11-06: checking them one by one, a run used ~40 of its 60 s before the first send
+  // and only 1097 of 2834 members had the week's email by Friday.)
+  const [mem, prev, freqs, capped] = await Promise.all([
+    members(todo), lastSent('weekly_community', todo), getFrequencies(todo, 'community'), cappedNow(todo),
+  ])
+  const ready = todo.filter((uid) => {
     const m = mem.get(uid)
-    if (!m?.email || m.status !== 'Active') continue
-    const freq = await getFrequency(uid, 'community')
-    if (freq === 'off') continue
+    const freq = freqs.get(uid)
+    if (!m?.email || m.status !== 'Active' || freq === 'off' || capped.has(uid)) return false
     const p = prev.get(uid)
     // the week's sending spans Wednesday→Sunday, so keep at least 5 days between two of them
     // (got it on Sunday → next one on Friday, not Wednesday)
-    if (p && t - p.at < (freq === 'biweekly' ? 13 : 5) * DAY) continue
+    return !(p && t - p.at < (freq === 'biweekly' ? 13 : 5) * DAY)
+  })
+  let attempts = 0
+  let sent = 0
+  for (const uid of ready) {
+    if (attempts >= budget || outOfTime()) break
+    const m = mem.get(uid)!
     // From her network: posts by her accepted connections this week (milestones first).
     const { data: conns } = await db.rpc('get_accepted_connection_ids', { p_user_id: uid }).then((r) => r, () => ({ data: null }))
     const connIds = new Set(((conns ?? []) as Array<{ other_id: string }>).map((c) => c.other_id))
