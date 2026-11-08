@@ -2230,23 +2230,27 @@ app.get("/email-suppressions", async (c) => {
   return c.json({ suppressions: list.data ?? [], counts });
 });
 
-// GET /admin/email-log?q=&status=&kind=&page= — what the system sent (or skipped / failed), newest first.
+// GET /admin/email-log?q=&status=&kind=&engagement=opened|clicked&page= — what the system sent
+// (or skipped / failed), newest first, with when it was first opened / clicked.
 // Pages of 50 with a total (same shape as /admin/users); `counts` = per status over the last 7 days.
 const EMAIL_LOG_STATUSES = ["sent", "skipped", "failed", "delivered", "bounced", "complained"];
 app.get("/email-log", async (c) => {
   const q = normalizeEmail(c.req.query("q") ?? "");
   const status = c.req.query("status") ?? "";
   const kind = c.req.query("kind") ?? "";
+  const engagement = c.req.query("engagement") ?? "";
   const page = Math.max(1, parseInt(c.req.query("page") || "1") || 1);
   const limit = 50;
   const offset = (page - 1) * limit;
   const db = getAdminClient();
   let query = db.from("email_log")
-    .select("id, kind, category, email, status, skip_reason, error, created_at, updated_at", { count: "exact" })
+    .select("id, kind, category, email, status, skip_reason, error, created_at, updated_at, opened_at, clicked_at, click_count", { count: "exact" })
     .order("id", { ascending: false }).range(offset, offset + limit - 1);
   if (q) query = query.ilike("email", `%${q}%`);
   if (EMAIL_LOG_STATUSES.includes(status)) query = query.eq("status", status);
   if (kind) query = query.eq("kind", kind);
+  if (engagement === "opened") query = query.not("opened_at", "is", null);
+  if (engagement === "clicked") query = query.not("clicked_at", "is", null);
   const { data, error, count } = await query;
   if (error) return c.json({ error: error.message }, 500);
 
@@ -2256,10 +2260,13 @@ app.get("/email-log", async (c) => {
     const { count: n } = await db.from("email_log").select("id", { count: "exact", head: true }).eq("status", st).gte("created_at", since);
     counts[st] = n ?? 0;
   }));
+  const [opened, clicked] = await Promise.all(["opened_at", "clicked_at"].map((col) =>
+    db.from("email_log").select("id", { count: "exact", head: true }).not(col, "is", null).gte("created_at", since)));
   return c.json({
     log: data ?? [],
     pagination: { page, limit, total: count ?? 0, totalPages: Math.ceil((count ?? 0) / limit) },
     counts,
+    engagement: { opened: opened.count ?? 0, clicked: clicked.count ?? 0 },
   });
 });
 
