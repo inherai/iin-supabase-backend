@@ -119,10 +119,14 @@ function nudgeFor(m: Member, pendingRequests = 0, lastPostAt?: number): Nudge {
 
 // ───────────────────────── B · network update (hourly) ─────────────────────────
 // Recruiter requests (15 min), unread messages (60 min), mentions (15 min), connection requests
-// (15 min), accepted requests. One email per member, at most every 4 hours — except a recruiter
-// request, which never waits. 'network' frequency 'daily' → only in the 19:00 run.
+// (15 min), accepted requests. At most twice a day, at set times (2026-11-08: up to 4 a day on busy
+// days was too much): late morning and late afternoon, each email with only what's new since the
+// previous one. A recruiter request is urgent — it never waits for a window.
+// 'network' frequency 'daily' → only the afternoon window.
 
-const NETWORK_SPACING = 4 * HOUR
+const NETWORK_SPACING = 4 * HOUR // so one window sends one email, even across its two hours
+const NETWORK_WINDOWS = { morning: [11, 13], afternoon: [17, 19] } as const // Israel time, [from, to)
+const inWindow = (hour: number, [from, to]: readonly [number, number]) => hour >= from && hour < to
 
 export async function networkJob(budget: number, now = new Date()): Promise<JobResult> {
   if (budget <= 0) return none
@@ -167,7 +171,9 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
 
   const recipientIds = [...buckets.keys()]
   const [mem, seen, prev] = await Promise.all([members(recipientIds), lastActive(recipientIds), lastSent('network_update', recipientIds)])
-  const isEvening = israelNow(now).hour === 19
+  const { hour } = israelNow(now)
+  const afternoon = inWindow(hour, NETWORK_WINDOWS.afternoon)
+  const sendingTime = afternoon || inWindow(hour, NETWORK_WINDOWS.morning)
 
   // Decide who gets an email this hour (no more queries per member yet).
   const due: Array<{ uid: string; b: Bucket }> = []
@@ -183,7 +189,8 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
     }
     const any = f.recruiters.length + f.messages.length + f.mentions.length + f.requests.length + f.accepted.length
     if (!any) continue
-    if (!f.recruiters.length && p && t - p.at < NETWORK_SPACING) continue // spacing; a recruiter request doesn't wait
+    // Only at the set times and spaced; a recruiter request doesn't wait
+    if (!f.recruiters.length && (!sendingTime || (p && t - p.at < NETWORK_SPACING))) continue
     due.push({ uid, b: f })
   }
   // Recruiter requests first, then the rest.
@@ -196,7 +203,7 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
     const m = mem.get(uid)!
     const [netFreq, recFreq] = await Promise.all([getFrequency(uid, 'network'), getFrequency(uid, 'recruiting')])
     if (recFreq === 'off') b.recruiters = []
-    if (netFreq === 'off' || (netFreq === 'daily' && !isEvening)) { b.messages = []; b.mentions = []; b.requests = []; b.accepted = [] }
+    if (netFreq === 'off' || (netFreq === 'daily' && !afternoon)) { b.messages = []; b.mentions = []; b.requests = []; b.accepted = [] }
     if (!b.recruiters.length && !b.messages.length && !b.mentions.length && !b.requests.length && !b.accepted.length) continue
 
     // Names + a little per-email detail, only for what is shown (3 per block).
