@@ -3,6 +3,35 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 
 const app = new Hono()
 
+// Employee details come from public_users_view by uuid. One `.in()` with every employee of a
+// page builds a GET URL the gateway rejects once the biggest companies share a page (that is
+// exactly page 1 of sort=members), so the lookup goes out in chunks of 100 ids.
+const USERS_CHUNK = 100
+async function fetchPublicUsers(
+  supabase: any,
+  ids: unknown[],
+): Promise<{ users: any[]; error: { message: string } | null }> {
+  const uniq = [...new Set(ids.filter((id): id is string => typeof id === 'string'))]
+  const chunks: string[][] = []
+  for (let i = 0; i < uniq.length; i += USERS_CHUNK) chunks.push(uniq.slice(i, i + USERS_CHUNK))
+
+  const results = await Promise.all(chunks.map((chunk) =>
+    supabase
+      .from('public_users_view')
+      .select('uuid, first_name, last_name, headline, image')
+      .in('uuid', chunk)
+  ))
+
+  const failed = results.find((r: any) => r.error)
+  if (failed) return { users: [], error: failed.error }
+
+  // image arrives as text from the view; the client expects true | null
+  const users = results
+    .flatMap((r: any) => r.data || [])
+    .map((u: any) => ({ ...u, image: u.image === 'true' ? true : null }))
+  return { users, error: null }
+}
+
 // GET /api/companies - companies list with pagination and search
 app.get('/', async (c) => {
   const user = c.get('user')
@@ -49,26 +78,11 @@ app.get('/', async (c) => {
       .filter((id: any) => typeof id === 'string')
   )]
 
-  let usersById = new Map<string, any>()
-
-  if (allEmployeeIds.length > 0) {
-    const { data: users, error: usersError } = await supabase
-      .from('public_users_view') // 1. שינוי שם הטבלה ל-View
-      .select('uuid, first_name, last_name, headline, image') // 2. שינוי שדות השם
-      .in('uuid', allEmployeeIds)
-
-    if (usersError) {
-      return c.json({ error: usersError.message }, 400)
-    }
-
-   // 3. המרה בטוחה של ה-image מטקסט לבוליאני (אופציה ב')
-    const enrichedUsers = (users || []).map((u: any) => ({
-      ...u,
-      image: u.image === 'true' ? true : null 
-    }))
-
-    usersById = new Map(enrichedUsers.map((u: any) => [u.uuid, u]))
+  const { users, error: usersError } = await fetchPublicUsers(supabase, allEmployeeIds)
+  if (usersError) {
+    return c.json({ error: usersError.message }, 400)
   }
+  const usersById = new Map<string, any>(users.map((u: any) => [u.uuid, u]))
 
   const processedData = companies.map((company: any) => {
     const employeeIds = Array.isArray(company.employees) ? company.employees : []
@@ -135,18 +149,8 @@ app.get('/:id', async (c) => {
   const employeesCount = employeeIds.filter((id: any) => id !== null && id !== undefined).length
 
   if (employeeIds.length > 0) {
-    const { data: users, error: usersError } = await supabase
-      .from('public_users_view') // 1. שינוי שם הטבלה ל-View
-      .select('uuid, first_name, last_name, headline, image') // 2. שינוי שדות השם
-      .in('uuid', employeeIds)
-
-    if (!usersError && users) {
-      // 3. המרה בטוחה לבוליאני גם כאן
-      employeesDetails = users.map((u: any) => ({
-        ...u,
-        image: u.image === 'true' ? true : null
-      }))
-    }
+    const { users, error: usersError } = await fetchPublicUsers(supabase, employeeIds)
+    if (!usersError) employeesDetails = users
   }
 
   let openPositionsCount = 0
