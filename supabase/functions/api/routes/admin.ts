@@ -1310,14 +1310,16 @@ app.put("/companies/:id", async (c) => {
     }
   }
 
-  const { data, error } = await db
-    .from("companies")
-    .update(updates)
-    .eq("id", companyId)
-    .select("*")
-    .single();
+  // Saved in the admin's own session, through admin_update_company() (add_company_pages_core_safe.sql).
+  // A managed page ignores updates that come with no signed-in person — which is what the
+  // service client looks like to the database — so this one must not go through `db`.
+  const { data, error } = await c.get("supabase").rpc("admin_update_company", {
+    p_company_id: companyId,
+    p_updates: updates,
+  });
 
   if (error) return c.json({ error: error.message }, 400);
+  if (!data) return c.json({ error: "Company not found" }, 404);
 
   return c.json(data);
 });

@@ -33,6 +33,11 @@ Verified with the public anon key, logged out, reading row counts only:
 1. `companies` is readable by anyone: policy `SELECT USING (true)` for role `public`, and `anon`
    holds table privileges. Readable columns include `owner_uuid`, `employees` (member uuids per
    company) and `source_raw_json`.
+   **Fixed 2026-11-11** (after this snapshot): `secure_companies_step1_safe.sql` removed signed-out
+   access and made `companies_ranked` a `security_invoker` view; `secure_companies_step2_safe.sql`
+   gave members column-level SELECT on everything except `source_raw_json`.
+   Still member-readable by design until the admins step: `owner_uuid`, `employees`.
+   **Any column added to `companies` now needs `GRANT SELECT (col) ... TO authenticated`.**
 2. `feed_cache` has RLS disabled in production and `anon` holds SELECT. Its columns include
    `sender` (the poster's email) and `community_members_only`. The repo's `secure_feed_cache.sql`
    describes RLS as enabled; production does not match.
