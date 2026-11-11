@@ -5,6 +5,7 @@ import OpenAI from "https://esm.sh/openai@4";
 import { calculateProfileStrength, calculateActivityScore } from './_scoreHelpers.ts'
 import { sendWelcomeEmail } from '../lib/emails/welcome.ts'
 import { adminClient } from '../lib/emailPrefs.ts'
+import { CONTENT_ROLES, hasCompanyRole } from '../lib/companyAccess.ts'
 
 const app = new Hono()
 
@@ -405,15 +406,10 @@ app.patch('/companies/:id/bio', async (c) => {
 
   const supabase = c.get('supabase')
 
-  // Verify ownership
-  const { data: owned } = await supabase
-    .from('companies')
-    .select('id')
-    .eq('id', companyId)
-    .eq('owner_uuid', user.id)
-    .maybeSingle()
-
-  if (!owned) return c.json({ error: 'Not found or not authorized' }, 403)
+  // She must manage the page (owner / content); row-level security enforces the same on the update
+  if (!await hasCompanyRole(supabase, user.id, companyId, CONTENT_ROLES)) {
+    return c.json({ error: 'Not found or not authorized' }, 403)
+  }
 
   const { error } = await supabase
     .from('companies')
@@ -425,7 +421,8 @@ app.patch('/companies/:id/bio', async (c) => {
 })
 
 // GET /api/me/companies
-// Companies the current user owns (for compose-dialog identity switcher)
+// Pages the current user may publish as — she manages them as owner or content manager
+// (for the compose-dialog identity switcher)
 // --------------------------------------------------------------------
 app.get('/companies', async (c) => {
   const user = c.get('user')
@@ -433,12 +430,13 @@ app.get('/companies', async (c) => {
 
   const supabase = c.get('supabase')
   const { data, error } = await supabase
-    .from('companies')
-    .select('id, name, logo')
-    .eq('owner_uuid', user.id)
+    .from('company_admins')
+    .select('role, companies(id, name, logo, slug)')
+    .eq('user_id', user.id)
+    .in('role', CONTENT_ROLES)
 
   if (error) return c.json({ error: error.message }, 500)
-  return c.json(data || [])
+  return c.json((data || []).filter((row: any) => row.companies).map((row: any) => ({ ...row.companies, role: row.role })))
 })
 
 export default app

@@ -1,6 +1,7 @@
 // supabase/functions/api/routes/articles.ts
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { supabaseAdmin } from '../middleware.ts'
+import { CONTENT_ROLES, checkActAsCompany, hasCompanyRole, listManagedCompanyIds } from '../lib/companyAccess.ts'
 
 const app = new Hono()
 
@@ -32,22 +33,17 @@ function buildExcerpt(plain: string, maxChars = 160): string {
 }
 
 /**
- * Company articles belong exclusively to the current company owner.
+ * Company articles belong to the page's current content managers (owner / content).
  * Personal articles belong exclusively to the author.
  * Returns true if the user may edit/publish/delete the article.
  */
 async function canControlArticle(
+  supabase: any,
   article: { author_uuid: string; company_id: number | null },
   userId: string
 ): Promise<boolean> {
   if (article.company_id) {
-    const { data } = await supabaseAdmin
-      .from('companies')
-      .select('id')
-      .eq('id', article.company_id)
-      .eq('owner_uuid', userId)
-      .maybeSingle()
-    return !!data
+    return hasCompanyRole(supabase, userId, article.company_id, CONTENT_ROLES)
   }
   return article.author_uuid === userId
 }
@@ -811,11 +807,7 @@ app.get('/my-articles', async (c) => {
   const supabase = c.get('supabase')
 
   try {
-    const { data: ownedCompanies } = await supabase
-      .from('companies')
-      .select('id')
-      .eq('owner_uuid', user.id)
-    const ownedCompanyIds = (ownedCompanies || []).map((c: any) => c.id)
+    const ownedCompanyIds = await listManagedCompanyIds(supabase, user.id, CONTENT_ROLES)
 
     const baseQuery = supabase
       .from('articles')
@@ -824,7 +816,7 @@ app.get('/my-articles', async (c) => {
       .order('updated_at', { ascending: false })
 
     // Personal articles: authored by user AND not a company article
-    // Company articles: belonging to a company the user currently owns
+    // Company articles: belonging to a page the user currently manages (owner / content)
     const { data, error } = ownedCompanyIds.length > 0
       ? await baseQuery.or(`and(author_uuid.eq.${user.id},company_id.is.null),company_id.in.(${ownedCompanyIds.join(',')})`)
       : await baseQuery.eq('author_uuid', user.id).is('company_id', null)
@@ -1102,7 +1094,7 @@ app.get('/company/:companyId', async (c) => {
 
   try {
     const [companyRes, articlesRes, followerCountRes, isFollowingRes] = await Promise.all([
-      supabase.from('companies').select('id, name, logo, tagline, owner_uuid').eq('id', companyId).single(),
+      supabase.from('companies').select('id, name, logo, tagline').eq('id', companyId).single(),
       supabase
         .from('articles')
         .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, is_pinned, series_name, is_editors_pick')
@@ -1126,7 +1118,7 @@ app.get('/company/:companyId', async (c) => {
     if (!companyRes.data) return c.json({ error: 'Company not found' }, 404)
 
     const articles = articlesRes.data || []
-    const isOwner = companyRes.data.owner_uuid === user.id
+    const isOwner = await hasCompanyRole(supabase, user.id, companyId, CONTENT_ROLES)
 
     // Non-owner visiting a company page with no articles → 404
     if (!articles.length && !isOwner) {
@@ -1472,7 +1464,7 @@ app.get('/:id', async (c) => {
 
     // Only the controller (author for personal, current company owner for company articles)
     // can access drafts; published articles are visible to all
-    const isOwner = await canControlArticle(article, user.id)
+    const isOwner = await canControlArticle(c.get('supabase'), article, user.id)
     if (article.status === 'draft' && !isOwner) {
       return c.json({ error: 'Not found' }, 404)
     }
@@ -1579,13 +1571,8 @@ app.post('/', async (c) => {
   const { title = '', content = '', cover_image_url, company_id, skill_ids = [], interest_ids = [], series_name, series_order, article_type } = await c.req.json()
 
   if (company_id) {
-    const { data: company } = await supabaseAdmin
-      .from('companies')
-      .select('id, owner_uuid')
-      .eq('id', company_id)
-      .maybeSingle()
-    if (!company) return c.json({ error: 'Company not found' }, 404)
-    if (company.owner_uuid !== user.id) return c.json({ error: "You don't have permission to post on behalf of this company" }, 403)
+    const allowed = await checkActAsCompany(supabase, user.id, Number(company_id), CONTENT_ROLES, 'articles.as_company')
+    if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status)
   }
 
   const sanitized = stripNullBytes(sanitizeHtml(content))
@@ -1655,7 +1642,7 @@ app.put('/:id', async (c) => {
 
     if (!existing) return c.json({ error: 'Not found' }, 404)
 
-    if (!await canControlArticle(existing, user.id)) return c.json({ error: 'Forbidden' }, 403)
+    if (!await canControlArticle(c.get('supabase'), existing, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
     const isAdminUpdate = (user as any).app_metadata?.is_admin === true
 
@@ -1724,7 +1711,7 @@ app.post('/:id/publish', async (c) => {
 
     if (!article) return c.json({ error: 'Not found' }, 404)
 
-    if (!await canControlArticle(article, user.id)) return c.json({ error: 'Forbidden' }, 403)
+    if (!await canControlArticle(c.get('supabase'), article, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
     if (article.status === 'published') return c.json({ success: true })
 
@@ -1777,7 +1764,7 @@ app.post('/:id/unpublish', async (c) => {
 
     if (fetchErr || !article) return c.json({ error: 'Not found' }, 404)
 
-    if (!await canControlArticle(article, user.id)) return c.json({ error: 'Forbidden' }, 403)
+    if (!await canControlArticle(c.get('supabase'), article, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
     const { error } = await supabase
       .from('articles')
@@ -1808,7 +1795,7 @@ app.post('/:id/pin', async (c) => {
       .maybeSingle()
 
     if (!article) return c.json({ error: 'Not found' }, 404)
-    if (!await canControlArticle(article, user.id)) return c.json({ error: 'Forbidden' }, 403)
+    if (!await canControlArticle(c.get('supabase'), article, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
     // Unpin all other articles from the same entity (company or author)
     if (!article.is_pinned) {
@@ -1927,7 +1914,7 @@ app.delete('/:id', async (c) => {
       .maybeSingle()
 
     if (!article) return c.json({ error: 'Not found' }, 404)
-    if (!await canControlArticle(article, user.id)) return c.json({ error: 'Forbidden' }, 403)
+    if (!await canControlArticle(c.get('supabase'), article, user.id)) return c.json({ error: 'Forbidden' }, 403)
 
     const { error } = await supabase
       .from('articles')
@@ -1963,7 +1950,7 @@ app.post('/:id/impression', async (c) => {
     if (!article) return c.json({ success: false })
 
     // Don't count views from whoever controls the article (author for personal, company owner for company articles)
-    if (await canControlArticle(article, user.id)) return c.json({ success: false })
+    if (await canControlArticle(c.get('supabase'), article, user.id)) return c.json({ success: false })
 
     const today = new Date().toISOString().slice(0, 10)
     await supabase

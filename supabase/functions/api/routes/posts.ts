@@ -2,6 +2,7 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import OpenAI from "https://esm.sh/openai@4";
+import { CONTENT_ROLES, checkActAsCompany } from '../lib/companyAccess.ts'
 
 const app = new Hono()
 
@@ -2362,19 +2363,10 @@ app.post('/', async (c) => {
 
       const community_members_only = communityMembersOnlyInput === true;
 
-      // Validate company ownership when posting as a company
+      // Posting as a company: she must manage the page (owner / content) and its plan must allow it
       if (company_id) {
-        const { data: companyCheck, error: companyCheckError } = await supabaseAdmin
-          .from('companies')
-          .select('id, owner_uuid')
-          .eq('id', company_id)
-          .maybeSingle()
-        if (companyCheckError || !companyCheck) {
-          return c.json({ error: "Company not found" }, 404);
-        }
-        if (companyCheck.owner_uuid !== user.id) {
-          return c.json({ error: "You don't have permission to post on behalf of this company" }, 403);
-        }
+        const allowed = await checkActAsCompany(c.get('supabase'), user.id, company_id, CONTENT_ROLES, 'posts.as_company');
+        if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status);
       }
 
       if (!message) return c.json({ error: "Message is required" }, 400);
