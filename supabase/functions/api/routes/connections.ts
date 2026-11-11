@@ -1,6 +1,16 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { parsePeopleSearchParams } from "./_peopleSearch.ts";
+import {
+  asPendingConnections,
+  clearDeclinesBetween,
+  findDeclinesBetween,
+  isBlocking,
+  pendingLookingRequests,
+  recordDecline,
+  refreshBlockedRequest,
+  withdrawDeclinedRequest,
+} from "./_connectionDeclines.ts";
 
 const app = new Hono();
 
@@ -140,6 +150,23 @@ app.get("/", async (c) => {
   const { data, error } = await query;
 
   if (error) return c.json({ error: error.message }, 400);
+
+  // No status: requests of mine that were declined still look pending to me
+  if (!status) {
+    const rows = data ?? [];
+    const realPartners = new Set(
+      rows.map((row: any) => row.requester_id === user.id ? row.receiver_id : row.requester_id),
+    );
+    const declined = (await pendingLookingRequests(supabase, user.id))
+      .filter((row: any) => !realPartners.has(row.receiver_id));
+    if (declined.length > 0) {
+      return c.json(
+        [...rows, ...declined].sort((a: any, b: any) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        ),
+      );
+    }
+  }
 
   // For pending or no status filter, return simple array
   return c.json(data ?? []);
@@ -308,6 +335,18 @@ app.post("/", async (c) => {
     return c.json({ error: "Connection already exists", data: existing }, 409);
   }
 
+  const declines = await findDeclinesBetween(user.id, receiverId);
+
+  // The receiver declined me before and I may not ask again yet: nothing is
+  // sent, but to me the request looks pending like any other.
+  const myDeclined = declines.find((d) => d.requester_id === user.id);
+  if (myDeclined && isBlocking(myDeclined)) {
+    const refreshed = await refreshBlockedRequest(myDeclined, message);
+    const [row] = await asPendingConnections(supabase, user.id, [refreshed]);
+    if (row) return c.json(row, 201);
+    return c.json({ error: "Failed to create connection request" }, 400);
+  }
+
   const { data, error } = await supabase
     .from("connections")
     .insert([
@@ -322,6 +361,12 @@ app.post("/", async (c) => {
     .single();
 
   if (error) return c.json({ error: error.message }, 400);
+
+  // I declined this person before and now reach out myself — the slate is clean
+  if (declines.some((d) => d.receiver_id === user.id)) {
+    await clearDeclinesBetween(user.id, receiverId);
+  }
+
   return c.json(data, 201);
 });
 
@@ -372,6 +417,8 @@ app.put("/:id", async (c) => {
     .eq("actor_id", data.requester_id)
     .eq("user_id", user.id);
 
+  await clearDeclinesBetween(user.id, data.requester_id);
+
   return c.json(data);
 });
 
@@ -392,7 +439,13 @@ app.delete("/:id", async (c) => {
     .maybeSingle();
 
   if (fetchError) return c.json({ error: fetchError.message }, 400);
-  if (!connection) return c.json({ error: "Connection not found" }, 404);
+  if (!connection) {
+    // A request of mine that was declined but still looks pending to me
+    if (await withdrawDeclinedRequest(connectionId, user.id)) {
+      return c.json({ message: "Connection deleted" });
+    }
+    return c.json({ error: "Connection not found" }, 404);
+  }
 
   // Check if user is part of this connection
   const isRequester = connection.requester_id === user.id;
@@ -411,6 +464,7 @@ app.delete("/:id", async (c) => {
   if (deleteError) return c.json({ error: deleteError.message }, 400);
 
   // If receiver is declining a pending request, clean up the CONN_REQ notification
+  // and remember the decline so the requester cannot simply ask again
   if (isReceiver && connection.status === "pending") {
     await supabase
       .from("notifications")
@@ -418,6 +472,11 @@ app.delete("/:id", async (c) => {
       .eq("type", "CONN_REQ")
       .eq("actor_id", connection.requester_id)
       .eq("user_id", user.id);
+
+    const resendBlocked = await recordDecline(connection);
+    if (resendBlocked) {
+      return c.json({ message: "Connection deleted", resend_blocked: resendBlocked });
+    }
   }
 
   return c.json({ message: "Connection deleted" });

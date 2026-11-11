@@ -2,6 +2,7 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { parsePeopleSearchParams } from './_peopleSearch.ts'
+import { clearDeclinesForUser, declinedUserIds } from './_connectionDeclines.ts'
 
 // ⚠️  ADMIN CLIENT usage in this file — bypasses ALL Supabase RLS policies.
 // It is used in two categories:
@@ -735,6 +736,8 @@ app.get('/', async (c) => {
         const excludedIds = new Set(
           (existingConnections ?? []).map((c: any) => c.requester_id === user.id ? c.receiver_id : c.requester_id)
         )
+        // A declined request is not suggested again, to either side
+        for (const id of await declinedUserIds(user.id)) excludedIds.add(id)
         userIds = userIds.filter((id: string) => !excludedIds.has(id))
       }
 
@@ -1286,6 +1289,7 @@ app.put('/privacy', async (c) => {
           .from('connections')
           .delete()
           .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
+        await clearDeclinesForUser(user.id)
       }
     }
 

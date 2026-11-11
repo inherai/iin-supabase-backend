@@ -5,6 +5,7 @@ import OpenAI from "https://esm.sh/openai@4";
 import { sendInviteEmail } from '../lib/email.ts';
 import { loadPreferences, savePreference } from './email-preferences.ts';
 import { canSendEmail, normalizeEmail } from '../lib/emailPrefs.ts';
+import { clearDeclinesForUser } from './_connectionDeclines.ts';
 
 const app = new Hono();
 
@@ -951,6 +952,7 @@ app.delete("/users/:id", async (c) => {
     db.from("profile_views").delete().or(`viewer_id.eq.${userId},viewed_id.eq.${userId}`),
     db.from("likes").delete().eq("user_id", userId),
     db.from("connections").delete().or(`requester_id.eq.${userId},receiver_id.eq.${userId}`),
+    clearDeclinesForUser(userId),
     db.from("notifications").delete().or(`user_id.eq.${userId},actor_id.eq.${userId}`),
 
     db.from("users_vectors").delete().eq("user_id", userId),
