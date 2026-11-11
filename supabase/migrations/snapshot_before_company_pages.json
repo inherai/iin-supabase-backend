@@ -1,0 +1,4490 @@
+{
+  "rls": [
+    {
+      "kind": "r",
+      "table": "article_author_follows",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "article_company_follows",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "articles",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "comments",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "companies",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "company_requests",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "connections",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "conversations",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "feed_cache",
+      "rls_forced": false,
+      "rls_enabled": false
+    },
+    {
+      "kind": "r",
+      "table": "job_applications",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "likes",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "messages",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "notifications",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "open_position",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "post_impressions",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "post_reports",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "posts",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "saved_resources",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "scheduled_posts",
+      "rls_forced": false,
+      "rls_enabled": true
+    },
+    {
+      "kind": "r",
+      "table": "users",
+      "rls_forced": false,
+      "rls_enabled": true
+    }
+  ],
+  "views": [
+    {
+      "def": " SELECT c.id,\n    c.name,\n    c.active,\n    c.description,\n    c.employee_count_range,\n    c.founded_on,\n    c.industries,\n    c.linkedin_url,\n    c.locations,\n    c.logo,\n    c.phone,\n    c.specialities,\n    c.tagline,\n    c.universal_name,\n    c.website,\n    c.created_at,\n    c.employees,\n    c.last_scraped_at,\n    c.owner_uuid,\n    c.employees_count,\n    COALESCE(op.open_positions_count, 0) AS open_positions_count,\n    (c.employees_count + COALESCE(op.open_positions_count, 0)) AS activity_score,\n    op.latest_job_at\n   FROM (companies c\n     LEFT JOIN ( SELECT open_position.company_id,\n            (count(*))::integer AS open_positions_count,\n            max(open_position.created_at) AS latest_job_at\n           FROM open_position\n          WHERE (open_position.job_description_html IS NOT NULL)\n          GROUP BY open_position.company_id) op ON ((op.company_id = c.id)));",
+      "name": "companies_ranked"
+    },
+    {
+      "def": " SELECT uuid,\n    role,\n    created_at,\n    status,\n    is_anonymous,\n    privacy_lastname,\n    privacy_picture,\n    privacy_contact_details,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text\n            ELSE name\n        END AS name,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text\n            ELSE first_name\n        END AS first_name,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text\n            ELSE about\n        END AS about,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text[]\n            ELSE interests\n        END AS interests,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::jsonb\n            ELSE languages\n        END AS languages,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text[]\n            ELSE work_preferences\n        END AS work_preferences,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::jsonb\n            ELSE experience\n        END AS experience,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::jsonb\n            ELSE education\n        END AS education,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::jsonb\n            ELSE certifications\n        END AS certifications,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text[]\n            ELSE skills\n        END AS skills,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text\n            ELSE location\n        END AS location,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text\n            ELSE cover_image_url\n        END AS cover_image_url,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text\n            ELSE headline\n        END AS headline,\n        CASE\n            WHEN has_privacy_access(uuid, privacy_contact_details, is_anonymous) THEN email\n            ELSE NULL::text\n        END AS email,\n        CASE\n            WHEN has_privacy_access(uuid, privacy_contact_details, is_anonymous) THEN phone\n            ELSE NULL::text\n        END AS phone,\n        CASE\n            WHEN has_privacy_access(uuid, privacy_lastname, is_anonymous) THEN last_name\n            WHEN ((privacy_lastname IS NULL) AND (NOT is_anonymous)) THEN last_name\n            ELSE NULL::text\n        END AS last_name,\n        CASE\n            WHEN (has_privacy_access(uuid, privacy_picture, is_anonymous) AND (image IS NOT NULL)) THEN 'true'::text\n            WHEN ((privacy_picture IS NULL) AND (NOT is_anonymous) AND (image IS NOT NULL)) THEN 'true'::text\n            ELSE NULL::text\n        END AS image,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::jsonb\n            ELSE projects\n        END AS projects,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text\n            ELSE github_url\n        END AS github_url,\n        CASE\n            WHEN (is_anonymous AND (uuid <> auth.uid())) THEN NULL::text\n            ELSE website_url\n        END AS website_url\n   FROM users;",
+      "name": "public_users_view"
+    },
+    {
+      "def": " SELECT puv.uuid,\n    puv.role,\n    puv.created_at,\n    puv.status,\n    puv.is_anonymous,\n    puv.privacy_lastname,\n    puv.privacy_picture,\n    puv.privacy_contact_details,\n    puv.name,\n    puv.first_name,\n    puv.about,\n    puv.interests,\n    puv.languages,\n    puv.work_preferences,\n    puv.experience,\n    puv.education,\n    puv.certifications,\n    puv.skills,\n    puv.location,\n    puv.cover_image_url,\n    puv.headline,\n    puv.email,\n    puv.phone,\n    puv.last_name,\n    puv.image,\n    u.job_seeking_status,\n    u.last_name AS raw_last_name,\n    u.email AS raw_email,\n    u.phone AS raw_phone,\n    u.privacy_lastname AS user_privacy_lastname,\n    u.privacy_picture AS user_privacy_picture,\n    ((u.image IS NOT NULL) AND (u.image <> ''::text)) AS has_image,\n    calculate_experience_years(puv.experience) AS experience_years\n   FROM (public_users_view puv\n     JOIN users u ON ((u.uuid = puv.uuid)));",
+      "name": "talent_search_view"
+    }
+  ],
+  "grants": [
+    {
+      "table": "article_author_follows",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "article_author_follows",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "article_author_follows",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "article_company_follows",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "article_company_follows",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "article_company_follows",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "articles",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "articles",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "articles",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "comments",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "comments",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "comments",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "companies",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "companies",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "companies",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "company_requests",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "company_requests",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "company_requests",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "connections",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "connections",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "connections",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "conversations",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "conversations",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "conversations",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "feed_cache",
+      "grantee": "anon",
+      "privileges": "SELECT"
+    },
+    {
+      "table": "feed_cache",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, UPDATE"
+    },
+    {
+      "table": "feed_cache",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "job_applications",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "job_applications",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "job_applications",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "likes",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "likes",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "likes",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "messages",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "messages",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "messages",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "notifications",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "notifications",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "notifications",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "open_position",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "open_position",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "open_position",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "post_impressions",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "post_impressions",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "post_impressions",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "post_reports",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "post_reports",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "post_reports",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "posts",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "posts",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "posts",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "saved_resources",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "saved_resources",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "saved_resources",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "scheduled_posts",
+      "grantee": "anon",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "scheduled_posts",
+      "grantee": "authenticated",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "scheduled_posts",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    },
+    {
+      "table": "users",
+      "grantee": "anon",
+      "privileges": "MAINTAIN"
+    },
+    {
+      "table": "users",
+      "grantee": "authenticated",
+      "privileges": "MAINTAIN, SELECT, UPDATE"
+    },
+    {
+      "table": "users",
+      "grantee": "service_role",
+      "privileges": "DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE"
+    }
+  ],
+  "columns": [
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "article_author_follows",
+      "column": "follower_uuid",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "article_author_follows",
+      "column": "author_uuid",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "article_author_follows",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "article_company_follows",
+      "column": "follower_uuid",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "article_company_follows",
+      "column": "company_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "article_company_follows",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "articles",
+      "column": "id",
+      "default": "gen_random_uuid()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "articles",
+      "column": "author_uuid",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "articles",
+      "column": "company_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "author_type",
+      "default": "'user'::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "guest_author_name",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "guest_author_bio",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "guest_author_avatar_url",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "title",
+      "default": "''::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "content",
+      "default": "''::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "content_plain",
+      "default": "''::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "cover_image_url",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "excerpt",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "status",
+      "default": "'draft'::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "articles",
+      "column": "deleted_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "articles",
+      "column": "is_pinned",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "articles",
+      "column": "is_editors_pick",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "articles",
+      "column": "read_time",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "series_name",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "articles",
+      "column": "series_order",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "articles",
+      "column": "published_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "articles",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "articles",
+      "column": "updated_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "articles",
+      "column": "article_type",
+      "default": "'article'::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "articles",
+      "column": "view_count",
+      "default": "0",
+      "nullable": "NO"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "articles",
+      "column": "is_featured",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "comments",
+      "column": "id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "comments",
+      "column": "post_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "comments",
+      "column": "sender",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "comments",
+      "column": "message",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "comments",
+      "column": "attachments",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "comments",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "comments",
+      "column": "community_members_only",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "comments",
+      "column": "is_edited",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "comments",
+      "column": "updated_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "comments",
+      "column": "parent_comment_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "companies",
+      "column": "id",
+      "default": "nextval('companies_id_seq'::regclass)",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "companies",
+      "column": "name",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "companies",
+      "column": "active",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "companies",
+      "column": "description",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "companies",
+      "column": "employee_count_range",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "companies",
+      "column": "founded_on",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "companies",
+      "column": "industries",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "companies",
+      "column": "linkedin_url",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "companies",
+      "column": "locations",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "companies",
+      "column": "logo",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "companies",
+      "column": "phone",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "companies",
+      "column": "specialities",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "companies",
+      "column": "tagline",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "companies",
+      "column": "universal_name",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "companies",
+      "column": "website",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "companies",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "YES"
+    },
+    {
+      "udt": "_uuid",
+      "type": "ARRAY",
+      "table": "companies",
+      "column": "employees",
+      "default": "'{}'::uuid[]",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "companies",
+      "column": "last_scraped_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "companies",
+      "column": "owner_uuid",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "companies",
+      "column": "source",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "companies",
+      "column": "source_raw_json",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "companies",
+      "column": "employees_count",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "company_requests",
+      "column": "id",
+      "default": "nextval('company_requests_id_seq'::regclass)",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "company_requests",
+      "column": "requested_name",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "company_requests",
+      "column": "requested_by",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "company_requests",
+      "column": "status",
+      "default": "'pending'::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "company_requests",
+      "column": "resolved_company_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "company_requests",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "connections",
+      "column": "id",
+      "default": "gen_random_uuid()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "connections",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "connections",
+      "column": "requester_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "connections",
+      "column": "receiver_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "connections",
+      "column": "status",
+      "default": "'''pending'''::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "connections",
+      "column": "message",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "conversations",
+      "column": "id",
+      "default": "gen_random_uuid()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "conversations",
+      "column": "created_at",
+      "default": "timezone('utc'::text, now())",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "conversations",
+      "column": "updated_at",
+      "default": "timezone('utc'::text, now())",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "conversations",
+      "column": "user1_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "conversations",
+      "column": "user2_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "feed_cache",
+      "column": "post_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "feed_cache",
+      "column": "effective_date",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "feed_cache",
+      "column": "sender",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "feed_cache",
+      "column": "post_type",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "feed_cache",
+      "column": "community_members_only",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "feed_cache",
+      "column": "sent_at",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "job_applications",
+      "column": "id",
+      "default": "gen_random_uuid()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "job_applications",
+      "column": "user_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "job_applications",
+      "column": "job_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "job_applications",
+      "column": "status",
+      "default": "'applied'::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "job_applications",
+      "column": "apply_clicked_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "job_applications",
+      "column": "applied_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "job_applications",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "job_applications",
+      "column": "updated_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "likes",
+      "column": "id",
+      "default": "gen_random_uuid()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "likes",
+      "column": "created_at",
+      "default": "timezone('utc'::text, now())",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "likes",
+      "column": "user_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "likes",
+      "column": "target_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "likes",
+      "column": "target_type",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "reaction_type_enum",
+      "type": "USER-DEFINED",
+      "table": "likes",
+      "column": "reaction_type",
+      "default": "'like'::reaction_type_enum",
+      "nullable": "NO"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "messages",
+      "column": "id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "messages",
+      "column": "created_at",
+      "default": "timezone('utc'::text, now())",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "messages",
+      "column": "conversation_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "messages",
+      "column": "sender_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "messages",
+      "column": "content",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "messages",
+      "column": "is_read",
+      "default": "false",
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "messages",
+      "column": "is_edited",
+      "default": "false",
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "messages",
+      "column": "attachments",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "messages",
+      "column": "reactions",
+      "default": "'{}'::jsonb",
+      "nullable": "YES"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "notifications",
+      "column": "id",
+      "default": "gen_random_uuid()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "notifications",
+      "column": "user_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "notifications",
+      "column": "actor_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "notifications",
+      "column": "target_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "varchar",
+      "type": "character varying",
+      "table": "notifications",
+      "column": "type",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "notifications",
+      "column": "count",
+      "default": "1",
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "notifications",
+      "column": "is_read",
+      "default": "false",
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "notifications",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "notifications",
+      "column": "updated_at",
+      "default": "now()",
+      "nullable": "YES"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "open_position",
+      "column": "id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "job_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "job_title",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "company_name",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "location",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "apply_link",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "employment_type",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "work_schedule",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "source",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "time_posted",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "job_description",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "seniority_level",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "salary_range",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "contact_details",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "open_position",
+      "column": "community_benefits",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "open_position",
+      "column": "original_source_json",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "open_position",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "job_description_html",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "open_position",
+      "column": "company_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "_job_category",
+      "type": "ARRAY",
+      "table": "open_position",
+      "column": "categories",
+      "default": "'{}'::job_category[]",
+      "nullable": "YES"
+    },
+    {
+      "udt": "tsvector",
+      "type": "tsvector",
+      "table": "open_position",
+      "column": "fts_tokens",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "open_position",
+      "column": "location_region",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "open_position",
+      "column": "views_count",
+      "default": "0",
+      "nullable": "NO"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "post_impressions",
+      "column": "id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "post_impressions",
+      "column": "post_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "post_impressions",
+      "column": "user_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "date",
+      "type": "date",
+      "table": "post_impressions",
+      "column": "impression_date",
+      "default": "CURRENT_DATE",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "post_impressions",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "post_impressions",
+      "column": "last_seen_at",
+      "default": "now()",
+      "nullable": "YES"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "post_reports",
+      "column": "id",
+      "default": "nextval('post_reports_id_seq'::regclass)",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "post_reports",
+      "column": "post_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "post_reports",
+      "column": "reporter_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "post_reports",
+      "column": "reason",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "post_reports",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "post_reports",
+      "column": "is_resolved",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "post_reports",
+      "column": "resolved_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "post_reports",
+      "column": "resolved_by",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "post_reports",
+      "column": "resolution_note",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "posts",
+      "column": "id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "posts",
+      "column": "sender",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "posts",
+      "column": "subject",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "posts",
+      "column": "message",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "posts",
+      "column": "attachments",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "posts",
+      "column": "sent_at",
+      "default": "now()",
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "posts",
+      "column": "post_type",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "posts",
+      "column": "community_members_only",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "posts",
+      "column": "is_edited",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "posts",
+      "column": "updated_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "posts",
+      "column": "company_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "posts",
+      "column": "posted_by_uuid",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "posts",
+      "column": "linked_article_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "saved_resources",
+      "column": "id",
+      "default": "gen_random_uuid()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "saved_resources",
+      "column": "user_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "saved_resource_type_enum",
+      "type": "USER-DEFINED",
+      "table": "saved_resources",
+      "column": "saved_resource_type",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "saved_resources",
+      "column": "saved_resource_id",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "saved_resources",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "scheduled_posts",
+      "column": "id",
+      "default": "(gen_random_uuid())::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "scheduled_posts",
+      "column": "sender",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "scheduled_posts",
+      "column": "subject",
+      "default": "''::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "scheduled_posts",
+      "column": "message",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "scheduled_posts",
+      "column": "attachments",
+      "default": "'[]'::jsonb",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "scheduled_posts",
+      "column": "post_type",
+      "default": "'discussion'::text",
+      "nullable": "NO"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "scheduled_posts",
+      "column": "community_members_only",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "int8",
+      "type": "bigint",
+      "table": "scheduled_posts",
+      "column": "company_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "scheduled_posts",
+      "column": "posted_by_uuid",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "scheduled_posts",
+      "column": "linked_article_id",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "scheduled_posts",
+      "column": "scheduled_at",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "scheduled_posts",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "NO"
+    },
+    {
+      "udt": "uuid",
+      "type": "uuid",
+      "table": "users",
+      "column": "uuid",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "email",
+      "default": null,
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "name",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "image",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "role",
+      "type": "USER-DEFINED",
+      "table": "users",
+      "column": "role",
+      "default": "'community'::role",
+      "nullable": "NO"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "users",
+      "column": "created_at",
+      "default": "now()",
+      "nullable": "YES"
+    },
+    {
+      "udt": "varchar",
+      "type": "character varying",
+      "table": "users",
+      "column": "status",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "about",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "_text",
+      "type": "ARRAY",
+      "table": "users",
+      "column": "interests",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "users",
+      "column": "languages",
+      "default": "'[]'::jsonb",
+      "nullable": "NO"
+    },
+    {
+      "udt": "_text",
+      "type": "ARRAY",
+      "table": "users",
+      "column": "work_preferences",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "users",
+      "column": "experience",
+      "default": "'[]'::jsonb",
+      "nullable": "NO"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "users",
+      "column": "education",
+      "default": "'[]'::jsonb",
+      "nullable": "NO"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "users",
+      "column": "certifications",
+      "default": "'[]'::jsonb",
+      "nullable": "NO"
+    },
+    {
+      "udt": "_text",
+      "type": "ARRAY",
+      "table": "users",
+      "column": "skills",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "headline",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "location",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "_role",
+      "type": "ARRAY",
+      "table": "users",
+      "column": "privacy_picture",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "_role",
+      "type": "ARRAY",
+      "table": "users",
+      "column": "privacy_lastname",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "_role",
+      "type": "ARRAY",
+      "table": "users",
+      "column": "privacy_contact_details",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "phone",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "first_name",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "last_name",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "users",
+      "column": "is_anonymous",
+      "default": "false",
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "cover_image_url",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "users",
+      "column": "values_agreed",
+      "default": "false",
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamp",
+      "type": "timestamp without time zone",
+      "table": "users",
+      "column": "values_agreed_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "job_seeking_status",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "users",
+      "column": "activity_score_cache",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "int4",
+      "type": "integer",
+      "table": "users",
+      "column": "profile_strength_cache",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "users",
+      "column": "scores_cached_at",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "bool",
+      "type": "boolean",
+      "table": "users",
+      "column": "public_profile_enabled",
+      "default": "false",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "public_profile_slug",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "users",
+      "column": "public_profile_settings",
+      "default": "'{\"sections\": {\"about\": true, \"skills\": true, \"projects\": true, \"education\": true, \"interests\": true, \"languages\": true, \"experience\": true, \"certifications\": true}, \"show_picture\": true, \"show_location\": true, \"show_last_name\": true, \"show_contact_details\": false}'::jsonb",
+      "nullable": "NO"
+    },
+    {
+      "udt": "jsonb",
+      "type": "jsonb",
+      "table": "users",
+      "column": "projects",
+      "default": "'[]'::jsonb",
+      "nullable": "NO"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "github_url",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "text",
+      "type": "text",
+      "table": "users",
+      "column": "website_url",
+      "default": null,
+      "nullable": "YES"
+    },
+    {
+      "udt": "timestamptz",
+      "type": "timestamp with time zone",
+      "table": "users",
+      "column": "activated_at",
+      "default": null,
+      "nullable": "YES"
+    }
+  ],
+  "indexes": [
+    {
+      "def": "CREATE UNIQUE INDEX article_author_follows_pkey ON public.article_author_follows USING btree (follower_uuid, author_uuid)",
+      "name": "article_author_follows_pkey",
+      "table": "article_author_follows"
+    },
+    {
+      "def": "CREATE INDEX idx_article_author_follows_author ON public.article_author_follows USING btree (author_uuid)",
+      "name": "idx_article_author_follows_author",
+      "table": "article_author_follows"
+    },
+    {
+      "def": "CREATE INDEX idx_article_author_follows_author_uuid ON public.article_author_follows USING btree (author_uuid)",
+      "name": "idx_article_author_follows_author_uuid",
+      "table": "article_author_follows"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX article_company_follows_pkey ON public.article_company_follows USING btree (follower_uuid, company_id)",
+      "name": "article_company_follows_pkey",
+      "table": "article_company_follows"
+    },
+    {
+      "def": "CREATE INDEX idx_article_company_follows_company ON public.article_company_follows USING btree (company_id)",
+      "name": "idx_article_company_follows_company",
+      "table": "article_company_follows"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX articles_pkey ON public.articles USING btree (id)",
+      "name": "articles_pkey",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_author_published ON public.articles USING btree (author_uuid) WHERE ((status = 'published'::text) AND (deleted_at IS NULL) AND (author_uuid IS NOT NULL))",
+      "name": "idx_articles_author_published",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_author_uuid ON public.articles USING btree (author_uuid, published_at DESC) WHERE ((author_uuid IS NOT NULL) AND (deleted_at IS NULL))",
+      "name": "idx_articles_author_uuid",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_company_id ON public.articles USING btree (company_id) WHERE (company_id IS NOT NULL)",
+      "name": "idx_articles_company_id",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_deleted_at ON public.articles USING btree (deleted_at) WHERE (deleted_at IS NOT NULL)",
+      "name": "idx_articles_deleted_at",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_drafts ON public.articles USING btree (author_uuid, updated_at DESC) WHERE ((status = 'draft'::text) AND (deleted_at IS NULL))",
+      "name": "idx_articles_drafts",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_editors_pick ON public.articles USING btree (published_at DESC) WHERE ((is_editors_pick = true) AND (status = 'published'::text) AND (deleted_at IS NULL))",
+      "name": "idx_articles_editors_pick",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_excerpt_trgm ON public.articles USING gin (excerpt gin_trgm_ops) WHERE ((excerpt IS NOT NULL) AND (deleted_at IS NULL))",
+      "name": "idx_articles_excerpt_trgm",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_feed ON public.articles USING btree (published_at DESC) WHERE ((status = 'published'::text) AND (deleted_at IS NULL))",
+      "name": "idx_articles_feed",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_fts ON public.articles USING gin (to_tsvector('simple'::regconfig, ((title || ' '::text) || COALESCE(excerpt, ''::text))))",
+      "name": "idx_articles_fts",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_news ON public.articles USING btree (published_at DESC) WHERE ((article_type = 'news'::text) AND (status = 'published'::text) AND (deleted_at IS NULL))",
+      "name": "idx_articles_news",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_series ON public.articles USING btree (author_uuid, series_name, series_order) WHERE ((series_name IS NOT NULL) AND (deleted_at IS NULL))",
+      "name": "idx_articles_series",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_title_trgm ON public.articles USING gin (title gin_trgm_ops) WHERE (deleted_at IS NULL)",
+      "name": "idx_articles_title_trgm",
+      "table": "articles"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX comments_pkey ON public.comments USING btree (id)",
+      "name": "comments_pkey",
+      "table": "comments"
+    },
+    {
+      "def": "CREATE INDEX idx_comments_created_at ON public.comments USING btree (created_at)",
+      "name": "idx_comments_created_at",
+      "table": "comments"
+    },
+    {
+      "def": "CREATE INDEX idx_comments_post_id_created_at ON public.comments USING btree (post_id, created_at)",
+      "name": "idx_comments_post_id_created_at",
+      "table": "comments"
+    },
+    {
+      "def": "CREATE INDEX idx_comments_post_sorting ON public.comments USING btree (post_id, created_at DESC)",
+      "name": "idx_comments_post_sorting",
+      "table": "comments"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX companies_name_key ON public.companies USING btree (name)",
+      "name": "companies_name_key",
+      "table": "companies"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX companies_pkey ON public.companies USING btree (id)",
+      "name": "companies_pkey",
+      "table": "companies"
+    },
+    {
+      "def": "CREATE INDEX idx_articles_company_owner ON public.companies USING btree (id, owner_uuid)",
+      "name": "idx_articles_company_owner",
+      "table": "companies"
+    },
+    {
+      "def": "CREATE INDEX idx_companies_employees_count ON public.companies USING btree (employees_count DESC, id)",
+      "name": "idx_companies_employees_count",
+      "table": "companies"
+    },
+    {
+      "def": "CREATE INDEX idx_companies_employees_count_sort ON public.companies USING btree (employees_count DESC, id)",
+      "name": "idx_companies_employees_count_sort",
+      "table": "companies"
+    },
+    {
+      "def": "CREATE INDEX idx_companies_name_trgm ON public.companies USING gin (name gin_trgm_ops)",
+      "name": "idx_companies_name_trgm",
+      "table": "companies"
+    },
+    {
+      "def": "CREATE INDEX idx_companies_owner_uuid ON public.companies USING btree (owner_uuid) WHERE (owner_uuid IS NOT NULL)",
+      "name": "idx_companies_owner_uuid",
+      "table": "companies"
+    },
+    {
+      "def": "CREATE INDEX idx_companies_people_search_key ON public.companies USING btree (people_search_company_key(name))",
+      "name": "idx_companies_people_search_key",
+      "table": "companies"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX company_requests_pkey ON public.company_requests USING btree (id)",
+      "name": "company_requests_pkey",
+      "table": "company_requests"
+    },
+    {
+      "def": "CREATE INDEX company_requests_status_idx ON public.company_requests USING btree (status)",
+      "name": "company_requests_status_idx",
+      "table": "company_requests"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX company_requests_user_name_idx ON public.company_requests USING btree (requested_by, lower(requested_name))",
+      "name": "company_requests_user_name_idx",
+      "table": "company_requests"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX connections_pkey ON public.connections USING btree (id)",
+      "name": "connections_pkey",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE INDEX connections_receiver_idx ON public.connections USING btree (receiver_id)",
+      "name": "connections_receiver_idx",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE INDEX connections_requester_idx ON public.connections USING btree (requester_id)",
+      "name": "connections_requester_idx",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE INDEX connections_status_idx ON public.connections USING btree (status)",
+      "name": "connections_status_idx",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE INDEX idx_connections_receiver ON public.connections USING btree (receiver_id, status)",
+      "name": "idx_connections_receiver",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE INDEX idx_connections_receiver_status ON public.connections USING btree (receiver_id, status)",
+      "name": "idx_connections_receiver_status",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE INDEX idx_connections_requester ON public.connections USING btree (requester_id, status)",
+      "name": "idx_connections_requester",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE INDEX idx_connections_requester_status ON public.connections USING btree (requester_id, status)",
+      "name": "idx_connections_requester_status",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE INDEX idx_connections_status_receiver ON public.connections USING btree (status, receiver_id)",
+      "name": "idx_connections_status_receiver",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE INDEX idx_connections_status_requester ON public.connections USING btree (status, requester_id)",
+      "name": "idx_connections_status_requester",
+      "table": "connections"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX conversations_pkey ON public.conversations USING btree (id)",
+      "name": "conversations_pkey",
+      "table": "conversations"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX conversations_user1_id_user2_id_key ON public.conversations USING btree (user1_id, user2_id)",
+      "name": "conversations_user1_id_user2_id_key",
+      "table": "conversations"
+    },
+    {
+      "def": "CREATE INDEX conversations_user1_idx ON public.conversations USING btree (user1_id)",
+      "name": "conversations_user1_idx",
+      "table": "conversations"
+    },
+    {
+      "def": "CREATE INDEX conversations_user2_idx ON public.conversations USING btree (user2_id)",
+      "name": "conversations_user2_idx",
+      "table": "conversations"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX feed_cache_pkey ON public.feed_cache USING btree (post_id)",
+      "name": "feed_cache_pkey",
+      "table": "feed_cache"
+    },
+    {
+      "def": "CREATE INDEX idx_feed_cache_effective_date ON public.feed_cache USING btree (effective_date DESC)",
+      "name": "idx_feed_cache_effective_date",
+      "table": "feed_cache"
+    },
+    {
+      "def": "CREATE INDEX idx_feed_cache_sender_effective_date ON public.feed_cache USING btree (sender, effective_date DESC)",
+      "name": "idx_feed_cache_sender_effective_date",
+      "table": "feed_cache"
+    },
+    {
+      "def": "CREATE INDEX idx_job_applications_job_id ON public.job_applications USING btree (job_id)",
+      "name": "idx_job_applications_job_id",
+      "table": "job_applications"
+    },
+    {
+      "def": "CREATE INDEX idx_job_applications_user_status_applied ON public.job_applications USING btree (user_id, status, applied_at DESC)",
+      "name": "idx_job_applications_user_status_applied",
+      "table": "job_applications"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX job_applications_pkey ON public.job_applications USING btree (id)",
+      "name": "job_applications_pkey",
+      "table": "job_applications"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX job_applications_user_job_unique ON public.job_applications USING btree (user_id, job_id)",
+      "name": "job_applications_user_job_unique",
+      "table": "job_applications"
+    },
+    {
+      "def": "CREATE INDEX idx_likes_created_at ON public.likes USING btree (created_at)",
+      "name": "idx_likes_created_at",
+      "table": "likes"
+    },
+    {
+      "def": "CREATE INDEX idx_likes_target_id_cover ON public.likes USING btree (target_id) INCLUDE (user_id, reaction_type)",
+      "name": "idx_likes_target_id_cover",
+      "table": "likes"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX likes_pkey ON public.likes USING btree (id)",
+      "name": "likes_pkey",
+      "table": "likes"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX likes_user_id_target_id_key ON public.likes USING btree (user_id, target_id)",
+      "name": "likes_user_id_target_id_key",
+      "table": "likes"
+    },
+    {
+      "def": "CREATE INDEX idx_messages_unread_by_conversation ON public.messages USING btree (conversation_id, sender_id) WHERE (is_read = false)",
+      "name": "idx_messages_unread_by_conversation",
+      "table": "messages"
+    },
+    {
+      "def": "CREATE INDEX messages_conversation_id_idx ON public.messages USING btree (conversation_id)",
+      "name": "messages_conversation_id_idx",
+      "table": "messages"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX messages_pkey ON public.messages USING btree (id)",
+      "name": "messages_pkey",
+      "table": "messages"
+    },
+    {
+      "def": "CREATE INDEX idx_notifications_target_type ON public.notifications USING btree (target_id, type, is_read)",
+      "name": "idx_notifications_target_type",
+      "table": "notifications"
+    },
+    {
+      "def": "CREATE INDEX idx_notifications_user_unread ON public.notifications USING btree (user_id, is_read)",
+      "name": "idx_notifications_user_unread",
+      "table": "notifications"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (id)",
+      "name": "notifications_pkey",
+      "table": "notifications"
+    },
+    {
+      "def": "CREATE INDEX fts_tokens_idx ON public.open_position USING gin (fts_tokens)",
+      "name": "fts_tokens_idx",
+      "table": "open_position"
+    },
+    {
+      "def": "CREATE INDEX idx_open_position_desc_created ON public.open_position USING btree (created_at DESC) WHERE (job_description_html IS NOT NULL)",
+      "name": "idx_open_position_desc_created",
+      "table": "open_position"
+    },
+    {
+      "def": "CREATE INDEX idx_open_position_location_region ON public.open_position USING btree (location_region)",
+      "name": "idx_open_position_location_region",
+      "table": "open_position"
+    },
+    {
+      "def": "CREATE INDEX idx_open_position_seniority_level ON public.open_position USING btree (seniority_level)",
+      "name": "idx_open_position_seniority_level",
+      "table": "open_position"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX open_position_id_key ON public.open_position USING btree (id)",
+      "name": "open_position_id_key",
+      "table": "open_position"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX open_position_job_id_key ON public.open_position USING btree (job_id)",
+      "name": "open_position_job_id_key",
+      "table": "open_position"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX open_position_pkey ON public.open_position USING btree (id)",
+      "name": "open_position_pkey",
+      "table": "open_position"
+    },
+    {
+      "def": "CREATE INDEX idx_post_impressions_post_id ON public.post_impressions USING btree (post_id)",
+      "name": "idx_post_impressions_post_id",
+      "table": "post_impressions"
+    },
+    {
+      "def": "CREATE INDEX idx_post_impressions_user_id ON public.post_impressions USING btree (user_id)",
+      "name": "idx_post_impressions_user_id",
+      "table": "post_impressions"
+    },
+    {
+      "def": "CREATE INDEX idx_post_impressions_user_post ON public.post_impressions USING btree (user_id, post_id)",
+      "name": "idx_post_impressions_user_post",
+      "table": "post_impressions"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX post_impressions_pkey ON public.post_impressions USING btree (id)",
+      "name": "post_impressions_pkey",
+      "table": "post_impressions"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX post_impressions_unique ON public.post_impressions USING btree (post_id, user_id, impression_date)",
+      "name": "post_impressions_unique",
+      "table": "post_impressions"
+    },
+    {
+      "def": "CREATE INDEX post_reports_created_at_idx ON public.post_reports USING btree (created_at DESC)",
+      "name": "post_reports_created_at_idx",
+      "table": "post_reports"
+    },
+    {
+      "def": "CREATE INDEX post_reports_is_resolved_idx ON public.post_reports USING btree (is_resolved)",
+      "name": "post_reports_is_resolved_idx",
+      "table": "post_reports"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX post_reports_pkey ON public.post_reports USING btree (id)",
+      "name": "post_reports_pkey",
+      "table": "post_reports"
+    },
+    {
+      "def": "CREATE INDEX post_reports_post_id_idx ON public.post_reports USING btree (post_id)",
+      "name": "post_reports_post_id_idx",
+      "table": "post_reports"
+    },
+    {
+      "def": "CREATE INDEX post_reports_reporter_id_idx ON public.post_reports USING btree (reporter_id)",
+      "name": "post_reports_reporter_id_idx",
+      "table": "post_reports"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX post_reports_unique_per_user ON public.post_reports USING btree (post_id, reporter_id)",
+      "name": "post_reports_unique_per_user",
+      "table": "post_reports"
+    },
+    {
+      "def": "CREATE INDEX idx_posts_active_sent_at ON public.posts USING btree (sent_at DESC) WHERE ((post_type IS NOT NULL) AND (post_type <> 'email'::text))",
+      "name": "idx_posts_active_sent_at",
+      "table": "posts"
+    },
+    {
+      "def": "CREATE INDEX idx_posts_company_id ON public.posts USING btree (company_id) WHERE (company_id IS NOT NULL)",
+      "name": "idx_posts_company_id",
+      "table": "posts"
+    },
+    {
+      "def": "CREATE INDEX idx_posts_linked_article_id ON public.posts USING btree (linked_article_id) WHERE (linked_article_id IS NOT NULL)",
+      "name": "idx_posts_linked_article_id",
+      "table": "posts"
+    },
+    {
+      "def": "CREATE INDEX idx_posts_sender ON public.posts USING btree (sender)",
+      "name": "idx_posts_sender",
+      "table": "posts"
+    },
+    {
+      "def": "CREATE INDEX idx_posts_sender_sent_at ON public.posts USING btree (sender, sent_at DESC)",
+      "name": "idx_posts_sender_sent_at",
+      "table": "posts"
+    },
+    {
+      "def": "CREATE INDEX idx_posts_sent_at ON public.posts USING btree (sent_at DESC)",
+      "name": "idx_posts_sent_at",
+      "table": "posts"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX posts_pkey ON public.posts USING btree (id)",
+      "name": "posts_pkey",
+      "table": "posts"
+    },
+    {
+      "def": "CREATE INDEX idx_saved_resources_user_id ON public.saved_resources USING btree (user_id)",
+      "name": "idx_saved_resources_user_id",
+      "table": "saved_resources"
+    },
+    {
+      "def": "CREATE INDEX idx_saved_resources_user_type_id ON public.saved_resources USING btree (user_id, saved_resource_type, saved_resource_id)",
+      "name": "idx_saved_resources_user_type_id",
+      "table": "saved_resources"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX saved_resources_pkey ON public.saved_resources USING btree (id)",
+      "name": "saved_resources_pkey",
+      "table": "saved_resources"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX unique_user_saved_item ON public.saved_resources USING btree (user_id, saved_resource_type, saved_resource_id)",
+      "name": "unique_user_saved_item",
+      "table": "saved_resources"
+    },
+    {
+      "def": "CREATE INDEX idx_scheduled_posts_posted_by ON public.scheduled_posts USING btree (posted_by_uuid)",
+      "name": "idx_scheduled_posts_posted_by",
+      "table": "scheduled_posts"
+    },
+    {
+      "def": "CREATE INDEX idx_scheduled_posts_scheduled_at ON public.scheduled_posts USING btree (scheduled_at)",
+      "name": "idx_scheduled_posts_scheduled_at",
+      "table": "scheduled_posts"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX scheduled_posts_pkey ON public.scheduled_posts USING btree (id)",
+      "name": "scheduled_posts_pkey",
+      "table": "scheduled_posts"
+    },
+    {
+      "def": "CREATE INDEX idx_users_education_gin ON public.users USING gin (education)",
+      "name": "idx_users_education_gin",
+      "table": "users"
+    },
+    {
+      "def": "CREATE INDEX idx_users_first_name_trgm ON public.users USING gin (first_name gin_trgm_ops)",
+      "name": "idx_users_first_name_trgm",
+      "table": "users"
+    },
+    {
+      "def": "CREATE INDEX idx_users_job_seeking_status ON public.users USING btree (job_seeking_status) WHERE (job_seeking_status IS NOT NULL)",
+      "name": "idx_users_job_seeking_status",
+      "table": "users"
+    },
+    {
+      "def": "CREATE INDEX idx_users_languages_gin ON public.users USING gin (languages)",
+      "name": "idx_users_languages_gin",
+      "table": "users"
+    },
+    {
+      "def": "CREATE INDEX idx_users_last_name_trgm ON public.users USING gin (last_name gin_trgm_ops)",
+      "name": "idx_users_last_name_trgm",
+      "table": "users"
+    },
+    {
+      "def": "CREATE INDEX idx_users_skills_gin ON public.users USING gin (skills)",
+      "name": "idx_users_skills_gin",
+      "table": "users"
+    },
+    {
+      "def": "CREATE INDEX idx_users_work_preferences_gin ON public.users USING gin (work_preferences)",
+      "name": "idx_users_work_preferences_gin",
+      "table": "users"
+    },
+    {
+      "def": "CREATE INDEX users_activated_at ON public.users USING btree (activated_at) WHERE (activated_at IS NOT NULL)",
+      "name": "users_activated_at",
+      "table": "users"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)",
+      "name": "users_email_key",
+      "table": "users"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (uuid)",
+      "name": "users_pkey",
+      "table": "users"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX users_public_profile_slug_key ON public.users USING btree (public_profile_slug) WHERE (public_profile_slug IS NOT NULL)",
+      "name": "users_public_profile_slug_key",
+      "table": "users"
+    },
+    {
+      "def": "CREATE UNIQUE INDEX users_uuid_key ON public.users USING btree (uuid)",
+      "name": "users_uuid_key",
+      "table": "users"
+    }
+  ],
+  "policies": [
+    {
+      "cmd": "ALL",
+      "name": "manage own follows",
+      "roles": [
+        "public"
+      ],
+      "table": "article_author_follows",
+      "using": "(follower_uuid = auth.uid())",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "SELECT",
+      "name": "read follow count",
+      "roles": [
+        "public"
+      ],
+      "table": "article_author_follows",
+      "using": "true",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "DELETE",
+      "name": "delete own",
+      "roles": [
+        "public"
+      ],
+      "table": "article_company_follows",
+      "using": "(follower_uuid = auth.uid())",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "insert own",
+      "roles": [
+        "public"
+      ],
+      "table": "article_company_follows",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(follower_uuid = auth.uid())"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "select own",
+      "roles": [
+        "public"
+      ],
+      "table": "article_company_follows",
+      "using": "(follower_uuid = auth.uid())",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "ALL",
+      "name": "articles_author_write",
+      "roles": [
+        "public"
+      ],
+      "table": "articles",
+      "using": "((author_uuid = auth.uid()) OR (EXISTS ( SELECT 1\n   FROM companies\n  WHERE ((companies.id = articles.company_id) AND (companies.owner_uuid = auth.uid())))))",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "SELECT",
+      "name": "articles_read_published_or_own",
+      "roles": [
+        "public"
+      ],
+      "table": "articles",
+      "using": "((deleted_at IS NULL) AND ((status = 'published'::text) OR (author_uuid = auth.uid()) OR (EXISTS ( SELECT 1\n   FROM companies\n  WHERE ((companies.id = articles.company_id) AND (companies.owner_uuid = auth.uid()))))))",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Enable insert for own comments",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "comments",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "((auth.jwt() ->> 'email'::text) = sender)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Enable read access for authenticated users",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "comments",
+      "using": "(auth.role() = 'authenticated'::text)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "DELETE",
+      "name": "Users can delete their own comments",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "comments",
+      "using": "((auth.jwt() ->> 'email'::text) = sender)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Users can update their own comments",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "comments",
+      "using": "((auth.jwt() ->> 'email'::text) = sender)",
+      "permissive": "PERMISSIVE",
+      "with_check": "((auth.jwt() ->> 'email'::text) = sender)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Enable read access for all users",
+      "roles": [
+        "public"
+      ],
+      "table": "companies",
+      "using": "true",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Enable update for admins only",
+      "roles": [
+        "public"
+      ],
+      "table": "companies",
+      "using": "((((auth.jwt() -> 'app_metadata'::text) ->> 'is_admin'::text))::boolean = true)",
+      "permissive": "PERMISSIVE",
+      "with_check": "((((auth.jwt() -> 'app_metadata'::text) ->> 'is_admin'::text))::boolean = true)"
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Enable update for service role only",
+      "roles": [
+        "service_role"
+      ],
+      "table": "companies",
+      "using": "true",
+      "permissive": "PERMISSIVE",
+      "with_check": "true"
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Users can insert own requests",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "company_requests",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(requested_by = auth.uid())"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Users can view own requests",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "company_requests",
+      "using": "(requested_by = auth.uid())",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Users can create connection requests",
+      "roles": [
+        "public"
+      ],
+      "table": "connections",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(auth.uid() = requester_id)"
+    },
+    {
+      "cmd": "DELETE",
+      "name": "Users can delete their own connections",
+      "roles": [
+        "public"
+      ],
+      "table": "connections",
+      "using": "((auth.uid() = requester_id) OR (auth.uid() = receiver_id))",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Users can update their connections",
+      "roles": [
+        "public"
+      ],
+      "table": "connections",
+      "using": "((auth.uid() = requester_id) OR (auth.uid() = receiver_id))",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Users can view their own connections",
+      "roles": [
+        "public"
+      ],
+      "table": "connections",
+      "using": "((auth.uid() = requester_id) OR (auth.uid() = receiver_id))",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "DELETE",
+      "name": "Users can delete their own conversations",
+      "roles": [
+        "public"
+      ],
+      "table": "conversations",
+      "using": "((auth.uid() = user1_id) OR (auth.uid() = user2_id))",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Users can insert conversations",
+      "roles": [
+        "public"
+      ],
+      "table": "conversations",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "((auth.uid() = user1_id) OR (auth.uid() = user2_id))"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Users can view their own conversations",
+      "roles": [
+        "public"
+      ],
+      "table": "conversations",
+      "using": "((auth.uid() = user1_id) OR (auth.uid() = user2_id))",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "DELETE",
+      "name": "Enable delete for own likes",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "likes",
+      "using": "(auth.uid() = user_id)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Enable insert for own likes",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "likes",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(auth.uid() = user_id)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Enable read access for authenticated users",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "likes",
+      "using": "(auth.role() = 'authenticated'::text)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "likes_update_own",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "likes",
+      "using": "(auth.uid() = user_id)",
+      "permissive": "PERMISSIVE",
+      "with_check": "(auth.uid() = user_id)"
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Users can mark messages as read",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "messages",
+      "using": "((sender_id <> auth.uid()) AND (EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = messages.conversation_id) AND ((c.user1_id = auth.uid()) OR (c.user2_id = auth.uid()))))))",
+      "permissive": "PERMISSIVE",
+      "with_check": "((sender_id <> auth.uid()) AND (EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = messages.conversation_id) AND ((c.user1_id = auth.uid()) OR (c.user2_id = auth.uid()))))))"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Users can read messages from their conversations",
+      "roles": [
+        "public"
+      ],
+      "table": "messages",
+      "using": "(EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = messages.conversation_id) AND ((c.user1_id = auth.uid()) OR (c.user2_id = auth.uid())))))",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "enforce_active_connection_on_insert",
+      "roles": [
+        "public"
+      ],
+      "table": "messages",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(EXISTS ( SELECT 1\n   FROM (conversations c\n     JOIN connections conn ON ((((conn.requester_id = c.user1_id) AND (conn.receiver_id = c.user2_id)) OR ((conn.requester_id = c.user2_id) AND (conn.receiver_id = c.user1_id)))))\n  WHERE ((c.id = messages.conversation_id) AND (conn.status = 'accepted'::text))))"
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Users can update their own notifications",
+      "roles": [
+        "public"
+      ],
+      "table": "notifications",
+      "using": "(auth.uid() = user_id)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Users can view their own notifications",
+      "roles": [
+        "public"
+      ],
+      "table": "notifications",
+      "using": "(auth.uid() = user_id)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Enable read access for authenticated users",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "open_position",
+      "using": "(auth.role() = 'authenticated'::text)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Anyone can read impression counts",
+      "roles": [
+        "public"
+      ],
+      "table": "post_impressions",
+      "using": "true",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Users can insert own impressions",
+      "roles": [
+        "public"
+      ],
+      "table": "post_impressions",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(auth.uid() = user_id)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Users can read own impressions",
+      "roles": [
+        "public"
+      ],
+      "table": "post_impressions",
+      "using": "(auth.uid() = user_id)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Users can update own impressions",
+      "roles": [
+        "public"
+      ],
+      "table": "post_impressions",
+      "using": "(auth.uid() = user_id)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Admins can read all reports",
+      "roles": [
+        "public"
+      ],
+      "table": "post_reports",
+      "using": "((((auth.jwt() -> 'app_metadata'::text) ->> 'is_admin'::text))::boolean = true)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Admins can update reports",
+      "roles": [
+        "public"
+      ],
+      "table": "post_reports",
+      "using": "((((auth.jwt() -> 'app_metadata'::text) ->> 'is_admin'::text))::boolean = true)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Users can report posts",
+      "roles": [
+        "public"
+      ],
+      "table": "post_reports",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(auth.uid() = reporter_id)"
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Enable insert for authenticated users",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "posts",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(auth.role() = 'authenticated'::text)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Enable read access for authenticated users",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "posts",
+      "using": "(auth.role() = 'authenticated'::text)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "DELETE",
+      "name": "Users can delete their own posts",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "posts",
+      "using": "((auth.jwt() ->> 'email'::text) = sender)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Users can update their own posts",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "posts",
+      "using": "((auth.jwt() ->> 'email'::text) = sender)",
+      "permissive": "PERMISSIVE",
+      "with_check": "((auth.jwt() ->> 'email'::text) = sender)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "posts_select_realtime",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "posts",
+      "using": "((community_members_only IS NOT TRUE) OR (((auth.jwt() -> 'app_metadata'::text) ->> 'role'::text) IS DISTINCT FROM 'recruiters'::text))",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "DELETE",
+      "name": "Users can delete their own saves",
+      "roles": [
+        "public"
+      ],
+      "table": "saved_resources",
+      "using": "(auth.uid() = user_id)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Users can insert their own saves",
+      "roles": [
+        "public"
+      ],
+      "table": "saved_resources",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(auth.uid() = user_id)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Users can view their own saves",
+      "roles": [
+        "public"
+      ],
+      "table": "saved_resources",
+      "using": "(auth.uid() = user_id)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "ALL",
+      "name": "Users manage own scheduled posts",
+      "roles": [
+        "public"
+      ],
+      "table": "scheduled_posts",
+      "using": "(posted_by_uuid = auth.uid())",
+      "permissive": "PERMISSIVE",
+      "with_check": "(posted_by_uuid = auth.uid())"
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Enable insert for own user",
+      "roles": [
+        "public"
+      ],
+      "table": "users",
+      "using": null,
+      "permissive": "PERMISSIVE",
+      "with_check": "(auth.uid() = uuid)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Enable read access for all authenticated users",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "users",
+      "using": "(auth.role() = 'authenticated'::text)",
+      "permissive": "PERMISSIVE",
+      "with_check": null
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Enable update for users based on uuid",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "users",
+      "using": "(auth.uid() = uuid)",
+      "permissive": "PERMISSIVE",
+      "with_check": "(auth.uid() = uuid)"
+    }
+  ],
+  "taken_at": "2026-11-11T14:00:20.229568+00:00",
+  "triggers": [
+    {
+      "def": "CREATE TRIGGER on_new_follow AFTER INSERT ON public.article_author_follows FOR EACH ROW EXECUTE FUNCTION notify_new_follow()",
+      "name": "on_new_follow",
+      "table": "article_author_follows",
+      "enabled": "O",
+      "function": "notify_new_follow"
+    },
+    {
+      "def": "CREATE TRIGGER on_article_published AFTER UPDATE OF status ON public.articles FOR EACH ROW WHEN (((new.status = 'published'::text) AND (old.status IS DISTINCT FROM 'published'::text) AND (new.deleted_at IS NULL))) EXECUTE FUNCTION notify_article_published()",
+      "name": "on_article_published",
+      "table": "articles",
+      "enabled": "O",
+      "function": "notify_article_published"
+    },
+    {
+      "def": "CREATE TRIGGER audit_comments_trigger AFTER INSERT OR DELETE OR UPDATE ON public.comments FOR EACH ROW EXECUTE FUNCTION audit_everything_with_subject()",
+      "name": "audit_comments_trigger",
+      "table": "comments",
+      "enabled": "O",
+      "function": "audit_everything_with_subject"
+    },
+    {
+      "def": "CREATE TRIGGER on_comment_reply_and_mentions AFTER INSERT ON public.comments FOR EACH ROW EXECUTE FUNCTION notify_comment_reply_and_mentions()",
+      "name": "on_comment_reply_and_mentions",
+      "table": "comments",
+      "enabled": "O",
+      "function": "notify_comment_reply_and_mentions"
+    },
+    {
+      "def": "CREATE TRIGGER on_delete_comment AFTER DELETE ON public.comments FOR EACH ROW EXECUTE FUNCTION handle_delete_comment()",
+      "name": "on_delete_comment",
+      "table": "comments",
+      "enabled": "O",
+      "function": "handle_delete_comment"
+    },
+    {
+      "def": "CREATE TRIGGER on_new_comment AFTER INSERT ON public.comments FOR EACH ROW EXECUTE FUNCTION handle_new_comment()",
+      "name": "on_new_comment",
+      "table": "comments",
+      "enabled": "O",
+      "function": "handle_new_comment"
+    },
+    {
+      "def": "CREATE TRIGGER trg_comment_inserted AFTER INSERT ON public.comments FOR EACH ROW WHEN ((new.sender IS NOT NULL)) EXECUTE FUNCTION trg_user_activity_on_comment()",
+      "name": "trg_comment_inserted",
+      "table": "comments",
+      "enabled": "O",
+      "function": "trg_user_activity_on_comment"
+    },
+    {
+      "def": "CREATE TRIGGER trg_feed_cache_comment_delete AFTER DELETE ON public.comments FOR EACH ROW EXECUTE FUNCTION feed_cache_on_comment_delete()",
+      "name": "trg_feed_cache_comment_delete",
+      "table": "comments",
+      "enabled": "O",
+      "function": "feed_cache_on_comment_delete"
+    },
+    {
+      "def": "CREATE TRIGGER trg_feed_cache_comment_insert AFTER INSERT ON public.comments FOR EACH ROW EXECUTE FUNCTION feed_cache_on_comment_insert()",
+      "name": "trg_feed_cache_comment_insert",
+      "table": "comments",
+      "enabled": "O",
+      "function": "feed_cache_on_comment_insert"
+    },
+    {
+      "def": "CREATE TRIGGER trigger_archive_deleted_comment AFTER DELETE ON public.comments FOR EACH ROW EXECUTE FUNCTION archive_deleted_comment()",
+      "name": "trigger_archive_deleted_comment",
+      "table": "comments",
+      "enabled": "O",
+      "function": "archive_deleted_comment"
+    },
+    {
+      "def": "CREATE TRIGGER on_cancel_connection AFTER DELETE ON public.connections FOR EACH ROW EXECUTE FUNCTION handle_cancel_connection()",
+      "name": "on_cancel_connection",
+      "table": "connections",
+      "enabled": "O",
+      "function": "handle_cancel_connection"
+    },
+    {
+      "def": "CREATE TRIGGER on_connection_change AFTER INSERT OR UPDATE ON public.connections FOR EACH ROW EXECUTE FUNCTION handle_connection_change()",
+      "name": "on_connection_change",
+      "table": "connections",
+      "enabled": "O",
+      "function": "handle_connection_change"
+    },
+    {
+      "def": "CREATE TRIGGER trg_connection_accepted AFTER UPDATE ON public.connections FOR EACH ROW EXECUTE FUNCTION trg_user_activity_on_connection()",
+      "name": "trg_connection_accepted",
+      "table": "connections",
+      "enabled": "O",
+      "function": "trg_user_activity_on_connection"
+    },
+    {
+      "def": "CREATE TRIGGER audit_likes_trigger AFTER INSERT OR DELETE OR UPDATE ON public.likes FOR EACH ROW EXECUTE FUNCTION audit_everything_with_subject()",
+      "name": "audit_likes_trigger",
+      "table": "likes",
+      "enabled": "O",
+      "function": "audit_everything_with_subject"
+    },
+    {
+      "def": "CREATE TRIGGER on_comment_reaction AFTER INSERT ON public.likes FOR EACH ROW WHEN ((lower(new.target_type) = 'comment'::text)) EXECUTE FUNCTION notify_comment_reaction()",
+      "name": "on_comment_reaction",
+      "table": "likes",
+      "enabled": "O",
+      "function": "notify_comment_reaction"
+    },
+    {
+      "def": "CREATE TRIGGER on_new_like AFTER INSERT ON public.likes FOR EACH ROW EXECUTE FUNCTION handle_new_like()",
+      "name": "on_new_like",
+      "table": "likes",
+      "enabled": "O",
+      "function": "handle_new_like"
+    },
+    {
+      "def": "CREATE TRIGGER on_unlike AFTER DELETE ON public.likes FOR EACH ROW EXECUTE FUNCTION handle_unlike()",
+      "name": "on_unlike",
+      "table": "likes",
+      "enabled": "O",
+      "function": "handle_unlike"
+    },
+    {
+      "def": "CREATE TRIGGER trg_like_inserted AFTER INSERT ON public.likes FOR EACH ROW WHEN ((new.user_id IS NOT NULL)) EXECUTE FUNCTION trg_user_activity_on_like()",
+      "name": "trg_like_inserted",
+      "table": "likes",
+      "enabled": "O",
+      "function": "trg_user_activity_on_like"
+    },
+    {
+      "def": "CREATE TRIGGER process_job_ai_v3 AFTER INSERT ON public.open_position FOR EACH ROW EXECUTE FUNCTION supabase_functions.http_request('https://csfyofqntrfxsystdzca.supabase.co/functions/v1/process-job-ai', 'POST', '{\"Content-type\":\"application/json\"}', '{}', '9989')",
+      "name": "process_job_ai_v3",
+      "table": "open_position",
+      "enabled": "D",
+      "function": "supabase_functions.http_request"
+    },
+    {
+      "def": "CREATE TRIGGER tr_fts_update BEFORE INSERT OR UPDATE ON public.open_position FOR EACH ROW EXECUTE FUNCTION open_position_fts_update()",
+      "name": "tr_fts_update",
+      "table": "open_position",
+      "enabled": "O",
+      "function": "open_position_fts_update"
+    },
+    {
+      "def": "CREATE TRIGGER trigger_ai_simple_restart AFTER INSERT ON public.open_position FOR EACH STATEMENT EXECUTE FUNCTION fn_trigger_ai_restart()",
+      "name": "trigger_ai_simple_restart",
+      "table": "open_position",
+      "enabled": "D",
+      "function": "fn_trigger_ai_restart"
+    },
+    {
+      "def": "CREATE TRIGGER trigger_delete_saved_positions BEFORE DELETE ON public.open_position FOR EACH ROW EXECUTE FUNCTION delete_saved_positions()",
+      "name": "trigger_delete_saved_positions",
+      "table": "open_position",
+      "enabled": "O",
+      "function": "delete_saved_positions"
+    },
+    {
+      "def": "CREATE TRIGGER audit_posts_trigger AFTER INSERT OR DELETE OR UPDATE ON public.posts FOR EACH ROW EXECUTE FUNCTION audit_everything_with_subject()",
+      "name": "audit_posts_trigger",
+      "table": "posts",
+      "enabled": "O",
+      "function": "audit_everything_with_subject"
+    },
+    {
+      "def": "CREATE TRIGGER on_post_mentions AFTER INSERT ON public.posts FOR EACH ROW WHEN (((new.posted_by_uuid IS NOT NULL) AND (new.post_type IS NOT NULL) AND (new.post_type <> 'email'::text))) EXECUTE FUNCTION notify_post_mentions()",
+      "name": "on_post_mentions",
+      "table": "posts",
+      "enabled": "O",
+      "function": "notify_post_mentions"
+    },
+    {
+      "def": "CREATE TRIGGER trg_feed_cache_post_insert AFTER INSERT ON public.posts FOR EACH ROW EXECUTE FUNCTION feed_cache_on_post_insert()",
+      "name": "trg_feed_cache_post_insert",
+      "table": "posts",
+      "enabled": "O",
+      "function": "feed_cache_on_post_insert"
+    },
+    {
+      "def": "CREATE TRIGGER trg_feed_cache_post_update AFTER UPDATE OF community_members_only, post_type, sender ON public.posts FOR EACH ROW EXECUTE FUNCTION feed_cache_on_post_update()",
+      "name": "trg_feed_cache_post_update",
+      "table": "posts",
+      "enabled": "O",
+      "function": "feed_cache_on_post_update"
+    },
+    {
+      "def": "CREATE TRIGGER trg_post_inserted AFTER INSERT ON public.posts FOR EACH ROW WHEN ((new.posted_by_uuid IS NOT NULL)) EXECUTE FUNCTION trg_user_activity_on_post()",
+      "name": "trg_post_inserted",
+      "table": "posts",
+      "enabled": "O",
+      "function": "trg_user_activity_on_post"
+    },
+    {
+      "def": "CREATE TRIGGER trigger_archive_deleted_post AFTER DELETE ON public.posts FOR EACH ROW EXECUTE FUNCTION archive_deleted_post()",
+      "name": "trigger_archive_deleted_post",
+      "table": "posts",
+      "enabled": "O",
+      "function": "archive_deleted_post"
+    },
+    {
+      "def": "CREATE TRIGGER trigger_delete_saved_posts BEFORE DELETE ON public.posts FOR EACH ROW EXECUTE FUNCTION delete_saved_posts()",
+      "name": "trigger_delete_saved_posts",
+      "table": "posts",
+      "enabled": "O",
+      "function": "delete_saved_posts"
+    },
+    {
+      "def": "CREATE TRIGGER correct_role_on_user_insert BEFORE INSERT ON public.users FOR EACH ROW EXECUTE FUNCTION correct_role_from_invite()",
+      "name": "correct_role_on_user_insert",
+      "table": "users",
+      "enabled": "O",
+      "function": "correct_role_from_invite"
+    },
+    {
+      "def": "CREATE TRIGGER enforce_invite_on_user_insert BEFORE INSERT ON public.users FOR EACH ROW EXECUTE FUNCTION check_invite_before_user_insert()",
+      "name": "enforce_invite_on_user_insert",
+      "table": "users",
+      "enabled": "O",
+      "function": "check_invite_before_user_insert"
+    },
+    {
+      "def": "CREATE TRIGGER on_user_role_update AFTER INSERT OR UPDATE OF role ON public.users FOR EACH ROW EXECUTE FUNCTION sync_user_role()",
+      "name": "on_user_role_update",
+      "table": "users",
+      "enabled": "O",
+      "function": "sync_user_role"
+    },
+    {
+      "def": "CREATE TRIGGER trg_delete_inner_circle_on_anonymous AFTER UPDATE OF is_anonymous, role ON public.users FOR EACH ROW EXECUTE FUNCTION handle_anonymous_transition()",
+      "name": "trg_delete_inner_circle_on_anonymous",
+      "table": "users",
+      "enabled": "O",
+      "function": "handle_anonymous_transition"
+    },
+    {
+      "def": "CREATE TRIGGER trg_people_search_users AFTER INSERT OR DELETE OR UPDATE OF first_name, last_name, privacy_lastname, headline, experience, skills, education, certifications, projects, about, location, is_anonymous, email, role ON public.users FOR EACH ROW EXECUTE FUNCTION people_search_users_trigger()",
+      "name": "trg_people_search_users",
+      "table": "users",
+      "enabled": "O",
+      "function": "people_search_users_trigger"
+    },
+    {
+      "def": "CREATE TRIGGER trg_sync_user_to_company AFTER UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION sync_user_to_company()",
+      "name": "trg_sync_user_to_company",
+      "table": "users",
+      "enabled": "O",
+      "function": "sync_user_to_company"
+    }
+  ],
+  "functions": [
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.archive_deleted_comment()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\r\nBEGIN\r\n  INSERT INTO public.deleted_comments (\r\n    id,\r\n    post_id,\r\n    sender,\r\n    message,\r\n    attachments,\r\n    created_at,\r\n    community_members_only,\r\n    deleted_at\r\n  )\r\n  VALUES (\r\n    OLD.id,\r\n    OLD.post_id,\r\n    OLD.sender,\r\n    OLD.message,\r\n    OLD.attachments,\r\n    OLD.created_at,\r\n    OLD.community_members_only,\r\n    now()\r\n  );\r\n\r\n  RETURN OLD;\r\nEND;\r\n$function$\n",
+      "args": "",
+      "name": "archive_deleted_comment",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.archive_deleted_post()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\r\nBEGIN\r\n  INSERT INTO public.deleted_posts (\r\n    id,\r\n    sender,\r\n    subject,\r\n    message,\r\n    attachments,\r\n    sent_at,\r\n    post_type,\r\n    community_members_only,\r\n    deleted_at\r\n  )\r\n  VALUES (\r\n    OLD.id,\r\n    OLD.sender,\r\n    OLD.subject,\r\n    OLD.message,\r\n    OLD.attachments,\r\n    OLD.sent_at,\r\n    OLD.post_type,\r\n    OLD.community_members_only,\r\n    now()\r\n  );\r\n\r\n  RETURN OLD;\r\nEND;\r\n$function$\n",
+      "args": "",
+      "name": "archive_deleted_post",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.audit_everything_with_subject()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nDECLARE\n    _user_id uuid;\n    _resource public.audit_resource;\n    _action public.audit_action;\n    _resource_id text;\n    _post_subject text;\n    _rec RECORD; \nBEGIN\n    IF (TG_OP = 'DELETE') THEN\n        _action := 'DELETE';\n        _rec := OLD;\n    ELSIF (TG_OP = 'UPDATE') THEN\n        _action := 'UPDATE';\n        _rec := NEW;\n    ELSE\n        _action := 'CREATE';\n        _rec := NEW;\n    END IF;\n\n    IF (TG_TABLE_NAME = 'posts') THEN\n        _resource := 'POST';\n        _resource_id := _rec.id;\n        _post_subject := _rec.subject;\n        SELECT uuid INTO _user_id FROM public.users \n        WHERE email = _rec.sender OR uuid::text = _rec.sender LIMIT 1;\n\n    ELSIF (TG_TABLE_NAME = 'comments') THEN\n        _resource := 'COMMENT';\n        _resource_id := _rec.id::text;\n        SELECT uuid INTO _user_id FROM public.users \n        WHERE email = _rec.sender OR uuid::text = _rec.sender LIMIT 1;\n        SELECT subject INTO _post_subject \n        FROM public.posts WHERE id = _rec.post_id;\n\n    ELSIF (TG_TABLE_NAME = 'likes') THEN\n        _resource := 'LIKE';\n        _user_id := _rec.user_id;\n        _resource_id := _rec.id::text;\n\n        IF (_rec.target_type = 'post') THEN\n            SELECT subject INTO _post_subject \n            FROM public.posts WHERE id = _rec.target_id;\n        ELSIF (_rec.target_type = 'comment') THEN\n            SELECT p.subject INTO _post_subject\n            FROM public.posts p\n            JOIN public.comments c ON p.id = c.post_id\n            WHERE c.id = _rec.target_id::bigint;\n        -- article and other types: _post_subject stays NULL\n        END IF;\n    END IF;\n\n    IF _user_id IS NULL THEN\n        RETURN NULL;\n    END IF;\n\n    INSERT INTO public.user_audits (\n        user_id, resource, request_type, resource_id, metadata\n    ) VALUES (\n        _user_id, _resource, _action, _resource_id,\n        jsonb_build_object('post_subject', _post_subject)\n    );\n\n    RETURN NULL;\nEND;\n$function$\n",
+      "args": "",
+      "name": "audit_everything_with_subject",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.check_invite_before_user_insert()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nBEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM public.invites\n    WHERE LOWER(recipient_email) = LOWER(NEW.email)\n      AND status = 'pending'\n      AND (expires_at IS NULL OR expires_at > NOW())\n  ) THEN\n    RAISE EXCEPTION 'insert_without_invite: No valid pending invite for email: %', NEW.email\n      USING ERRCODE = 'P0001';\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "check_invite_before_user_insert",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.correct_role_from_invite()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nDECLARE\n  invite_role TEXT;\nBEGIN\n  SELECT i.role INTO invite_role\n  FROM public.invites i\n  WHERE LOWER(TRIM(i.recipient_email)) = LOWER(TRIM(NEW.email))\n    AND i.status = 'pending'\n    AND (i.expires_at IS NULL OR i.expires_at > NOW())\n  ORDER BY i.created_at DESC\n  LIMIT 1;\n\n  IF invite_role IS NOT NULL AND invite_role != 'community' THEN\n    NEW.role := invite_role;\n  END IF;\n\n  RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "correct_role_from_invite",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.delete_saved_positions()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\r\nBEGIN\r\n  DELETE FROM public.saved_resources \r\n  WHERE saved_resource_type = 'position' \r\n    AND (saved_resource_id = OLD.job_id OR saved_resource_id = OLD.id::text);\r\n  RETURN OLD;\r\nEND;\r\n$function$\n",
+      "args": "",
+      "name": "delete_saved_positions",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.delete_saved_posts()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\r\nBEGIN\r\n  DELETE FROM public.saved_resources \r\n  WHERE saved_resource_type = 'post' \r\n    AND saved_resource_id = OLD.id::text; -- המרה לטקסט כדי להתאים לעמודה ב-saved_resources\r\n  RETURN OLD;\r\nEND;\r\n$function$\n",
+      "args": "",
+      "name": "delete_saved_posts",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.extract_mention_ids(p_text text, p_html_only boolean DEFAULT false)\n RETURNS SETOF uuid\n LANGUAGE sql\n IMMUTABLE\nAS $function$\n  SELECT DISTINCT lower(m[1])::uuid FROM (\n    SELECT regexp_matches(coalesce(p_text, ''),\n      'data-user-id=\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\"', 'g') AS m\n    UNION ALL\n    SELECT regexp_matches(coalesce(p_text, ''),\n      '@\\[[^\\]]+\\]\\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\)', 'g')\n    WHERE NOT p_html_only\n  ) s;\n$function$\n",
+      "args": "p_text text, p_html_only boolean",
+      "name": "extract_mention_ids",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.feed_cache_on_comment_delete()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  UPDATE feed_cache\n  SET effective_date = COALESCE(\n    (SELECT MAX(created_at) FROM comments WHERE post_id = OLD.post_id),\n    sent_at\n  )\n  WHERE post_id = OLD.post_id;\n  RETURN NULL;\nEND;\n$function$\n",
+      "args": "",
+      "name": "feed_cache_on_comment_delete",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.feed_cache_on_comment_insert()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  UPDATE feed_cache\n  SET effective_date = GREATEST(effective_date, NEW.created_at)\n  WHERE post_id = NEW.post_id;\n  RETURN NULL;\nEND;\n$function$\n",
+      "args": "",
+      "name": "feed_cache_on_comment_insert",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.feed_cache_on_post_insert()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF NEW.post_type IS NOT NULL AND NEW.post_type != 'email' AND NEW.sent_at IS NOT NULL THEN\n    INSERT INTO feed_cache(post_id, effective_date, sender, post_type, community_members_only, sent_at)\n    VALUES (\n      NEW.id,\n      NEW.sent_at,\n      NEW.sender,\n      NEW.post_type,\n      COALESCE(NEW.community_members_only, false),\n      NEW.sent_at\n    )\n    ON CONFLICT (post_id) DO NOTHING;\n  END IF;\n  RETURN NULL;\nEND;\n$function$\n",
+      "args": "",
+      "name": "feed_cache_on_post_insert",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.feed_cache_on_post_update()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  UPDATE feed_cache\n  SET community_members_only = COALESCE(NEW.community_members_only, false),\n      post_type              = NEW.post_type,\n      sender                 = NEW.sender\n  WHERE post_id = NEW.id;\n  RETURN NULL;\nEND;\n$function$\n",
+      "args": "",
+      "name": "feed_cache_on_post_update",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.fn_trigger_ai_restart()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\r\nBEGIN\r\n  PERFORM net.http_post(\r\n    url := 'https://csfyofqntrfxsystdzca.supabase.co/functions/v1/process-job-ai'::text\r\n  );\r\n  RETURN NULL;\r\nEND;\r\n$function$\n",
+      "args": "",
+      "name": "fn_trigger_ai_restart",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.get_post_impressions_chart(p_sender_email text, p_start_date date, p_end_date date)\n RETURNS TABLE(impression_date date, daily_count bigint)\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT pi.impression_date, COUNT(*)::BIGINT AS daily_count\n  FROM post_impressions pi\n  JOIN posts p ON p.id::TEXT = pi.post_id\n  WHERE LOWER(p.sender) = LOWER(p_sender_email)\n    AND pi.impression_date BETWEEN p_start_date AND p_end_date\n  GROUP BY pi.impression_date\n  ORDER BY pi.impression_date;\n$function$\n",
+      "args": "p_sender_email text, p_start_date date, p_end_date date",
+      "name": "get_post_impressions_chart",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.get_stabilized_feed(p_session_start timestamp with time zone, p_last_effective_date timestamp with time zone DEFAULT NULL::timestamp with time zone, p_last_id text DEFAULT NULL::text, p_limit integer DEFAULT 25, p_filter_email text DEFAULT NULL::text)\n RETURNS TABLE(id text, sender text, subject text, message text, attachments jsonb, sent_at timestamp with time zone, post_type text, community_members_only boolean, effective_sort_date timestamp with time zone, is_saved boolean, company_id bigint, posted_by_uuid uuid, linked_article_id text)\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT\n    p.id::text,\n    p.sender::text,\n    p.subject::text,\n    p.message::text,\n    p.attachments::jsonb,\n    p.sent_at::timestamptz,\n    p.post_type::text,\n    COALESCE(p.community_members_only, false)::boolean,\n    fc.effective_date::timestamptz AS effective_sort_date,\n    EXISTS (\n      SELECT 1 FROM saved_resources sr\n      WHERE sr.saved_resource_id  = p.id::text\n        AND sr.user_id            = auth.uid()\n        AND sr.saved_resource_type = 'post'\n    )::boolean AS is_saved,\n    p.company_id,\n    p.posted_by_uuid,\n    p.linked_article_id::text\n  FROM feed_cache fc\n  JOIN posts p ON p.id = fc.post_id\n  WHERE\n    (p_filter_email IS NULL OR fc.sender = p_filter_email)\n    AND (\n      p_last_effective_date IS NULL\n      OR fc.effective_date < p_last_effective_date\n      OR (fc.effective_date = p_last_effective_date AND fc.post_id < p_last_id)\n    )\n  ORDER BY fc.effective_date DESC, fc.post_id DESC\n  LIMIT p_limit;\n$function$\n",
+      "args": "p_session_start timestamp with time zone, p_last_effective_date timestamp with time zone, p_last_id text, p_limit integer, p_filter_email text",
+      "name": "get_stabilized_feed",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.get_user_email_by_uuid(p_uuid uuid)\n RETURNS text\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\r\nDECLARE\r\n    v_email text;\r\nBEGIN\r\n    SELECT email INTO v_email\r\n    FROM public.users\r\n    WHERE uuid = p_uuid;\r\n    \r\n    RETURN v_email;\r\nEND;\r\n$function$\n",
+      "args": "p_uuid uuid",
+      "name": "get_user_email_by_uuid",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.get_uuid_by_email(p_email text)\n RETURNS uuid\n LANGUAGE sql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\n  SELECT id FROM auth.users WHERE lower(email) = lower(trim(p_email)) LIMIT 1;\n$function$\n",
+      "args": "p_email text",
+      "name": "get_uuid_by_email",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.handle_anonymous_transition()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\r\ndeclare\r\n  found_convs_count int;\r\nbegin\r\n  -- 1. לוג: האם הטריגר בכלל זיהה את התנאי?\r\n  if (new.is_anonymous = true) or (new.role::text = 'feed_participant') then\r\n    \r\n    raise notice 'TRIGGER DEBUG: User % is going anonymous. Role: %', new.uuid, new.role;\r\n\r\n    -- 2. בדיקה: כמה שיחות קיימות למשתמש הזה ברגע זה?\r\n    select count(*) into found_convs_count \r\n    from public.conversations \r\n    where user1_id = new.uuid or user2_id = new.uuid;\r\n    \r\n    raise notice 'TRIGGER DEBUG: Found % conversations to delete', found_convs_count;\r\n\r\n    -- 3. ניסיון המחיקה\r\n    delete from public.connections where requester_id = new.uuid or receiver_id = new.uuid;\r\n    \r\n    delete from public.conversations where user1_id = new.uuid or user2_id = new.uuid;\r\n\r\n    raise notice 'TRIGGER DEBUG: Cleanup finished for user %', new.uuid;\r\n  else\r\n    raise notice 'TRIGGER DEBUG: Condition not met for user %. Anon: %, Role: %', new.uuid, new.is_anonymous, new.role;\r\n  end if;\r\n\r\n  return new;\r\nend;\r\n$function$\n",
+      "args": "",
+      "name": "handle_anonymous_transition",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.handle_cancel_connection()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\r\nBEGIN\r\n    -- אם הסטטוס היה pending (כלומר עדיין לא אושר), נמחק את ההתראה\r\n    IF OLD.status = 'pending' THEN\r\n        DELETE FROM notifications \r\n        WHERE user_id = OLD.receiver_id \r\n          AND actor_id = OLD.requester_id \r\n          AND type = 'CONN_REQ';\r\n    END IF;\r\n    \r\n    RETURN OLD;\r\nEND;\r\n$function$\n",
+      "args": "",
+      "name": "handle_cancel_connection",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.handle_connection_change()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\r\nBEGIN\r\n    -- מקרה 1: בקשה חדשה נוצרת (INSERT)\r\n    -- המשתמש המקבל (receiver) מקבל התראה שמישהו (requester) רוצה להתחבר\r\n    IF (TG_OP = 'INSERT' AND NEW.status = 'pending') THEN\r\n        INSERT INTO notifications (user_id, actor_id, target_id, type, count)\r\n        VALUES (NEW.receiver_id, NEW.requester_id, NEW.requester_id, 'CONN_REQ', 1);\r\n    \r\n    -- מקרה 2: סטטוס משתנה למאושר (UPDATE)\r\n    -- המשתמש ששלח את הבקשה (requester) מקבל התראה שאישרו אותו\r\n    ELSIF (TG_OP = 'UPDATE' AND OLD.status = 'pending' AND NEW.status = 'accepted') THEN\r\n        INSERT INTO notifications (user_id, actor_id, target_id, type, count)\r\n        VALUES (NEW.requester_id, NEW.receiver_id, NEW.receiver_id, 'CONN_ACCEPT', 1);\r\n    END IF;\r\n\r\n    RETURN NEW;\r\nEND;\r\n$function$\n",
+      "args": "",
+      "name": "handle_connection_change",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.handle_delete_comment()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$DECLARE\r\n    post_owner_uuid UUID;\r\n    commenter_uuid UUID;\r\n    existing_notif_id UUID;\r\n    current_count INT;\r\nBEGIN\r\n    SELECT uuid INTO post_owner_uuid \r\n    FROM \"users\" \r\n    WHERE email = (SELECT sender FROM posts WHERE id = OLD.post_id::TEXT);\r\n    \r\n    SELECT uuid INTO commenter_uuid FROM \"users\" WHERE email = OLD.sender;\r\n\r\n    IF post_owner_uuid IS NULL OR post_owner_uuid = commenter_uuid THEN\r\n        RETURN OLD;\r\n    END IF;\r\n\r\n    SELECT id, count INTO existing_notif_id, current_count\r\n    FROM notifications\r\n    WHERE user_id = post_owner_uuid \r\n      AND target_id = OLD.post_id::TEXT \r\n      AND type = 'POST_COMMENT'\r\n    ORDER BY created_at DESC\r\n    LIMIT 1;\r\n\r\n    IF existing_notif_id IS NOT NULL THEN\r\n        IF current_count > 1 THEN\r\n            UPDATE notifications SET count = count - 1 WHERE id = existing_notif_id;\r\n        ELSE\r\n            DELETE FROM notifications WHERE id = existing_notif_id;\r\n        END IF;\r\n    END IF;\r\n\r\n    RETURN OLD;\r\nEND;$function$\n",
+      "args": "",
+      "name": "handle_delete_comment",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.handle_new_comment()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nDECLARE\n    post_owner_uuid UUID;\n    commenter_uuid UUID;\n    existing_notif_id UUID;\nBEGIN\n    SELECT uuid INTO post_owner_uuid FROM \"users\"\n    WHERE email = (SELECT sender FROM posts WHERE id = NEW.post_id::TEXT);\n\n    SELECT uuid INTO commenter_uuid FROM \"users\" WHERE email = NEW.sender;\n\n    IF post_owner_uuid IS NULL OR post_owner_uuid = commenter_uuid THEN RETURN NEW; END IF;\n\n    SELECT id INTO existing_notif_id FROM notifications\n    WHERE user_id = post_owner_uuid AND target_id = NEW.post_id::TEXT\n      AND type = 'POST_COMMENT' AND is_read = FALSE LIMIT 1;\n\n    IF existing_notif_id IS NOT NULL THEN\n        UPDATE notifications SET count = count + 1, actor_id = commenter_uuid, updated_at = now()\n        WHERE id = existing_notif_id;\n    ELSE\n        INSERT INTO notifications (user_id, actor_id, target_id, type, count)\n        VALUES (post_owner_uuid, commenter_uuid, NEW.post_id::TEXT, 'POST_COMMENT', 1);\n    END IF;\n\n    RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "handle_new_comment",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.handle_new_like()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nDECLARE\n    owner_uuid UUID;\n    existing_notif_id UUID;\n    notif_type TEXT;\nBEGIN\n    IF LOWER(NEW.target_type) = 'post' THEN\n        notif_type := 'POST_LIKE';\n        SELECT uuid INTO owner_uuid\n        FROM \"users\"\n        WHERE email = (SELECT sender FROM posts WHERE id = NEW.target_id::TEXT);\n    ELSIF LOWER(NEW.target_type) = 'article' THEN\n        notif_type := 'ARTICLE_LIKE';\n        SELECT author_uuid INTO owner_uuid\n        FROM articles WHERE id = NEW.target_id::uuid;\n    ELSE\n        RETURN NEW;\n    END IF;\n\n    IF owner_uuid IS NULL OR owner_uuid = NEW.user_id THEN RETURN NEW; END IF;\n\n    SELECT id INTO existing_notif_id FROM notifications\n    WHERE user_id = owner_uuid AND target_id = NEW.target_id::TEXT\n      AND type = notif_type AND is_read = FALSE LIMIT 1;\n\n    IF existing_notif_id IS NOT NULL THEN\n        UPDATE notifications SET count = count + 1, actor_id = NEW.user_id, updated_at = now()\n        WHERE id = existing_notif_id;\n    ELSE\n        INSERT INTO notifications (user_id, actor_id, target_id, type, count)\n        VALUES (owner_uuid, NEW.user_id, NEW.target_id::TEXT, notif_type, 1);\n    END IF;\n\n    RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "handle_new_like",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.handle_unlike()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nDECLARE\n    owner_uuid UUID;\n    existing_notif_id UUID;\n    current_count INT;\n    notif_type TEXT;\nBEGIN\n    IF LOWER(OLD.target_type) = 'post' THEN\n        notif_type := 'POST_LIKE';\n        SELECT uuid INTO owner_uuid\n        FROM \"users\"\n        WHERE email = (SELECT sender FROM posts WHERE id = OLD.target_id::TEXT);\n\n    ELSIF LOWER(OLD.target_type) = 'article' THEN\n        notif_type := 'ARTICLE_LIKE';\n        SELECT author_uuid INTO owner_uuid\n        FROM articles\n        WHERE id = OLD.target_id::uuid;\n\n    ELSE\n        RETURN OLD;\n    END IF;\n\n    IF owner_uuid IS NULL OR owner_uuid = OLD.user_id THEN\n        RETURN OLD;\n    END IF;\n\n    SELECT id, count INTO existing_notif_id, current_count\n    FROM notifications\n    WHERE user_id = owner_uuid\n      AND target_id = OLD.target_id::TEXT\n      AND type = notif_type\n    ORDER BY created_at DESC\n    LIMIT 1;\n\n    IF existing_notif_id IS NOT NULL THEN\n        IF current_count > 1 THEN\n            UPDATE notifications SET count = count - 1 WHERE id = existing_notif_id;\n        ELSE\n            DELETE FROM notifications WHERE id = existing_notif_id;\n        END IF;\n    END IF;\n\n    RETURN OLD;\nEND;\n$function$\n",
+      "args": "",
+      "name": "handle_unlike",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION supabase_functions.http_request()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'supabase_functions'\nAS $function$\n    DECLARE\n      request_id bigint;\n      payload jsonb;\n      url text := TG_ARGV[0]::text;\n      method text := TG_ARGV[1]::text;\n      headers jsonb DEFAULT '{}'::jsonb;\n      params jsonb DEFAULT '{}'::jsonb;\n      timeout_ms integer DEFAULT 1000;\n    BEGIN\n      IF url IS NULL OR url = 'null' THEN\n        RAISE EXCEPTION 'url argument is missing';\n      END IF;\n\n      IF method IS NULL OR method = 'null' THEN\n        RAISE EXCEPTION 'method argument is missing';\n      END IF;\n\n      IF TG_ARGV[2] IS NULL OR TG_ARGV[2] = 'null' THEN\n        headers = '{\"Content-Type\": \"application/json\"}'::jsonb;\n      ELSE\n        headers = TG_ARGV[2]::jsonb;\n      END IF;\n\n      IF TG_ARGV[3] IS NULL OR TG_ARGV[3] = 'null' THEN\n        params = '{}'::jsonb;\n      ELSE\n        params = TG_ARGV[3]::jsonb;\n      END IF;\n\n      IF TG_ARGV[4] IS NULL OR TG_ARGV[4] = 'null' THEN\n        timeout_ms = 1000;\n      ELSE\n        timeout_ms = TG_ARGV[4]::integer;\n      END IF;\n\n      CASE\n        WHEN method = 'GET' THEN\n          SELECT http_get INTO request_id FROM net.http_get(\n            url,\n            params,\n            headers,\n            timeout_ms\n          );\n        WHEN method = 'POST' THEN\n          payload = jsonb_build_object(\n            'old_record', OLD,\n            'record', NEW,\n            'type', TG_OP,\n            'table', TG_TABLE_NAME,\n            'schema', TG_TABLE_SCHEMA\n          );\n\n          SELECT http_post INTO request_id FROM net.http_post(\n            url,\n            payload,\n            params,\n            headers,\n            timeout_ms\n          );\n        ELSE\n          RAISE EXCEPTION 'method argument % is invalid', method;\n      END CASE;\n\n      INSERT INTO supabase_functions.hooks\n        (hook_table_id, hook_name, request_id)\n      VALUES\n        (TG_RELID, TG_NAME, request_id);\n\n      RETURN NEW;\n    END\n  $function$\n",
+      "args": "",
+      "name": "http_request",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.notify_article_comment()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE\n  v_recipient_id uuid;\nBEGIN\n  -- Try article author first\n  SELECT author_uuid INTO v_recipient_id\n  FROM articles\n  WHERE id = NEW.article_id;\n\n  -- Company article — look up the owner\n  IF v_recipient_id IS NULL THEN\n    SELECT c.owner_uuid INTO v_recipient_id\n    FROM articles a\n    JOIN companies c ON c.id = a.company_id\n    WHERE a.id = NEW.article_id;\n  END IF;\n\n  -- Insert notification, skip self-comments\n  IF v_recipient_id IS NOT NULL AND v_recipient_id != NEW.author_uuid THEN\n    BEGIN\n      INSERT INTO notifications (user_id, actor_id, target_id, type, count, is_read)\n      VALUES (v_recipient_id, NEW.author_uuid, NEW.article_id::text, 'ARTICLE_COMMENT', 1, false);\n    EXCEPTION WHEN OTHERS THEN\n      RAISE WARNING 'notify_article_comment: failed to insert notification: %', SQLERRM;\n    END;\n  END IF;\n\n  RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "notify_article_comment",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.notify_article_published()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE\n  v_actor uuid := coalesce(auth.uid(), NEW.author_uuid);\nBEGIN\n  BEGIN\n    INSERT INTO notifications (user_id, actor_id, target_id, type, count, is_read)\n    SELECT f.follower_uuid, v_actor, NEW.id::text, 'NEW_ARTICLE', 1, false\n    FROM article_author_follows f\n    WHERE NEW.author_uuid IS NOT NULL AND f.author_uuid = NEW.author_uuid\n      AND f.follower_uuid IS DISTINCT FROM v_actor;\n\n    -- company followers who don't already follow the author\n    INSERT INTO notifications (user_id, actor_id, target_id, type, count, is_read)\n    SELECT f.follower_uuid, v_actor, NEW.id::text, 'NEW_COMPANY_ARTICLE', 1, false\n    FROM article_company_follows f\n    WHERE NEW.company_id IS NOT NULL AND f.company_id = NEW.company_id\n      AND f.follower_uuid IS DISTINCT FROM v_actor\n      AND NOT EXISTS (SELECT 1 FROM article_author_follows af\n                      WHERE af.author_uuid = NEW.author_uuid AND af.follower_uuid = f.follower_uuid);\n  EXCEPTION WHEN OTHERS THEN\n    RAISE WARNING 'notify_article_published: %', SQLERRM;\n  END;\n  RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "notify_article_published",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.notify_comment_reaction()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE\n  v_owner uuid;\n  v_target text;\n  v_type text;\nBEGIN\n  BEGIN\n    IF NEW.user_id IS NULL THEN RETURN NEW; END IF;\n    IF NEW.target_id ~ '^[0-9]+$' THEN\n      -- post comments have numeric ids\n      SELECT u.uuid, c.post_id INTO v_owner, v_target\n      FROM comments c JOIN users u ON u.email = c.sender\n      WHERE c.id = NEW.target_id::bigint LIMIT 1;\n      v_type := 'COMMENT_REACTION';\n    ELSIF NEW.target_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN\n      -- article comments have uuid ids\n      SELECT ac.author_uuid, ac.article_id::text INTO v_owner, v_target\n      FROM article_comments ac WHERE ac.id = NEW.target_id::uuid;\n      v_type := 'ARTICLE_COMMENT_REACTION';\n    END IF;\n\n    IF v_owner IS NOT NULL AND v_owner <> NEW.user_id AND v_target IS NOT NULL THEN\n      INSERT INTO notifications (user_id, actor_id, target_id, type, count, is_read)\n      VALUES (v_owner, NEW.user_id, v_target, v_type, 1, false);\n    END IF;\n  EXCEPTION WHEN OTHERS THEN\n    RAISE WARNING 'notify_comment_reaction: %', SQLERRM;\n  END;\n  RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "notify_comment_reaction",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.notify_comment_reply_and_mentions()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nDECLARE\n  v_actor uuid;\n  v_parent_author uuid;\nBEGIN\n  BEGIN\n    SELECT uuid INTO v_actor FROM users WHERE email = NEW.sender LIMIT 1;\n    IF v_actor IS NULL THEN RETURN NEW; END IF;\n\n    IF NEW.parent_comment_id IS NOT NULL THEN\n      SELECT u.uuid INTO v_parent_author\n      FROM comments pc JOIN users u ON u.email = pc.sender\n      WHERE pc.id = NEW.parent_comment_id LIMIT 1;\n      IF v_parent_author IS NOT NULL AND v_parent_author <> v_actor THEN\n        INSERT INTO notifications (user_id, actor_id, target_id, type, count, is_read)\n        VALUES (v_parent_author, v_actor, NEW.post_id, 'REPLY', 1, false);\n      END IF;\n    END IF;\n\n    -- the parent comment's author already got REPLY — not also MENTION\n    INSERT INTO notifications (user_id, actor_id, target_id, type, count, is_read)\n    SELECT u.uuid, v_actor, NEW.post_id, 'MENTION', 1, false\n    FROM extract_mention_ids(NEW.message) AS m(id)\n    JOIN users u ON u.uuid = m.id\n    WHERE u.uuid <> v_actor AND u.uuid IS DISTINCT FROM v_parent_author;\n  EXCEPTION WHEN OTHERS THEN\n    RAISE WARNING 'notify_comment_reply_and_mentions: %', SQLERRM;\n  END;\n  RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "notify_comment_reply_and_mentions",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.notify_new_follow()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nBEGIN\n  BEGIN\n    IF NEW.follower_uuid <> NEW.author_uuid THEN\n      INSERT INTO notifications (user_id, actor_id, target_id, type, count, is_read)\n      VALUES (NEW.author_uuid, NEW.follower_uuid, NEW.follower_uuid::text, 'FOLLOW', 1, false);\n    END IF;\n  EXCEPTION WHEN OTHERS THEN\n    RAISE WARNING 'notify_new_follow: %', SQLERRM;\n  END;\n  RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "notify_new_follow",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.notify_post_mentions()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nBEGIN\n  BEGIN\n    INSERT INTO notifications (user_id, actor_id, target_id, type, count, is_read)\n    SELECT u.uuid, NEW.posted_by_uuid, NEW.id, 'MENTION', 1, false\n    FROM extract_mention_ids(NEW.message) AS m(id)\n    JOIN users u ON u.uuid = m.id\n    WHERE u.uuid <> NEW.posted_by_uuid;\n  EXCEPTION WHEN OTHERS THEN\n    RAISE WARNING 'notify_post_mentions: %', SQLERRM;\n  END;\n  RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "notify_post_mentions",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.open_position_fts_update()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\r\nBEGIN\r\n  -- כאן אנחנו מאחדים כותרת (משקל A - הכי חשוב) ותיאור (משקל B)\r\n  new.fts_tokens :=\r\n    setweight(to_tsvector('simple', coalesce(new.job_title, '')), 'A') ||\r\n    setweight(to_tsvector('simple', coalesce(new.job_description_html, '')), 'B');\r\n  RETURN new;\r\nEND\r\n$function$\n",
+      "args": "",
+      "name": "open_position_fts_update",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.people_search_companies(p_viewer_id uuid, p_scope text DEFAULT 'connections'::text, p_query text DEFAULT NULL::text, p_limit integer DEFAULT 30)\n RETURNS TABLE(company_key text, name text, company_id bigint, logo text, current_count bigint, past_count bigint)\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\n#variable_conflict use_column\nDECLARE\n  v_mine   UUID[];\n  v_within UUID[];\n  v_except UUID[];\n  v_q      TEXT := people_search_normalize(p_query);\n  v_q_key  TEXT := people_search_company_key(p_query);\nBEGIN\n  IF auth.uid() IS NOT NULL AND auth.uid() <> p_viewer_id THEN\n    RAISE EXCEPTION 'people_search_companies: viewer mismatch';\n  END IF;\n\n  SELECT COALESCE(array_agg(other_id), '{}') INTO v_mine\n  FROM get_accepted_connection_ids(p_viewer_id);\n  IF p_scope = 'connections' THEN v_within := v_mine; ELSE v_except := v_mine; END IF;\n\n  RETURN QUERY\n  WITH entries AS (\n    SELECT i.user_uuid, x->>'key' AS key, x->>'name' AS name,\n           NULLIF(x->>'id', '')::BIGINT AS cid, TRUE AS is_current\n    FROM people_search_index i, jsonb_array_elements(i.current_companies) x\n    WHERE (v_within IS NULL OR i.user_uuid = ANY (v_within))\n      AND (v_except IS NULL OR i.user_uuid <> ALL (v_except))\n      AND i.user_uuid <> p_viewer_id\n    UNION ALL\n    SELECT i.user_uuid, x->>'key', x->>'name', NULLIF(x->>'id', '')::BIGINT, FALSE\n    FROM people_search_index i, jsonb_array_elements(i.past_companies) x\n    WHERE (v_within IS NULL OR i.user_uuid = ANY (v_within))\n      AND (v_except IS NULL OR i.user_uuid <> ALL (v_except))\n      AND i.user_uuid <> p_viewer_id\n  ),\n  per_member AS (\n    -- someone who worked there before and works there now counts once, as current\n    SELECT key, user_uuid, bool_or(is_current) AS is_current\n    FROM entries\n    GROUP BY key, user_uuid\n  ),\n  agg AS (\n    SELECT\n      e.key,\n      mode() WITHIN GROUP (ORDER BY e.name) AS name,   -- most common spelling\n      max(e.cid) AS cid\n    FROM entries e\n    GROUP BY e.key\n  )\n  SELECT\n    a.key,\n    COALESCE(a.name, co.name),   -- canonical spelling (\"Ness\", not \"Ness Technologies | נס טכנולוגיות\")\n    a.cid,\n    co.logo::TEXT,\n    COUNT(*) FILTER (WHERE pm.is_current),\n    COUNT(*) FILTER (WHERE NOT pm.is_current)\n  FROM agg a\n  JOIN per_member pm ON pm.key = a.key\n  LEFT JOIN companies co ON co.id = a.cid\n  WHERE v_q = ''\n     OR strpos(people_search_normalize(COALESCE(a.name, '')), v_q) > 0\n     OR strpos(people_search_normalize(COALESCE(co.name, '')), v_q) > 0\n     OR (v_q_key <> '' AND strpos(a.key, v_q_key) > 0)\n     OR EXISTS (SELECT 1 FROM company_aliases ca\n                WHERE ca.canonical_key = a.key\n                  AND strpos(people_search_normalize(ca.alias), v_q) > 0)\n  GROUP BY a.key, co.name, a.name, a.cid, co.logo\n  ORDER BY COUNT(*) FILTER (WHERE pm.is_current) DESC, COUNT(*) DESC, COALESCE(a.name, co.name)\n  LIMIT p_limit;\nEND;\n$function$\n",
+      "args": "p_viewer_id uuid, p_scope text, p_query text, p_limit integer",
+      "name": "people_search_companies",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.people_search_company_key(p text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE\nAS $function$\n  SELECT regexp_replace(\n    regexp_replace(\n      regexp_replace(\n        regexp_replace(lower(btrim(COALESCE(p, ''))),\n          '\\.(com|co\\.il|org\\.il|io|ai|net|org|co)\\M', '', 'g'),\n        '\\m(inc|ltd|llc|co|corp|gmbh|bv|sa|plc|israel)\\M', '', 'g'),\n      '(בע\"מ|בע״מ|בעמ|\\sישראל)\\s*$', '', 'g'),\n    '[^a-z0-9א-ת]', '', 'g');\n$function$\n",
+      "args": "p text",
+      "name": "people_search_company_key",
+      "security_definer": false
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.people_search_users_trigger()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\nBEGIN\n  IF TG_OP = 'DELETE' THEN\n    DELETE FROM people_search_index WHERE user_uuid = OLD.uuid;\n    RETURN OLD;\n  END IF;\n  BEGIN\n    PERFORM people_search_refresh_user(NEW.uuid);\n  EXCEPTION WHEN OTHERS THEN\n    RAISE WARNING 'people_search_refresh_user(%) failed: %', NEW.uuid, SQLERRM;\n  END;\n  RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "people_search_users_trigger",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.sync_user_role()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$begin\r\n  -- עדכון טבלת המשתמשים של Supabase Auth\r\n  update auth.users\r\n  set raw_app_meta_data = \r\n    -- אנחנו משתמשים ב-jsonb_set כדי לא לדרוס מידע אחר אם קיים, אלא רק לעדכן את המפתח 'role'\r\n    jsonb_set(\r\n      coalesce(raw_app_meta_data, '{}'::jsonb), \r\n      '{role}', \r\n      to_jsonb(new.role)\r\n    )\r\n  where id = new.uuid; -- ההנחה היא שה-ID בטבלה שלך זהה ל-UUID של המשתמש ב-Auth\r\n  \r\n  return new;\r\nend;$function$\n",
+      "args": "",
+      "name": "sync_user_role",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.sync_user_to_company()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'public'\nAS $function$\r\nBEGIN\r\n  -- 1. ניקוי: הסרת המשתמש מכל החברות שבהן הוא מופיע כרגע\r\n  -- אנחנו עושים את זה קודם כדי להתחיל דף חלק לפני העדכון הנוכחי\r\n  UPDATE public.companies \r\n  SET employees = array_remove(COALESCE(employees, '{}'::uuid[]), NEW.uuid::uuid)\r\n  WHERE NEW.uuid::uuid = ANY(employees);\r\n\r\n  -- 2. עדכון קבוצתי: הוספת המשתמש לכל החברות שמוגדרות כ-current\r\n  UPDATE public.companies \r\n  SET employees = array_append(COALESCE(employees, '{}'::uuid[]), NEW.uuid::uuid)\r\n  WHERE id IN (\r\n    SELECT \r\n      CASE \r\n        WHEN jsonb_typeof(elem->'company') = 'object' THEN (elem->'company'->>'id')::int\r\n        WHEN jsonb_typeof(elem->'company') = 'number' THEN (elem->>'company')::int\r\n        -- אם זה טקסט (כמו Ness), ננסה למצוא לפי שם אם אין ID\r\n        ELSE NULL \r\n      END\r\n    FROM jsonb_array_elements(COALESCE(NEW.experience, '[]'::jsonb)) AS elem\r\n    WHERE (elem->>'current')::boolean IS TRUE\r\n  )\r\n  -- בונוס: אם בחברה השלישית כתוב \"Ness\" (טקסט), ננסה לתפוס אותה לפי שם\r\n  OR lower(trim(name)) IN (\r\n    SELECT lower(trim(elem->>'company'))\r\n    FROM jsonb_array_elements(COALESCE(NEW.experience, '[]'::jsonb)) AS elem\r\n    WHERE (elem->>'current')::boolean IS TRUE \r\n    AND jsonb_typeof(elem->'company') = 'string'\r\n  );\r\n\r\n  -- 3. לוג לביקורת\r\n  INSERT INTO public.trigger_logs (user_uuid, event_name, data_seen)\r\n  VALUES (NEW.uuid, 'Multi-Sync Executed', 'Synced all current companies from JSON');\r\n\r\n  RETURN NEW;\r\nEND;\r\n$function$\n",
+      "args": "",
+      "name": "sync_user_to_company",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.trg_user_activity_on_comment()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nDECLARE\n  v_commenter_uuid  uuid;\n  v_post_author     uuid;\nBEGIN\n  -- UUID מה-email של המגיב\n  SELECT id INTO v_commenter_uuid\n  FROM auth.users WHERE email = NEW.sender LIMIT 1;\n\n  IF v_commenter_uuid IS NOT NULL THEN\n    INSERT INTO user_activity (\n      user_id, total_comments, last_comment_at, last_active_at, updated_at\n    )\n    VALUES (v_commenter_uuid, 1, now(), now(), now())\n    ON CONFLICT (user_id) DO UPDATE SET\n      total_comments  = user_activity.total_comments + 1,\n      last_comment_at = now(),\n      last_active_at  = now(),\n      updated_at      = now();\n  END IF;\n\n  SELECT posted_by_uuid INTO v_post_author\n  FROM posts WHERE id = NEW.post_id LIMIT 1;\n\n  IF v_post_author IS NOT NULL AND v_post_author IS DISTINCT FROM v_commenter_uuid THEN\n    INSERT INTO user_activity (user_id, total_comments_received, updated_at)\n    VALUES (v_post_author, 1, now())\n    ON CONFLICT (user_id) DO UPDATE SET\n      total_comments_received = user_activity.total_comments_received + 1,\n      updated_at = now();\n  END IF;\n\n  RETURN NEW;\nEXCEPTION WHEN OTHERS THEN RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "trg_user_activity_on_comment",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.trg_user_activity_on_connection()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nBEGIN\n  IF NEW.status = 'accepted' AND (OLD.status IS DISTINCT FROM 'accepted') THEN\n    INSERT INTO user_activity (\n      user_id, total_connections, first_connection_at, last_active_at, updated_at\n    )\n    VALUES (NEW.requester_id, 1, now(), now(), now())\n    ON CONFLICT (user_id) DO UPDATE SET\n      total_connections   = user_activity.total_connections + 1,\n      first_connection_at = COALESCE(user_activity.first_connection_at, now()),\n      last_active_at      = now(),\n      updated_at          = now();\n\n    INSERT INTO user_activity (\n      user_id, total_connections, first_connection_at, last_active_at, updated_at\n    )\n    VALUES (NEW.receiver_id, 1, now(), now(), now())\n    ON CONFLICT (user_id) DO UPDATE SET\n      total_connections   = user_activity.total_connections + 1,\n      first_connection_at = COALESCE(user_activity.first_connection_at, now()),\n      last_active_at      = now(),\n      updated_at          = now();\n  END IF;\n\n  RETURN NEW;\nEXCEPTION WHEN OTHERS THEN RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "trg_user_activity_on_connection",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.trg_user_activity_on_like()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nDECLARE\n  v_post_author uuid;\nBEGIN\n  INSERT INTO user_activity (user_id, last_reaction_at, last_active_at, updated_at)\n  VALUES (NEW.user_id, now(), now(), now())\n  ON CONFLICT (user_id) DO UPDATE SET\n    last_reaction_at = now(),\n    last_active_at   = now(),\n    updated_at       = now();\n\n  BEGIN\n    SELECT posted_by_uuid INTO v_post_author\n    FROM posts WHERE id = NEW.target_id::uuid LIMIT 1;\n  EXCEPTION WHEN invalid_text_representation THEN\n    v_post_author := NULL;\n  END;\n\n  IF v_post_author IS NOT NULL AND v_post_author <> NEW.user_id THEN\n    INSERT INTO user_activity (user_id, total_reactions_received, updated_at)\n    VALUES (v_post_author, 1, now())\n    ON CONFLICT (user_id) DO UPDATE SET\n      total_reactions_received = user_activity.total_reactions_received + 1,\n      updated_at = now();\n  END IF;\n\n  RETURN NEW;\nEXCEPTION WHEN OTHERS THEN RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "trg_user_activity_on_like",
+      "security_definer": true
+    },
+    {
+      "def": "CREATE OR REPLACE FUNCTION public.trg_user_activity_on_post()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\nAS $function$\nBEGIN\n  INSERT INTO user_activity (\n    user_id, total_posts, last_post_at, first_post_at, last_active_at, updated_at\n  )\n  VALUES (NEW.posted_by_uuid, 1, now(), now(), now(), now())\n  ON CONFLICT (user_id) DO UPDATE SET\n    total_posts    = user_activity.total_posts + 1,\n    last_post_at   = now(),\n    first_post_at  = COALESCE(user_activity.first_post_at, now()),\n    last_active_at = now(),\n    updated_at     = now();\n  RETURN NEW;\nEXCEPTION WHEN OTHERS THEN RETURN NEW;\nEND;\n$function$\n",
+      "args": "",
+      "name": "trg_user_activity_on_post",
+      "security_definer": true
+    }
+  ],
+  "constraints": [
+    {
+      "def": "FOREIGN KEY (author_uuid) REFERENCES auth.users(id) ON DELETE CASCADE",
+      "name": "article_author_follows_author_uuid_fkey",
+      "type": "f",
+      "table": "article_author_follows"
+    },
+    {
+      "def": "FOREIGN KEY (follower_uuid) REFERENCES auth.users(id) ON DELETE CASCADE",
+      "name": "article_author_follows_follower_uuid_fkey",
+      "type": "f",
+      "table": "article_author_follows"
+    },
+    {
+      "def": "PRIMARY KEY (follower_uuid, author_uuid)",
+      "name": "article_author_follows_pkey",
+      "type": "p",
+      "table": "article_author_follows"
+    },
+    {
+      "def": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE",
+      "name": "article_company_follows_company_id_fkey",
+      "type": "f",
+      "table": "article_company_follows"
+    },
+    {
+      "def": "FOREIGN KEY (follower_uuid) REFERENCES auth.users(id) ON DELETE CASCADE",
+      "name": "article_company_follows_follower_uuid_fkey",
+      "type": "f",
+      "table": "article_company_follows"
+    },
+    {
+      "def": "PRIMARY KEY (follower_uuid, company_id)",
+      "name": "article_company_follows_pkey",
+      "type": "p",
+      "table": "article_company_follows"
+    },
+    {
+      "def": "CHECK ((article_type = ANY (ARRAY['article'::text, 'news'::text])))",
+      "name": "articles_article_type_check",
+      "type": "c",
+      "table": "articles"
+    },
+    {
+      "def": "CHECK ((author_type = ANY (ARRAY['user'::text, 'guest'::text])))",
+      "name": "articles_author_type_check",
+      "type": "c",
+      "table": "articles"
+    },
+    {
+      "def": "FOREIGN KEY (author_uuid) REFERENCES auth.users(id) ON DELETE CASCADE",
+      "name": "articles_author_uuid_fkey",
+      "type": "f",
+      "table": "articles"
+    },
+    {
+      "def": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL",
+      "name": "articles_company_id_fkey",
+      "type": "f",
+      "table": "articles"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "articles_pkey",
+      "type": "p",
+      "table": "articles"
+    },
+    {
+      "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'published'::text])))",
+      "name": "articles_status_check",
+      "type": "c",
+      "table": "articles"
+    },
+    {
+      "def": "FOREIGN KEY (parent_comment_id) REFERENCES comments(id) ON DELETE CASCADE",
+      "name": "comments_parent_comment_id_fkey",
+      "type": "f",
+      "table": "comments"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "comments_pkey",
+      "type": "p",
+      "table": "comments"
+    },
+    {
+      "def": "FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE",
+      "name": "comments_post_id_fkey",
+      "type": "f",
+      "table": "comments"
+    },
+    {
+      "def": "UNIQUE (name)",
+      "name": "companies_name_key",
+      "type": "u",
+      "table": "companies"
+    },
+    {
+      "def": "FOREIGN KEY (owner_uuid) REFERENCES auth.users(id) ON DELETE SET NULL",
+      "name": "companies_owner_uuid_fkey",
+      "type": "f",
+      "table": "companies"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "companies_pkey",
+      "type": "p",
+      "table": "companies"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "company_requests_pkey",
+      "type": "p",
+      "table": "company_requests"
+    },
+    {
+      "def": "FOREIGN KEY (requested_by) REFERENCES auth.users(id) ON DELETE CASCADE",
+      "name": "company_requests_requested_by_fkey",
+      "type": "f",
+      "table": "company_requests"
+    },
+    {
+      "def": "FOREIGN KEY (resolved_company_id) REFERENCES companies(id) ON DELETE SET NULL",
+      "name": "company_requests_resolved_company_id_fkey",
+      "type": "f",
+      "table": "company_requests"
+    },
+    {
+      "def": "CHECK ((status = ANY (ARRAY['pending'::text, 'resolved'::text, 'dismissed'::text])))",
+      "name": "company_requests_status_check",
+      "type": "c",
+      "table": "company_requests"
+    },
+    {
+      "def": "CHECK (((message IS NULL) OR (char_length(message) <= 300)))",
+      "name": "connections_message_length",
+      "type": "c",
+      "table": "connections"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "connections_pkey",
+      "type": "p",
+      "table": "connections"
+    },
+    {
+      "def": "FOREIGN KEY (receiver_id) REFERENCES users(uuid) ON DELETE CASCADE",
+      "name": "connections_receiver_id_fkey",
+      "type": "f",
+      "table": "connections"
+    },
+    {
+      "def": "FOREIGN KEY (requester_id) REFERENCES users(uuid) ON DELETE CASCADE",
+      "name": "connections_requester_id_fkey",
+      "type": "f",
+      "table": "connections"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "conversations_pkey",
+      "type": "p",
+      "table": "conversations"
+    },
+    {
+      "def": "FOREIGN KEY (user1_id) REFERENCES users(uuid)",
+      "name": "conversations_user1_id_fkey",
+      "type": "f",
+      "table": "conversations"
+    },
+    {
+      "def": "UNIQUE (user1_id, user2_id)",
+      "name": "conversations_user1_id_user2_id_key",
+      "type": "u",
+      "table": "conversations"
+    },
+    {
+      "def": "FOREIGN KEY (user2_id) REFERENCES users(uuid)",
+      "name": "conversations_user2_id_fkey",
+      "type": "f",
+      "table": "conversations"
+    },
+    {
+      "def": "CHECK ((user1_id < user2_id))",
+      "name": "conversations_users_check",
+      "type": "c",
+      "table": "conversations"
+    },
+    {
+      "def": "PRIMARY KEY (post_id)",
+      "name": "feed_cache_pkey",
+      "type": "p",
+      "table": "feed_cache"
+    },
+    {
+      "def": "FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE",
+      "name": "feed_cache_post_id_fkey",
+      "type": "f",
+      "table": "feed_cache"
+    },
+    {
+      "def": "FOREIGN KEY (job_id) REFERENCES open_position(id) ON DELETE CASCADE",
+      "name": "job_applications_job_id_fkey",
+      "type": "f",
+      "table": "job_applications"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "job_applications_pkey",
+      "type": "p",
+      "table": "job_applications"
+    },
+    {
+      "def": "CHECK ((status = ANY (ARRAY['clicked'::text, 'applied'::text])))",
+      "name": "job_applications_status_check",
+      "type": "c",
+      "table": "job_applications"
+    },
+    {
+      "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+      "name": "job_applications_user_id_fkey",
+      "type": "f",
+      "table": "job_applications"
+    },
+    {
+      "def": "UNIQUE (user_id, job_id)",
+      "name": "job_applications_user_job_unique",
+      "type": "u",
+      "table": "job_applications"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "likes_pkey",
+      "type": "p",
+      "table": "likes"
+    },
+    {
+      "def": "CHECK ((target_type = ANY (ARRAY['post'::text, 'comment'::text, 'article'::text])))",
+      "name": "likes_target_type_check",
+      "type": "c",
+      "table": "likes"
+    },
+    {
+      "def": "FOREIGN KEY (user_id) REFERENCES users(uuid) ON DELETE SET NULL",
+      "name": "likes_user_id_fkey",
+      "type": "f",
+      "table": "likes"
+    },
+    {
+      "def": "UNIQUE (user_id, target_id)",
+      "name": "likes_user_id_target_id_key",
+      "type": "u",
+      "table": "likes"
+    },
+    {
+      "def": "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE",
+      "name": "messages_conversation_id_fkey",
+      "type": "f",
+      "table": "messages"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "messages_pkey",
+      "type": "p",
+      "table": "messages"
+    },
+    {
+      "def": "FOREIGN KEY (sender_id) REFERENCES auth.users(id) ON DELETE SET NULL",
+      "name": "messages_sender_id_fkey",
+      "type": "f",
+      "table": "messages"
+    },
+    {
+      "def": "FOREIGN KEY (actor_id) REFERENCES users(uuid) ON DELETE SET NULL",
+      "name": "fk_notifications_actor",
+      "type": "f",
+      "table": "notifications"
+    },
+    {
+      "def": "FOREIGN KEY (actor_id) REFERENCES auth.users(id) ON DELETE SET NULL",
+      "name": "notifications_actor_id_fkey",
+      "type": "f",
+      "table": "notifications"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "notifications_pkey",
+      "type": "p",
+      "table": "notifications"
+    },
+    {
+      "def": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE",
+      "name": "notifications_user_id_fkey",
+      "type": "f",
+      "table": "notifications"
+    },
+    {
+      "def": "FOREIGN KEY (company_id) REFERENCES companies(id)",
+      "name": "fk_company",
+      "type": "f",
+      "table": "open_position"
+    },
+    {
+      "def": "UNIQUE (id)",
+      "name": "open_position_id_key",
+      "type": "u",
+      "table": "open_position"
+    },
+    {
+      "def": "UNIQUE (job_id)",
+      "name": "open_position_job_id_key",
+      "type": "u",
+      "table": "open_position"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "open_position_pkey",
+      "type": "p",
+      "table": "open_position"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "post_impressions_pkey",
+      "type": "p",
+      "table": "post_impressions"
+    },
+    {
+      "def": "UNIQUE (post_id, user_id, impression_date)",
+      "name": "post_impressions_unique",
+      "type": "u",
+      "table": "post_impressions"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "post_reports_pkey",
+      "type": "p",
+      "table": "post_reports"
+    },
+    {
+      "def": "FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE",
+      "name": "post_reports_post_id_fkey",
+      "type": "f",
+      "table": "post_reports"
+    },
+    {
+      "def": "FOREIGN KEY (reporter_id) REFERENCES users(uuid) ON DELETE CASCADE",
+      "name": "post_reports_reporter_id_fkey",
+      "type": "f",
+      "table": "post_reports"
+    },
+    {
+      "def": "FOREIGN KEY (resolved_by) REFERENCES users(uuid) ON DELETE SET NULL",
+      "name": "post_reports_resolved_by_fkey",
+      "type": "f",
+      "table": "post_reports"
+    },
+    {
+      "def": "FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL",
+      "name": "posts_company_id_fkey",
+      "type": "f",
+      "table": "posts"
+    },
+    {
+      "def": "FOREIGN KEY (linked_article_id) REFERENCES articles(id) ON DELETE SET NULL",
+      "name": "posts_linked_article_id_fkey",
+      "type": "f",
+      "table": "posts"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "posts_pkey",
+      "type": "p",
+      "table": "posts"
+    },
+    {
+      "def": "FOREIGN KEY (posted_by_uuid) REFERENCES auth.users(id) ON DELETE SET NULL",
+      "name": "posts_posted_by_uuid_fkey",
+      "type": "f",
+      "table": "posts"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "saved_resources_pkey",
+      "type": "p",
+      "table": "saved_resources"
+    },
+    {
+      "def": "FOREIGN KEY (user_id) REFERENCES users(uuid) ON DELETE CASCADE",
+      "name": "saved_resources_user_id_fkey",
+      "type": "f",
+      "table": "saved_resources"
+    },
+    {
+      "def": "UNIQUE (user_id, saved_resource_type, saved_resource_id)",
+      "name": "unique_user_saved_item",
+      "type": "u",
+      "table": "saved_resources"
+    },
+    {
+      "def": "PRIMARY KEY (id)",
+      "name": "scheduled_posts_pkey",
+      "type": "p",
+      "table": "scheduled_posts"
+    },
+    {
+      "def": "FOREIGN KEY (posted_by_uuid) REFERENCES auth.users(id) ON DELETE CASCADE",
+      "name": "scheduled_posts_posted_by_uuid_fkey",
+      "type": "f",
+      "table": "scheduled_posts"
+    },
+    {
+      "def": "UNIQUE (email)",
+      "name": "users_email_key",
+      "type": "u",
+      "table": "users"
+    },
+    {
+      "def": "CHECK ((job_seeking_status = ANY (ARRAY['active'::text, 'open'::text, 'not_looking'::text])))",
+      "name": "users_job_seeking_status_check",
+      "type": "c",
+      "table": "users"
+    },
+    {
+      "def": "PRIMARY KEY (uuid)",
+      "name": "users_pkey",
+      "type": "p",
+      "table": "users"
+    },
+    {
+      "def": "UNIQUE (uuid)",
+      "name": "users_uuid_key",
+      "type": "u",
+      "table": "users"
+    }
+  ],
+  "missing_tables": [],
+  "storage_buckets": [
+    {
+      "id": "article-covers",
+      "public": true,
+      "file_size_limit": 10485760,
+      "allowed_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "image/svg+xml"
+      ]
+    },
+    {
+      "id": "attachments",
+      "public": true,
+      "file_size_limit": null,
+      "allowed_mime_types": null
+    },
+    {
+      "id": "chat-attachments",
+      "public": false,
+      "file_size_limit": 5242880,
+      "allowed_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain"
+      ]
+    },
+    {
+      "id": "profile-headers",
+      "public": true,
+      "file_size_limit": null,
+      "allowed_mime_types": null
+    },
+    {
+      "id": "profile-images",
+      "public": false,
+      "file_size_limit": null,
+      "allowed_mime_types": null
+    }
+  ],
+  "storage_policies": [
+    {
+      "cmd": "INSERT",
+      "name": "Allow Authenticated Uploads",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": null,
+      "with_check": "(bucket_id = 'profile-images'::text)"
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Allow Individual Updates",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": "(auth.uid() = owner)",
+      "with_check": "(bucket_id = 'profile-images'::text)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Allow authenticated users full access 1mt4rzk_0",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": "(bucket_id = 'attachments'::text)",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Allow authenticated users full access 1mt4rzk_1",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": null,
+      "with_check": "(bucket_id = 'attachments'::text)"
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "Allow authenticated users full access 1mt4rzk_2",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": "(bucket_id = 'attachments'::text)",
+      "with_check": null
+    },
+    {
+      "cmd": "DELETE",
+      "name": "Allow authenticated users full access 1mt4rzk_3",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": "(bucket_id = 'attachments'::text)",
+      "with_check": null
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Authenticated users can read chat attachments",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": "(bucket_id = 'chat-attachments'::text)",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "Authenticated users can upload chat attachments",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": null,
+      "with_check": "(bucket_id = 'chat-attachments'::text)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "Public Access",
+      "roles": [
+        "public"
+      ],
+      "table": "objects",
+      "using": "(bucket_id = 'profile-images'::text)",
+      "with_check": null
+    },
+    {
+      "cmd": "DELETE",
+      "name": "article covers delete own",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": "((bucket_id = 'article-covers'::text) AND (owner_id = (auth.uid())::text))",
+      "with_check": null
+    },
+    {
+      "cmd": "SELECT",
+      "name": "article covers public read",
+      "roles": [
+        "public"
+      ],
+      "table": "objects",
+      "using": "(bucket_id = 'article-covers'::text)",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "article covers upload",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": null,
+      "with_check": "(bucket_id = 'article-covers'::text)"
+    },
+    {
+      "cmd": "DELETE",
+      "name": "profile_headers_auth_delete",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": "(bucket_id = 'profile-headers'::text)",
+      "with_check": null
+    },
+    {
+      "cmd": "INSERT",
+      "name": "profile_headers_auth_insert",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": null,
+      "with_check": "(bucket_id = 'profile-headers'::text)"
+    },
+    {
+      "cmd": "UPDATE",
+      "name": "profile_headers_auth_update",
+      "roles": [
+        "authenticated"
+      ],
+      "table": "objects",
+      "using": "(bucket_id = 'profile-headers'::text)",
+      "with_check": "(bucket_id = 'profile-headers'::text)"
+    },
+    {
+      "cmd": "SELECT",
+      "name": "profile_headers_public_read",
+      "roles": [
+        "public"
+      ],
+      "table": "objects",
+      "using": "(bucket_id = 'profile-headers'::text)",
+      "with_check": null
+    }
+  ]
+}
