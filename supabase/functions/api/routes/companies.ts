@@ -3,6 +3,15 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 
 const app = new Hono()
 
+// Only what the client shows. Never `*`: the table also holds import data with third-party
+// contact details (source_raw_json) and owner_uuid, which must not reach the browser — and
+// members are not granted those columns in the database (secure_companies_step2_safe.sql).
+const COMPANY_COLUMNS =
+  'id, name, active, description, employee_count_range, founded_on, industries, linkedin_url, ' +
+  'locations, logo, phone, specialities, tagline, universal_name, website, created_at, ' +
+  'employees, employees_count'
+const RANKED_COMPANY_COLUMNS = `${COMPANY_COLUMNS}, open_positions_count, activity_score, latest_job_at`
+
 // Employee details come from public_users_view by uuid. One `.in()` with every employee of a
 // page builds a GET URL the gateway rejects once the biggest companies share a page (that is
 // exactly page 1 of sort=members), so the lookup goes out in chunks of 100 ids.
@@ -47,7 +56,7 @@ app.get('/', async (c) => {
 
   let query = supabase
     .from('companies_ranked')
-    .select('*', { count: 'exact' })
+    .select(RANKED_COMPANY_COLUMNS, { count: 'exact' })
 
   if (sort === 'members') {
     query = query
@@ -131,7 +140,7 @@ app.get('/:id', async (c) => {
 
   const { data: company, error } = await supabase
     .from('companies')
-    .select('*')
+    .select(COMPANY_COLUMNS)
     .eq('id', companyIdValue)
     .single()
 
