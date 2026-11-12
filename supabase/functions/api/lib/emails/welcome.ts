@@ -44,7 +44,7 @@ const TIPS: Record<string, { full: [Bi, Bi]; partial?: [Bi, Bi] }> = {
     full: [{ he: 'כישורים', en: 'Skills' }, { he: 'מגייסים מחפשים לפי כישורים - ככל שתוסיפי יותר, כך ייטב', en: 'Recruiters search by skills - the more you add, the better' }],
     partial: [{ he: 'הוסיפי עוד כישורים (שאפי ל-6+)', en: 'Add more skills (aim for 6+)' }, { he: 'יש לך 3–5 כישורים - הוספת עוד תגדיל את הנראות שלך בחיפושים', en: 'You have 3–5 skills - adding more will increase your visibility in searches' }],
   },
-  photo: { full: [{ he: 'תמונת פרופיל', en: 'Profile photo' }, { he: 'פרופילים עם תמונה מקבלים 40% יותר פניות ממגייסים', en: 'Profiles with a photo get 40% more recruiter outreach' }] },
+  photo: { full: [{ he: 'תמונת פרופיל', en: 'Profile photo' }, { he: '88% מהמגייסים מתעלמים לחלוטין מפרופיל ללא תמונה', en: '88% of recruiters completely ignore profiles without a photo' }] },
   about: {
     full: [{ he: 'קטע אודות', en: 'About section' }, { he: 'סיפור אישי מגדיל את הסיכוי לפנייה ישירה', en: 'A personal story increases the chance of direct outreach' }],
     partial: [{ he: 'הרחיבי את קטע האודות', en: 'Expand your About section' }, { he: 'הביוגרפיה שלך קצת קצרה - שאפי ל-200+ תווים כדי לעשות רושם אמיתי', en: 'Your bio is a bit short - aim for 200+ characters to make a real impression' }],
