@@ -209,6 +209,7 @@ app.get('/:id', async (c) => {
     .from('open_position')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyIdValue)
+    .eq('status', 'open')
 
   if (!positionsError && typeof positionsCount === 'number') {
     openPositionsCount = positionsCount
@@ -255,7 +256,7 @@ app.get('/by-slug/:slug', async (c) => {
   const [role, isFollowing, positions, articles, people] = await Promise.all([
     getCompanyRole(supabase, user.id, company.id),
     isFollowingCompany(supabase, user.id, company.id),
-    supabase.from('open_position').select('id', { count: 'exact', head: true }).eq('company_id', company.id),
+    supabase.from('open_position').select('id', { count: 'exact', head: true }).eq('company_id', company.id).eq('status', 'open'),
     // the page's latest published articles (and how many there are in all)
     supabase.from('articles').select('id, title, cover_image_url, published_at', { count: 'exact' })
       .eq('company_id', company.id).eq('status', 'published').is('deleted_at', null)
@@ -270,6 +271,10 @@ app.get('/by-slug/:slug', async (c) => {
   }
 
   const canEdit = isPlatformAdmin || (company.page_status !== 'suspended' && role !== null && CONTENT_ROLES.includes(role))
+  // the page's recruiters see how many applications wait for them (the database counts only what they may read)
+  const newApplications = role === 'owner' || role === 'recruiter'
+    ? ((await supabase.rpc('company_new_applications_count', { p_company_id: company.id })).data ?? 0)
+    : null
   return c.json({
     ...company,
     employees: people.users,
@@ -284,6 +289,7 @@ app.get('/by-slug/:slug', async (c) => {
       can_edit: canEdit,
       can_rename: isPlatformAdmin || (canEdit && role === 'owner'),
       can_manage_admins: isPlatformAdmin || role === 'owner',
+      new_applications: newApplications,
     },
   })
 })
@@ -540,6 +546,37 @@ app.get('/:id/history', async (c) => {
   const { users } = await fetchPublicUsers(supabase, rows.map((row: any) => row.actor_id))
   const usersById = new Map<string, any>(users.map((u: any) => [u.uuid, u]))
   return c.json({ history: rows.map((row: any) => ({ ...row, actor: usersById.get(row.actor_id) ?? null })) })
+})
+
+// GET /api/companies/:id/claims — requests to manage this page that are still waiting.
+// For the page's owners (and Duallin admins), by the database's rule: so an owner knows who
+// is asking for her page. Deciding stays with the Duallin team.
+app.get('/:id/claims', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const supabase = c.get('supabase')
+  const companyId = parseCompanyId(c.req.param('id'))
+  if (companyId === null) return c.json({ error: 'Invalid company id' }, 400)
+
+  const isPlatformAdmin = user.app_metadata?.is_admin === true
+  if (!isPlatformAdmin && await getCompanyRole(supabase, user.id, companyId) !== 'owner') {
+    return c.json({ error: 'Not allowed' }, 403)
+  }
+
+  const { data, error } = await supabase
+    .from('company_claims')
+    .select('id, requested_by, requester_title, work_email, message, created_at')
+    .eq('company_id', companyId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true })
+    .limit(50)
+  if (error) return dbErrorResponse(c, error)
+
+  const rows = data || []
+  const { users } = await fetchPublicUsers(supabase, rows.map((row: any) => row.requested_by))
+  const usersById = new Map<string, any>(users.map((u: any) => [u.uuid, u]))
+  return c.json({ claims: rows.map((row: any) => ({ ...row, requester: usersById.get(row.requested_by) ?? null })) })
 })
 
 // POST /api/companies/:id/report — { reason, details? }

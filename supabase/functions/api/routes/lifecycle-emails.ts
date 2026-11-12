@@ -13,6 +13,7 @@ import { comeBackJob } from '../lib/emails/comeBack.ts'
 import { profileTipsJob } from '../lib/emails/profileTips.ts'
 import { inviteeJoinedJob, inviteeReminderJob, invitesUnlockedJob, inviteExpiredJob } from '../lib/emails/invitations.ts'
 import { accessReplyJob } from '../lib/emails/service.ts'
+import { jobApplicationsJob } from '../lib/emails/companyPages.ts'
 import { contentDigestJob, networkJob, peopleJob, postViewsJob, requestReminderJob, weeklyCommunityJob } from '../lib/emails/activityJobs.ts'
 
 export interface LifecycleJob {
@@ -47,6 +48,7 @@ export const LIFECYCLE_JOBS: LifecycleJob[] = [
   // Personal & important (never held by the per-member cap)
   { name: 'network_update', run: (b) => networkJob(b), slots: EVERY },             // recruiter, messages, mentions, requests
   { name: 'access_reply', run: (b) => accessReplyJob(b), slots: EVERY },           // to recruiters: a candidate answered
+  { name: 'job_applications', run: (b) => jobApplicationsJob(b), slots: EVERY },   // to a page's recruiters: applications are waiting
   { name: 'invitee_joined', run: (b) => inviteeJoinedJob(b), slots: EVERY },       // good news for the inviter — few
   { name: 'invite_reminder', run: (b) => inviteeReminderJob(b), slots: EVERY },    // invitations expire in 7 days
   { name: 'request_reminder', run: (b) => requestReminderJob(b), slots: [0, 3] },

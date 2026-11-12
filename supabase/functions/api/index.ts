@@ -29,6 +29,7 @@ import avatarRoute from './routes/avatar.ts'
 import inviteRoute from './routes/invite.ts'
 import adminRoute from './routes/admin.ts'
 import companyInsightsRoute from './routes/company-insights.ts'
+import companyJobsRoute from './routes/company_jobs.ts'
 import talentRoute from './routes/talent.ts'
 import profileAccessRequestRoute from './routes/profile-access-request.ts'
 import linkPreviewRoute from './routes/link-preview.ts'
@@ -92,6 +93,7 @@ app.route('/saved-resources', savedResourcesRoute)
 app.route('/invite', inviteRoute)
 app.route('/admin', adminRoute)
 app.route('/company-insights', companyInsightsRoute)
+app.route('/company-jobs', companyJobsRoute)
 app.route('/talent', talentRoute)
 app.route('/profile-access-request', profileAccessRequestRoute)
 app.route('/link-preview', linkPreviewRoute)

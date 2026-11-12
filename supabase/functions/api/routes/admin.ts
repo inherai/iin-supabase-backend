@@ -1963,7 +1963,7 @@ app.get("/jobs", async (c) => {
 
   let query = db
     .from("open_position")
-    .select("job_id,job_title,company_name,company_id,location,time_posted,employment_type,created_at,companies:company_id(id,name,logo)", { count: "exact" });
+    .select("job_id,job_title,company_name,company_id,location,time_posted,employment_type,created_at,source,status,apply_method,companies:company_id(id,name,logo)", { count: "exact" });
 
   if (search) {
     query = query.or(`job_title.ilike.%${search}%,company_name.ilike.%${search}%`);
@@ -2055,7 +2055,7 @@ app.put("/jobs/:id", async (c) => {
     .from("open_position")
     .update(updates)
     .eq("job_id", jobId)
-    .select("job_id,job_title,company_name,company_id,location,time_posted,employment_type,created_at,companies:company_id(id,name,logo)")
+    .select("job_id,job_title,company_name,company_id,location,time_posted,employment_type,created_at,source,status,apply_method,companies:company_id(id,name,logo)")
     .single();
 
   if (error) return c.json({ error: error.message }, 400);
