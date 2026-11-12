@@ -1327,6 +1327,125 @@ app.put("/companies/:id", async (c) => {
   return c.json(data);
 });
 
+// ==================== COMPANY PAGES: claims & reports ====================
+// These run in the admin's own session: the database lets only an admin decide a claim or
+// resolve a report (add_company_claims_safe.sql), so no service client is involved.
+
+app.get("/company-claims", async (c) => {
+  const supabase = c.get("supabase");
+  const status = c.req.query("status") || "pending";
+  if (!["pending", "approved", "rejected", "all"].includes(status)) return c.json({ error: "Invalid status" }, 400);
+
+  let query = supabase
+    .from("company_claims")
+    .select("id, company_id, requested_by, org_name, org_type, website, requester_title, work_email, message, status, granted_role, review_note, reviewed_by, reviewed_at, created_at, company:companies(id, name, slug, logo, page_status)")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (status !== "all") query = query.eq("status", status);
+
+  const { data: claims, error } = await query;
+  if (error) return c.json({ error: error.message }, 400);
+
+  const userIds = [...new Set((claims || []).map((cl: any) => cl.requested_by))];
+  const requesters = new Map<string, any>();
+  if (userIds.length) {
+    const { data: users } = await supabase
+      .from("public_users_view")
+      .select("uuid, first_name, last_name, headline, role")
+      .in("uuid", userIds);
+    for (const u of users || []) requesters.set(u.uuid, u);
+  }
+  // how many managers each claimed page already has — a claim on a managed page needs more care
+  const companyIds = [...new Set((claims || []).map((cl: any) => cl.company_id).filter(Boolean))];
+  const managerCounts = new Map<number, number>();
+  if (companyIds.length) {
+    const { data: admins } = await supabase.from("company_admins").select("company_id").in("company_id", companyIds);
+    for (const a of admins || []) managerCounts.set(a.company_id, (managerCounts.get(a.company_id) ?? 0) + 1);
+  }
+
+  return c.json({
+    claims: (claims || []).map((cl: any) => ({
+      ...cl,
+      requester: requesters.get(cl.requested_by) ?? null,
+      existing_managers: cl.company_id ? (managerCounts.get(cl.company_id) ?? 0) : 0,
+    })),
+  });
+});
+
+// PATCH /admin/company-claims/:id — { status: 'approved' | 'rejected', granted_role?, review_note? }
+app.patch("/company-claims/:id", async (c) => {
+  const claimId = parseInt(c.req.param("id"));
+  if (isNaN(claimId)) return c.json({ error: "Invalid id" }, 400);
+  const body = await c.req.json().catch(() => ({}));
+  if (!["approved", "rejected"].includes(body.status)) return c.json({ error: "status must be approved or rejected" }, 400);
+  if (body.granted_role !== undefined && !["owner", "content", "recruiter", "analyst"].includes(body.granted_role)) {
+    return c.json({ error: "Invalid granted_role" }, 400);
+  }
+
+  const updates: Record<string, unknown> = { status: body.status };
+  if (body.granted_role !== undefined) updates.granted_role = body.granted_role;
+  if (typeof body.review_note === "string") updates.review_note = body.review_note.trim().slice(0, 1000) || null;
+
+  const { data, error } = await c.get("supabase")
+    .from("company_claims")
+    .update(updates)
+    .eq("id", claimId)
+    .select("id, company_id, status, granted_role, review_note, reviewed_at")
+    .maybeSingle();
+
+  if (error) {
+    // P0001: already decided · 23505: the organization's name is taken or it already has a managed page
+    const status = error.code === "P0001" || error.code === "23505" ? 409 : 400;
+    return c.json({ error: error.message, code: error.code }, status);
+  }
+  if (!data) return c.json({ error: "Request not found" }, 404);
+  return c.json(data);
+});
+
+app.get("/company-reports", async (c) => {
+  const supabase = c.get("supabase");
+  const resolved = c.req.query("resolved") === "true";
+
+  const { data: reports, error } = await supabase
+    .from("company_reports")
+    .select("id, company_id, reporter_id, reason, details, created_at, is_resolved, resolved_at, resolution_note, company:companies(id, name, slug, logo, page_status)")
+    .eq("is_resolved", resolved)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) return c.json({ error: error.message }, 400);
+
+  const userIds = [...new Set((reports || []).map((r: any) => r.reporter_id))];
+  const reporters = new Map<string, any>();
+  if (userIds.length) {
+    const { data: users } = await supabase.from("public_users_view").select("uuid, first_name, last_name").in("uuid", userIds);
+    for (const u of users || []) reporters.set(u.uuid, u);
+  }
+  return c.json({ reports: (reports || []).map((r: any) => ({ ...r, reporter: reporters.get(r.reporter_id) ?? null })) });
+});
+
+// PATCH /admin/company-reports/:id — { resolution_note? } marks the report resolved
+app.patch("/company-reports/:id", async (c) => {
+  const user = c.get("user");
+  const reportId = parseInt(c.req.param("id"));
+  if (isNaN(reportId)) return c.json({ error: "Invalid id" }, 400);
+  const body = await c.req.json().catch(() => ({}));
+
+  const { data, error } = await c.get("supabase")
+    .from("company_reports")
+    .update({
+      is_resolved: true,
+      resolved_at: new Date().toISOString(),
+      resolved_by: user.id,
+      resolution_note: typeof body.resolution_note === "string" ? body.resolution_note.trim().slice(0, 1000) || null : null,
+    })
+    .eq("id", reportId)
+    .select("id, is_resolved, resolved_at")
+    .maybeSingle();
+  if (error) return c.json({ error: error.message }, 400);
+  if (!data) return c.json({ error: "Report not found" }, 404);
+  return c.json(data);
+});
+
 app.delete("/companies/:id", async (c) => {
   const db = getAdminClient();
   const companyId = parseInt(c.req.param("id"));

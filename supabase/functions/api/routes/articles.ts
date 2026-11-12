@@ -2,6 +2,7 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { supabaseAdmin } from '../middleware.ts'
 import { CONTENT_ROLES, checkActAsCompany, hasCompanyRole, listManagedCompanyIds } from '../lib/companyAccess.ts'
+import { setCompanyFollow } from '../lib/companyFollows.ts'
 
 const app = new Hono()
 
@@ -1052,9 +1053,7 @@ app.post('/follow-company/:companyId', async (c) => {
   const companyId = parseInt(c.req.param('companyId'))
   if (isNaN(companyId)) return c.json({ error: 'Invalid company ID' }, 400)
   try {
-    await supabase
-      .from('article_company_follows')
-      .upsert({ follower_uuid: user.id, company_id: companyId }, { onConflict: 'follower_uuid,company_id' })
+    await setCompanyFollow(supabase, user.id, companyId, true)
     return c.json({ is_following: true })
   } catch (err) {
     console.error('POST /articles/follow-company error:', err)
@@ -1071,11 +1070,7 @@ app.delete('/follow-company/:companyId', async (c) => {
   const companyId = parseInt(c.req.param('companyId'))
   if (isNaN(companyId)) return c.json({ error: 'Invalid company ID' }, 400)
   try {
-    await supabase
-      .from('article_company_follows')
-      .delete()
-      .eq('follower_uuid', user.id)
-      .eq('company_id', companyId)
+    await setCompanyFollow(supabase, user.id, companyId, false)
     return c.json({ is_following: false })
   } catch (err) {
     console.error('DELETE /articles/follow-company error:', err)

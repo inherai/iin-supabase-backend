@@ -422,7 +422,8 @@ app.patch('/companies/:id/bio', async (c) => {
 
 // GET /api/me/companies
 // Pages the current user may publish as — she manages them as owner or content manager
-// (for the compose-dialog identity switcher)
+// (for the compose-dialog identity switcher). With ?all=1: every page she manages, in any
+// role (for "My pages").
 // --------------------------------------------------------------------
 app.get('/companies', async (c) => {
   const user = c.get('user')
@@ -433,7 +434,7 @@ app.get('/companies', async (c) => {
     .from('company_admins')
     .select('role, companies(id, name, logo, slug)')
     .eq('user_id', user.id)
-    .in('role', CONTENT_ROLES)
+    .in('role', c.req.query('all') === '1' ? ['owner', 'content', 'recruiter', 'analyst'] : CONTENT_ROLES)
 
   if (error) return c.json({ error: error.message }, 500)
   return c.json((data || []).filter((row: any) => row.companies).map((row: any) => ({ ...row.companies, role: row.role })))

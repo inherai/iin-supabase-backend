@@ -9,6 +9,9 @@
 -- !! this: admin_update_company() no longer exists afterwards.
 -- !! companies.owner_uuid is untouched, so the original single owners keep working.
 -- Only if something on the site misbehaves after the migration.
+-- !! Undo the later company-page migrations first, newest to oldest (their rollback_* files):
+-- !! harden_company_page_fields, add_company_media_bucket, add_company_claims,
+-- !! article_policies_use_company_roles, add_entitlements. This file refuses to run while they are in place.
 -- ============================================================
 BEGIN;
 

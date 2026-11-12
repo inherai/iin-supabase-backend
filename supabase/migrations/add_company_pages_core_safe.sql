@@ -481,6 +481,14 @@ CREATE POLICY "Page managers edit their page"
 --     were — quietly, so the importer itself doesn't fail. Everything else on the row
 --     (employees list, counters, status) still updates.
 --   * the name of a page is changed by its owner (or a Duallin admin), not by a content manager.
+-- (Not re-created once harden_company_page_fields_safe.sql has replaced it with the stricter
+--  version — re-running this file must never undo that.)
+DO $guard$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE oid = to_regprocedure('public.companies_page_guard()') AND prosrc LIKE '%v_media_prefix%') THEN
+    RETURN;
+  END IF;
+  EXECUTE $create$
 CREATE OR REPLACE FUNCTION public.companies_page_guard()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -514,7 +522,10 @@ BEGIN
   END IF;
   RETURN NEW;
 END;
-$$;
+$$
+  $create$;
+END
+$guard$;
 DROP TRIGGER IF EXISTS trg_companies_page_guard ON public.companies;
 CREATE TRIGGER trg_companies_page_guard
   BEFORE UPDATE ON public.companies
