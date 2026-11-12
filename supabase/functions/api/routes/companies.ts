@@ -4,6 +4,7 @@ import { CONTENT_ROLES, getCompanyRole, type CompanyRole } from '../lib/companyA
 import { getEntitlement } from '../lib/entitlements.ts'
 import { isFollowingCompany, setCompanyFollow } from '../lib/companyFollows.ts'
 import { ORG_TYPES, cleanText, freeText, isHttpsUrl, validatePageUpdate } from '../lib/companyPageFields.ts'
+import { sendNewClaimAlert } from '../lib/emails/companyPages.ts'
 
 const app = new Hono()
 
@@ -25,6 +26,7 @@ const PAGE_COLUMNS =
 
 const PAGE_ROLES: CompanyRole[] = ['owner', 'content', 'recruiter', 'analyst']
 const EMPLOYEES_PREVIEW = 12
+const RECENT_ARTICLES = 3
 
 const REPORT_REASONS = ['impersonation', 'wrong_info', 'inappropriate', 'spam', 'other']
 const CLAIM_COLUMNS =
@@ -254,8 +256,10 @@ app.get('/by-slug/:slug', async (c) => {
     getCompanyRole(supabase, user.id, company.id),
     isFollowingCompany(supabase, user.id, company.id),
     supabase.from('open_position').select('id', { count: 'exact', head: true }).eq('company_id', company.id),
-    supabase.from('articles').select('id', { count: 'exact', head: true })
-      .eq('company_id', company.id).eq('status', 'published').is('deleted_at', null),
+    // the page's latest published articles (and how many there are in all)
+    supabase.from('articles').select('id, title, cover_image_url, published_at', { count: 'exact' })
+      .eq('company_id', company.id).eq('status', 'published').is('deleted_at', null)
+      .order('is_pinned', { ascending: false }).order('published_at', { ascending: false }).limit(RECENT_ARTICLES),
     fetchPublicUsers(supabase, employeeIds.slice(0, EMPLOYEES_PREVIEW)),
   ])
 
@@ -273,6 +277,7 @@ app.get('/by-slug/:slug', async (c) => {
     locations: israelFirst(company.locations),
     open_positions_count: positions.count ?? 0,
     articles_count: articles.count ?? 0,
+    recent_articles: articles.data ?? [],
     viewer: {
       role,
       is_following: isFollowing,
@@ -612,6 +617,27 @@ app.post('/claims', async (c) => {
   if (error) {
     if (error.code === '23505') return c.json({ error: 'You already have a request waiting for this', code: 'already_pending' }, 409)
     return dbErrorResponse(c, error)
+  }
+
+  // The Duallin team is told by e-mail (and in the site, by a database trigger). The request
+  // is already saved: a mail problem must not fail it.
+  try {
+    const supabase = c.get('supabase')
+    const [{ data: me }, { data: company }] = await Promise.all([
+      supabase.from('users').select('first_name, last_name').eq('uuid', user.id).maybeSingle(),
+      data.company_id ? supabase.from('companies').select('name').eq('id', data.company_id).maybeSingle() : Promise.resolve({ data: null }),
+    ])
+    await sendNewClaimAlert({
+      claimId: data.id,
+      companyName: company?.name ?? data.org_name ?? '',
+      isNewOrganization: !data.company_id,
+      requesterName: [me?.first_name, me?.last_name].filter(Boolean).join(' '),
+      requesterTitle: data.requester_title,
+      workEmail: data.work_email,
+      message: data.message ?? null,
+    })
+  } catch (err) {
+    console.error('new claim alert:', (err as Error).message)
   }
   return c.json(data, 201)
 })

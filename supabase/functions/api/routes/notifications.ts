@@ -51,8 +51,15 @@ app.get("/", async (c) => {
       .map((n: any) => n.target_id)
   )];
 
+  // Company-page notifications point at a company id ('new' = an organization without a page yet)
+  const companyIds = [...new Set(
+    notifications
+      .filter((n: any) => String(n.type).startsWith("COMPANY_") && /^\d+$/.test(n.target_id ?? ""))
+      .map((n: any) => Number(n.target_id))
+  )];
+
   // Fetch enrichment data in parallel
-  const [actorsRes, postsRes, articlesRes] = await Promise.all([
+  const [actorsRes, postsRes, articlesRes, companiesRes] = await Promise.all([
     actorIds.length > 0
       ? supabase.from("public_users_view").select("uuid, first_name, last_name, image").in("uuid", actorIds)
       : Promise.resolve({ data: [] }),
@@ -62,7 +69,15 @@ app.get("/", async (c) => {
     articleIds.length > 0
       ? supabase.from("articles").select("id, title").in("id", articleIds)
       : Promise.resolve({ data: [] }),
+    companyIds.length > 0
+      ? supabase.from("companies").select("id, name, slug").in("id", companyIds)
+      : Promise.resolve({ data: [] }),
   ]);
+
+  const companyMap = new Map<string, { name: string; slug: string }>();
+  for (const co of (companiesRes.data ?? []) as any[]) {
+    companyMap.set(String(co.id), { name: co.name, slug: co.slug });
+  }
 
   const nameMap = new Map<string, string>();
   const imageMap = new Map<string, string | null>();
@@ -91,6 +106,7 @@ app.get("/", async (c) => {
     articles: ["ARTICLE_COMMENT", "ARTICLE_LIKE", "NEW_ARTICLE", "NEW_COMPANY_ARTICLE", "ARTICLE_COMMENT_REACTION", "ARTICLE_MENTION", "ARTICLE_REPLY"].includes(n.type) && n.target_id
       ? { title: articleTitleMap.get(n.target_id) ?? undefined }
       : null,
+    companies: String(n.type).startsWith("COMPANY_") ? (companyMap.get(n.target_id) ?? null) : null,
   }));
 
   return c.json({ notifications: enriched });

@@ -6,6 +6,7 @@ import { sendInviteEmail } from '../lib/email.ts';
 import { loadPreferences, savePreference } from './email-preferences.ts';
 import { canSendEmail, normalizeEmail } from '../lib/emailPrefs.ts';
 import { clearDeclinesForUser } from './_connectionDeclines.ts';
+import { sendClaimDecision } from '../lib/emails/companyPages.ts';
 
 const app = new Hono();
 
@@ -1399,7 +1400,40 @@ app.patch("/company-claims/:id", async (c) => {
     return c.json({ error: error.message, code: error.code }, status);
   }
   if (!data) return c.json({ error: "Request not found" }, 404);
-  return c.json(data);
+
+  // Tell her by e-mail as well (the notification in the site is written by the database).
+  // Never fails the decision: it has already been saved.
+  let emailed = false;
+  try {
+    const supabase = c.get("supabase");
+    const [{ data: claim }, { data: company }] = await Promise.all([
+      supabase.from("company_claims").select("requested_by, org_name").eq("id", claimId).maybeSingle(),
+      data.company_id
+        ? supabase.from("companies").select("name, slug").eq("id", data.company_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+    const { data: member } = claim
+      ? await supabase.from("users").select("email, first_name").eq("uuid", claim.requested_by).maybeSingle()
+      : { data: null };
+    if (member?.email) {
+      const result = await sendClaimDecision(
+        { email: member.email, userId: claim.requested_by },
+        {
+          claimId,
+          status: data.status,
+          companyName: company?.name ?? claim.org_name ?? "",
+          slug: company?.slug ?? null,
+          firstName: member.first_name ?? "",
+          note: data.review_note ?? null,
+        },
+      );
+      emailed = result.status === "sent";
+    }
+  } catch (err) {
+    console.error("company claim decision email:", (err as Error).message);
+  }
+
+  return c.json({ ...data, emailed });
 });
 
 app.get("/company-reports", async (c) => {

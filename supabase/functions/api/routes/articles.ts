@@ -1089,7 +1089,7 @@ app.get('/company/:companyId', async (c) => {
 
   try {
     const [companyRes, articlesRes, followerCountRes, isFollowingRes] = await Promise.all([
-      supabase.from('companies').select('id, name, logo, tagline').eq('id', companyId).single(),
+      supabase.from('companies').select('id, name, logo, tagline, slug, cover_image_url').eq('id', companyId).single(),
       supabase
         .from('articles')
         .select('id, title, excerpt, cover_image_url, read_time, published_at, article_type, is_pinned, series_name, is_editors_pick')
@@ -1164,7 +1164,7 @@ app.get('/company/:companyId', async (c) => {
     const co = companyRes.data
     return c.json({
       articles: enrichedArticles,
-      company: { id: co.id, name: co.name, logo_url: co.logo ?? null, tagline: co.tagline ?? null },
+      company: { id: co.id, name: co.name, logo_url: co.logo ?? null, tagline: co.tagline ?? null, slug: co.slug, cover_image_url: co.cover_image_url ?? null },
       top_skills: topSkills,
       is_following: !!(isFollowingRes.data),
       first_published: firstPublished,
