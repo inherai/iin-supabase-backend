@@ -12,7 +12,7 @@ import { cappedNow, sendEmail } from '../mailer.ts'
 import {
   networkSubject, renderContentDigest, renderFirstPost, renderNetworkUpdate, renderPeopleYouMayKnow,
   renderPostViews, renderRequestReminder, renderWeeklyCommunity,
-  type ContentDigest, type NetworkUpdate, type Nudge, type Person, type WeeklyCommunity,
+  LINK, type ContentDigest, type NetworkUpdate, type Nudge, type Person, type WeeklyCommunity,
 } from './activity.ts'
 import { communityStats } from './onboardingReminders.ts'
 import { outOfTime } from './runClock.ts'
@@ -78,10 +78,10 @@ async function members(ids: string[]): Promise<Map<string, Member>> {
 export async function people(ids: string[]): Promise<Map<string, Person>> {
   const rows = await inChunks<{ uuid: string; first_name: string | null; last_name: string | null; headline: string | null; is_anonymous: boolean | null; privacy_lastname: string[] | null }>(
     ids, (c) => adminClient().from('users').select('uuid, first_name, last_name, headline, is_anonymous, privacy_lastname').in('uuid', c))
-  return new Map(rows.map((u) => {
+  return new Map(rows.map((u): [string, Person] => {
     if (u.is_anonymous === true) return [u.uuid, { name: 'אנונימית', avatarUrl: AVATAR(), headline: null }]
     const last = Array.isArray(u.privacy_lastname) && u.privacy_lastname.includes('community') ? u.last_name : null
-    return [u.uuid, { name: [u.first_name, last].filter(Boolean).join(' ').trim() || 'חברה בדואולין', avatarUrl: AVATAR(), headline: u.headline }]
+    return [u.uuid, { name: [u.first_name, last].filter(Boolean).join(' ').trim() || 'חברה בדואולין', avatarUrl: AVATAR(), headline: u.headline, id: u.uuid }]
   }))
 }
 
@@ -230,6 +230,7 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
 
     // Mention text: the post / comment / article she was mentioned in.
     const mentionText = new Map<string, string>()
+    const inComment = new Set<string>() // mentions made in a comment (the post's own text is shown otherwise)
     const postIds = show.mentions.filter((x) => x.extra?.startsWith('MENTION|')).map((x) => x.extra!.split('|')[1])
     const artIds = show.mentions.filter((x) => x.extra?.startsWith('ARTICLE_MENTION|')).map((x) => x.extra!.split('|')[1])
     if (postIds.length) {
@@ -241,6 +242,7 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
         const c = (cms ?? []).find((c) => String(c.post_id) === pid && commenter.get(String(c.sender ?? '').toLowerCase()) === x.actor)
         const p = (pts ?? []).find((p) => String(p.id) === pid)
         mentionText.set(`${x.actor}|${pid}`, plain(c?.message ?? p?.message))
+        if (c) inComment.add(`${x.actor}|${pid}`)
       }
     }
     if (artIds.length) {
@@ -255,12 +257,14 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
     const update: NetworkUpdate = {
       firstName: (m.first_name ?? '').trim(),
       recruiters: show.recruiters.map(P),
-      messages: msgSenders.slice(0, 3).map(([a, n]) => ({ from: P(a), count: n })),
+      messages: msgSenders.slice(0, 3).map(([a, n]) => ({ from: P(a), partnerId: a, count: n })),
       messagesTotal: msgSenders.length,
       mentions: show.mentions.map((x) => {
         const [type, id] = x.extra!.split('|')
         const text = mentionText.get(`${x.actor}|${id}`) ?? ''
-        return { by: P(x.actor), where: type === 'ARTICLE_MENTION' ? 'article' as const : 'post' as const, text }
+        return type === 'ARTICLE_MENTION'
+          ? { by: P(x.actor), where: 'article' as const, text, href: LINK.article(id) }
+          : { by: P(x.actor), where: inComment.has(`${x.actor}|${id}`) ? 'comment' as const : 'post' as const, text, href: LINK.post(id) }
       }),
       mentionsTotal: b.mentions.length,
       requests: reqShown.map((a) => ({ ...P(a), mutual: mutual.get(a) ?? 0 })),
@@ -348,7 +352,7 @@ export async function contentDigestJob(budget: number, now = new Date()): Promis
   if (cms.error) console.error('[content-digest] comments query failed:', cms.error.message)
   const commenter = await uuidsByEmail((cms.data ?? []).map((c: any) => c.sender))
   for (const c of (cms.data ?? []) as any[]) c.posted_by_uuid = commenter.get(String(c.sender ?? '').toLowerCase())
-  type C = { by: string; kind: 'comment' | 'reply'; text: string; at: number }
+  type C = { by: string; kind: 'comment' | 'reply'; text: string; at: number; postId: string }
   const byAuthor = new Map<string, { comments: C[]; likes: Map<string, { likers: Array<{ by: string; at: number }> }> }>()
   const slot = (uid: string) => byAuthor.get(uid) ?? (byAuthor.set(uid, { comments: [], likes: new Map() }), byAuthor.get(uid)!)
   const postText = new Map<string, string>()
@@ -359,7 +363,7 @@ export async function contentDigestJob(budget: number, now = new Date()): Promis
     postText.set(String(c.post_id), plain(c.posts?.message))
     const target = c.parent_comment_id ? parentAuthor.get(String(c.parent_comment_id)) : author
     if (!target || target === c.posted_by_uuid) continue
-    slot(target).comments.push({ by: c.posted_by_uuid, kind: c.parent_comment_id ? 'reply' : 'comment', text: plain(c.message), at: Date.parse(c.created_at) })
+    slot(target).comments.push({ by: c.posted_by_uuid, kind: c.parent_comment_id ? 'reply' : 'comment', text: plain(c.message), at: Date.parse(c.created_at), postId: String(c.post_id) })
   }
   const likedPosts = [...new Set((lks.data ?? []).map((l) => String(l.target_id)))]
   const posts = await inChunks<{ id: string; posted_by_uuid: string; message: string }>(likedPosts, (c) => db.from('posts').select('id, posted_by_uuid, message').in('id', c))
@@ -400,9 +404,9 @@ export async function contentDigestJob(budget: number, now = new Date()): Promis
     const N = (id: string) => names.get(id) ?? { name: 'חברה בדואולין', avatarUrl: AVATAR() }
     const digest: ContentDigest = {
       firstName: (m.first_name ?? '').trim(),
-      comments: comments.slice(0, 3).map((c) => ({ by: N(c.by), kind: c.kind, text: c.text })),
+      comments: comments.slice(0, 3).map((c) => ({ by: N(c.by), kind: c.kind, text: c.text, postId: c.postId })),
       commentsTotal: comments.length,
-      likes: likeTotal >= MIN_LIKES ? likes.slice(0, 2).map((l) => ({ postText: postText.get(l.pid) ?? '', firstLiker: N(l.likers[0].by).name, others: l.likers.length - 1 })) : [],
+      likes: likeTotal >= MIN_LIKES ? likes.slice(0, 2).map((l) => ({ postId: l.pid, postText: postText.get(l.pid) ?? '', firstLiker: N(l.likers[0].by).name, others: l.likers.length - 1 })) : [],
       likedPostsTotal: likes.length,
     }
     const upto = new Date(Math.max(...comments.map((c) => c.at), ...likes.flatMap((l) => l.likers.map((x) => x.at)))).toISOString()
@@ -461,7 +465,7 @@ export async function postViewsJob(budget: number, now = new Date()): Promise<Jo
     ])
     const v = views ?? 0
     if (v < (isFirst ? MIN_VIEWS_FIRST_POST : MIN_VIEWS)) continue
-    const post = { text: plain(p.message), views: v, likes: likes ?? 0, comments: comments ?? 0 }
+    const post = { id: String(p.id), text: plain(p.message), views: v, likes: likes ?? 0, comments: comments ?? 0 }
     attempts++
     const r = await sendEmail({
       kind: isFirst ? 'first_post' : 'post_views', category: 'content_activity', to: m.email, userId: m.uuid, refKey: `post:${p.id}`,
@@ -606,7 +610,7 @@ export async function weeklyCommunityJob(budget: number, now = new Date()): Prom
     // From her network: posts by her accepted connections this week (milestones first).
     const { data: conns } = await db.rpc('get_accepted_connection_ids', { p_user_id: uid }).then((r) => r, () => ({ data: null }))
     const connIds = new Set(((conns ?? []) as Array<{ other_id: string }>).map((c) => c.other_id))
-    const card = (p: any) => ({ author: N(p.posted_by_uuid), text: plain(p.message), likes: lc.get(String(p.id)) ?? 0, comments: cc.get(String(p.id)) ?? 0 })
+    const card = (p: any) => ({ id: String(p.id), author: N(p.posted_by_uuid), text: plain(p.message), likes: lc.get(String(p.id)) ?? 0, comments: cc.get(String(p.id)) ?? 0 })
     const netPosts = visible
       .filter((p) => connIds.has(p.posted_by_uuid) && p.posted_by_uuid !== uid && p.post_type !== 'question')
       .sort((a, b) => score(b) - score(a))
@@ -617,8 +621,8 @@ export async function weeklyCommunityJob(budget: number, now = new Date()): Prom
     const w: WeeklyCommunity = {
       firstName: (m.first_name ?? '').trim(),
       network: { hasConnections: connIds.size > 0, milestones: milestones.map(card), posts: netOthers.map(card) },
-      questions: questions.filter((q) => q.posted_by_uuid !== uid).slice(0, 2).map((q) => ({ author: N(q.posted_by_uuid), text: plain(q.message) })),
-      topPosts: top.filter((p) => p.posted_by_uuid !== uid && !inNetwork.has(String(p.id))).slice(0, 3).map((p) => ({ author: N(p.posted_by_uuid), text: plain(p.message), likes: lc.get(String(p.id)) ?? 0, comments: cc.get(String(p.id)) ?? 0 })),
+      questions: questions.filter((q) => q.posted_by_uuid !== uid).slice(0, 2).map((q) => ({ id: String(q.id), author: N(q.posted_by_uuid), text: plain(q.message) })),
+      topPosts: top.filter((p) => p.posted_by_uuid !== uid && !inNetwork.has(String(p.id))).slice(0, 3).map((p) => ({ id: String(p.id), author: N(p.posted_by_uuid), text: plain(p.message), likes: lc.get(String(p.id)) ?? 0, comments: cc.get(String(p.id)) ?? 0 })),
       articles: (arts ?? []).filter((a) => a.title),
       newMembers: newMembers ?? 0,
       stats,

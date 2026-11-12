@@ -19,7 +19,7 @@
 import { adminClient } from '../emailPrefs.ts'
 import { sendEmail } from '../mailer.ts'
 import { biColumns, button, esc, heading, paragraph, renderLayout, type Bi } from '../emailLayout.ts'
-import { block, mutualLine, nudgeLine, postCard, row, titleRow, type Person } from './activity.ts'
+import { block, LINK, mutualLine, nudgeLine, postCard, row, titleRow, type Person } from './activity.ts'
 import { inChunks, lastActive, people, plain } from './activityJobs.ts'
 import { communityStats, statsRow, type CommunityStats } from './onboardingReminders.ts'
 import { outOfTime } from './runClock.ts'
@@ -51,7 +51,7 @@ const MAX_KIND_LINES = 3
 /** Someone to show: a request waiting for her, or a member she may know (with why). */
 export interface ShownPerson extends Person { reason?: Bi | null }
 export interface PeopleBlock { kind: 'requests' | 'suggestions'; people: ShownPerson[]; total: number }
-export interface Standout { author: { name: string; avatarUrl: string }; text: string; likes: number; comments: number }
+export interface Standout { id: string; author: { name: string; avatarUrl: string }; text: string; likes: number; comments: number }
 export interface ComeBackContent {
   waiting: Waiting
   people: PeopleBlock | null
@@ -139,7 +139,7 @@ export function renderComeBack(stage: Stage, firstName: string, c: ComeBackConte
   }
   const standout = c.standout
     ? `<div style="height:8px"></div>${titleRow('comment', { he: 'דיברו על זה השבוע', en: 'Talked about this week' }, null)}` +
-      postCard(c.standout.text, c.standout.author, { likes: c.standout.likes, comments: c.standout.comments }, `${APP_URL()}/`)
+      postCard(c.standout.text, c.standout.author, { likes: c.standout.likes, comments: c.standout.comments }, LINK.post(c.standout.id))
     : ''
   const body =
     biColumns({ he: heading(h.he) + paragraph(lead.he), en: heading(h.en) + paragraph(lead.en) }) +
@@ -303,7 +303,7 @@ async function standoutPosts(): Promise<Array<Standout & { authorId: string }>> 
     .filter((p) => !seen.has(p.posted_by_uuid) && seen.add(p.posted_by_uuid)).slice(0, 3)
   const names = await people(top.map((p) => p.posted_by_uuid))
   return top.map((p) => ({
-    authorId: p.posted_by_uuid, author: names.get(p.posted_by_uuid) ?? SOMEONE(), text: plain(p.message),
+    id: String(p.id), authorId: p.posted_by_uuid, author: names.get(p.posted_by_uuid) ?? SOMEONE(), text: plain(p.message),
     likes: lc.get(String(p.id)) ?? 0, comments: cc.get(String(p.id)) ?? 0,
   }))
 }

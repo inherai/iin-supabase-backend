@@ -10,6 +10,7 @@ import { emailHealthJob } from '../lib/emails/health.ts'
 import { welcomeJob } from '../lib/emails/welcome.ts'
 import { onboardingRemindersJob } from '../lib/emails/onboardingReminders.ts'
 import { comeBackJob } from '../lib/emails/comeBack.ts'
+import { profileTipsJob } from '../lib/emails/profileTips.ts'
 import { inviteeJoinedJob, inviteeReminderJob, invitesUnlockedJob, inviteExpiredJob } from '../lib/emails/invitations.ts'
 import { accessReplyJob } from '../lib/emails/service.ts'
 import { contentDigestJob, networkJob, peopleJob, postViewsJob, requestReminderJob, weeklyCommunityJob } from '../lib/emails/activityJobs.ts'
@@ -52,6 +53,7 @@ export const LIFECYCLE_JOBS: LifecycleJob[] = [
   { name: 'invite_expired', run: (b) => inviteExpiredJob(b), slots: [0, 3] },
   // Nice to know (at most 1 a day / 4 a week per member — enforced in sendEmail)
   { name: 'onboarding_reminders', run: (b) => onboardingRemindersJob(b), slots: [0, 3] },
+  { name: 'profile_tips', run: (b) => profileTipsJob(b), slots: [0, 3] },           // profile under 70%: 3 emails, 10 / 30 days apart
   { name: 'weekly_community', run: (b) => weeklyCommunityJob(b), slots: [1, 4] },  // Wednesday 10:00 → Sunday
   { name: 'content_digest', run: (b) => contentDigestJob(b), slots: [1, 4] },      // evenings
   { name: 'post_views', run: (b) => postViewsJob(b), slots: [1, 4] },
