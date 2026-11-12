@@ -28,29 +28,56 @@ app.get("/", async (c) => {
 
   if (convError) return c.json({ error: convError.message }, 400);
 
-  // 2. שליפת כל הקשרים המאושרים של המשתמש הנוכחי
-  const { data: conns, error: connError } = await supabase
-    .from("connections")
-    .select("requester_id, receiver_id, status")
-    .eq("status", "accepted")
-    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
+  // 2. שליפת הקשרים המאושרים מול בני השיח בלבד
+  // Fetching every accepted connection of the user is cut off at PostgREST's max_rows (1000),
+  // which marked live conversations as disconnected for users with more connections than that.
+  const partnerIds = [...new Set(
+    convs.map(conv => conv.user1_id === user.id ? conv.user2_id : conv.user1_id)
+  )];
+  const connectedPartnerIds = new Set<string>();
+  const CHUNK_SIZE = 50;
+  for (let i = 0; i < partnerIds.length; i += CHUNK_SIZE) {
+    const chunk = partnerIds.slice(i, i + CHUNK_SIZE).join(",");
+    const { data: conns, error: connError } = await supabase
+      .from("connections")
+      .select("requester_id, receiver_id")
+      .eq("status", "accepted")
+      .or(`and(requester_id.eq.${user.id},receiver_id.in.(${chunk})),and(receiver_id.eq.${user.id},requester_id.in.(${chunk}))`);
 
-  if (connError) return c.json({ error: connError.message }, 400);
+    if (connError) return c.json({ error: connError.message }, 400);
+
+    for (const conn of conns ?? []) {
+      connectedPartnerIds.add(conn.requester_id === user.id ? conn.receiver_id : conn.requester_id);
+    }
+  }
 
   // 3. שליפת ההודעה האחרונה לכל שיחה
-  const conversationIds = convs.map(c => c.id);
+  // A single query over all conversations is cut off at PostgREST's max_rows (1000), so
+  // conversations whose newest message is older than the user's 1000 newest messages got
+  // no last message. Re-query only the conversations still missing one: the newest message
+  // among them is always in the next page, so every round resolves at least one conversation.
   const admin = getAdminClient();
-  const { data: lastMessages } = await admin
-    .from("messages")
-    .select("conversation_id, content, created_at")
-    .in("conversation_id", conversationIds)
-    .order("created_at", { ascending: false });
-
+  const MESSAGES_PAGE_SIZE = 1000; // keep equal to max_rows in config.toml
   const lastMessageMap: Record<string, { content: string; created_at: string }> = {};
-  for (const msg of lastMessages ?? []) {
-    if (!lastMessageMap[msg.conversation_id]) {
-      lastMessageMap[msg.conversation_id] = msg;
+  let pendingConversationIds: string[] = convs.map(c => c.id);
+  while (pendingConversationIds.length > 0) {
+    const { data: lastMessages } = await admin
+      .from("messages")
+      .select("conversation_id, content, created_at")
+      .in("conversation_id", pendingConversationIds)
+      .order("created_at", { ascending: false })
+      .limit(MESSAGES_PAGE_SIZE);
+
+    for (const msg of lastMessages ?? []) {
+      if (!lastMessageMap[msg.conversation_id]) {
+        lastMessageMap[msg.conversation_id] = msg;
+      }
     }
+
+    // A short page means every message of the pending conversations was seen;
+    // whatever is still missing simply has no messages.
+    if ((lastMessages ?? []).length < MESSAGES_PAGE_SIZE) break;
+    pendingConversationIds = pendingConversationIds.filter(id => !lastMessageMap[id]);
   }
 
   // 4. הצלבת הנתונים בקוד
@@ -59,9 +86,7 @@ app.get("/", async (c) => {
   const enhancedData = convs
     .map(conv => {
       const partnerId = conv.user1_id === user.id ? conv.user2_id : conv.user1_id;
-      const hasActiveConn = conns.some(conn =>
-        (conn.requester_id === partnerId || conn.receiver_id === partnerId)
-      );
+      const hasActiveConn = connectedPartnerIds.has(partnerId);
       const lastMsg = lastMessageMap[conv.id];
 
       return {
