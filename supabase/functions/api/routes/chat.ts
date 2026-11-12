@@ -1,5 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { connectedAmong } from "./_connectionIds.ts";
 
 const app = new Hono();
 
@@ -31,25 +32,14 @@ app.get("/", async (c) => {
   // 2. שליפת הקשרים המאושרים מול בני השיח בלבד
   // Fetching every accepted connection of the user is cut off at PostgREST's max_rows (1000),
   // which marked live conversations as disconnected for users with more connections than that.
-  const partnerIds = [...new Set(
-    convs.map(conv => conv.user1_id === user.id ? conv.user2_id : conv.user1_id)
-  )];
-  const connectedPartnerIds = new Set<string>();
-  const CHUNK_SIZE = 50;
-  for (let i = 0; i < partnerIds.length; i += CHUNK_SIZE) {
-    const chunk = partnerIds.slice(i, i + CHUNK_SIZE).join(",");
-    const { data: conns, error: connError } = await supabase
-      .from("connections")
-      .select("requester_id, receiver_id")
-      .eq("status", "accepted")
-      .or(`and(requester_id.eq.${user.id},receiver_id.in.(${chunk})),and(receiver_id.eq.${user.id},requester_id.in.(${chunk}))`);
+  const { ids: connectedPartnerIds, error: connError } = await connectedAmong(
+    supabase,
+    user.id,
+    convs.map(conv => conv.user1_id === user.id ? conv.user2_id : conv.user1_id),
+    ["accepted"],
+  );
 
-    if (connError) return c.json({ error: connError.message }, 400);
-
-    for (const conn of conns ?? []) {
-      connectedPartnerIds.add(conn.requester_id === user.id ? conn.receiver_id : conn.requester_id);
-    }
-  }
+  if (connError) return c.json({ error: connError.message }, 400);
 
   // 3. שליפת ההודעה האחרונה לכל שיחה
   // A single query over all conversations is cut off at PostgREST's max_rows (1000), so

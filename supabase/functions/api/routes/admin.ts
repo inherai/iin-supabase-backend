@@ -632,26 +632,33 @@ app.get("/users", async (c) => {
   const uuids = (users || []).map((u: any) => u.uuid);
   const emails = (users || []).map((u: any) => u.email).filter(Boolean);
 
-  const [
-    { data: posts },
-    { data: comments },
-    { data: likes },
-    { data: connections },
-  ] = await Promise.all([
+  // Activity rows for a whole page of users easily pass db-max-rows, so page them through;
+  // ordered by id so range pagination is stable.
+  const countRows = (table: string, select: string, applyFilters: (q: any) => any) =>
+    fetchAllRows(db, table, select, (q) => applyFilters(q).order("id", { ascending: true }))
+      .catch((e) => {
+        console.error(`[admin] users list: counting ${table} failed:`, e?.message ?? e);
+        return [] as any[];
+      });
+
+  const [posts, comments, likes, connections, receivedConnections] = await Promise.all([
     emails.length > 0
-      ? db.from("posts").select("sender").in("sender", emails)
-          .not("post_type", "is", null).neq("post_type", "email")
-      : Promise.resolve({ data: [] }),
+      ? countRows("posts", "sender", (q) => q.in("sender", emails)
+          .not("post_type", "is", null).neq("post_type", "email"))
+      : [],
     emails.length > 0
-      ? db.from("comments").select("sender, posts!inner(post_type)").in("sender", emails)
-          .not("posts.post_type", "is", null).neq("posts.post_type", "email")
-      : Promise.resolve({ data: [] }),
+      ? countRows("comments", "sender, posts!inner(post_type)", (q) => q.in("sender", emails)
+          .not("posts.post_type", "is", null).neq("posts.post_type", "email"))
+      : [],
     uuids.length > 0
-      ? db.from("likes").select("user_id").in("user_id", uuids)
-      : Promise.resolve({ data: [] }),
+      ? countRows("likes", "user_id", (q) => q.in("user_id", uuids))
+      : [],
     uuids.length > 0
-      ? db.from("connections").select("requester_id,receiver_id").in("requester_id", uuids).eq("status", "accepted")
-      : Promise.resolve({ data: [] }),
+      ? countRows("connections", "requester_id", (q) => q.in("requester_id", uuids).eq("status", "accepted"))
+      : [],
+    uuids.length > 0
+      ? countRows("connections", "receiver_id", (q) => q.in("receiver_id", uuids).eq("status", "accepted"))
+      : [],
   ]);
 
   const postsMap = new Map<string, number>();
@@ -673,10 +680,6 @@ app.get("/users", async (c) => {
   }
 
   // Also count received connections
-  const { data: receivedConnections } = uuids.length > 0
-    ? await db.from("connections").select("receiver_id").in("receiver_id", uuids).eq("status", "accepted")
-    : { data: [] };
-
   for (const conn of receivedConnections || []) {
     connectionsMap.set(conn.receiver_id, (connectionsMap.get(conn.receiver_id) || 0) + 1);
   }

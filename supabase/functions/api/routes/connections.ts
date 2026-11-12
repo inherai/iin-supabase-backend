@@ -1,6 +1,7 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { parsePeopleSearchParams } from "./_peopleSearch.ts";
+import { connectedAmong, fetchAcceptedConnectionIds, isUuid } from "./_connectionIds.ts";
 import {
   asPendingConnections,
   clearDeclinesBetween,
@@ -80,7 +81,9 @@ const CONNECTION_SELECT = `
 
 // GET /api/connections
 // Query params:
-// - status: 'accepted' (with pagination & search) or 'pending' (incoming requests only)
+// - status: 'accepted' (with pagination & search), 'pending' (incoming requests only)
+//   or 'sent' (my outgoing requests still waiting, incl. declined ones that look pending)
+// - user_id: only my connection with this one user (any status)
 // - page: page number (for accepted only, default: 1)
 // - limit: items per page (for accepted only, default: 20)
 // - search: search by name (for accepted only)
@@ -95,6 +98,57 @@ app.get("/", async (c) => {
   const page = parseInt(c.req.query("page") || "1");
   const limit = parseInt(c.req.query("limit") || "20");
   const search = c.req.query("search") || "";
+  const withUserId = c.req.query("user_id");
+
+  // The unfiltered list below is cut off at PostgREST's max_rows (1000), so callers that
+  // need one specific slice of it ask for that slice instead of filtering the whole list.
+  if (!status && withUserId) {
+    if (!isUuid(withUserId)) return c.json({ error: "Invalid user_id" }, 400);
+
+    const { data, error } = await supabase
+      .from("connections")
+      .select(CONNECTION_SELECT)
+      .or(`and(requester_id.eq.${user.id},receiver_id.eq.${withUserId}),and(requester_id.eq.${withUserId},receiver_id.eq.${user.id})`);
+
+    if (error) return c.json({ error: error.message }, 400);
+    if (data && data.length > 0) return c.json(data);
+
+    // A request of mine that she declined still looks pending to me
+    const declined = (await pendingLookingRequests(supabase, user.id))
+      .filter((row: any) => row.receiver_id === withUserId);
+    return c.json(declined);
+  }
+
+  if (status === "sent") {
+    const { data, error } = await supabase
+      .from("connections")
+      .select(CONNECTION_SELECT)
+      .eq("requester_id", user.id)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false });
+
+    if (error) return c.json({ error: error.message }, 400);
+
+    const rows = data ?? [];
+    let declined = await pendingLookingRequests(supabase, user.id);
+    if (declined.length > 0) {
+      // Same rule as the unfiltered list: skip a declined request when a real row
+      // with that person exists (in any status, either direction).
+      const { ids: realPartners } = await connectedAmong(
+        supabase,
+        user.id,
+        declined.map((row: any) => row.receiver_id),
+      );
+      declined = declined.filter((row: any) => !realPartners.has(row.receiver_id));
+    }
+    if (declined.length === 0) return c.json(rows);
+
+    return c.json(
+      [...rows, ...declined].sort((a: any, b: any) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ),
+    );
+  }
 
   let query = supabase
     .from("connections")
@@ -179,17 +233,9 @@ app.get("/accepted-ids", async (c) => {
   const user = c.get("user");
   if (!user) return c.json({ error: "Unauthorized" }, 401);
 
-  const { data, error } = await supabase
-    .from("connections")
-    .select("requester_id, receiver_id")
-    .eq("status", "accepted")
-    .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
+  const { ids, error } = await fetchAcceptedConnectionIds(supabase, user.id);
 
   if (error) return c.json({ error: error.message }, 400);
-
-  const ids = (data ?? []).map((row: any) =>
-    row.requester_id === user.id ? row.receiver_id : row.requester_id
-  );
 
   return c.json({ ids });
 });
@@ -284,22 +330,11 @@ app.post("/batch-status", async (c) => {
     return c.json({ connected_ids: [] });
   }
 
-  const { data, error } = await supabase
-    .from("connections")
-    .select("requester_id, receiver_id")
-    .eq("status", "accepted")
-    .or(
-      `and(requester_id.eq.${user.id},receiver_id.in.(${userIds.join(",")})),` +
-      `and(receiver_id.eq.${user.id},requester_id.in.(${userIds.join(",")}))`
-    );
+  const { ids, error } = await connectedAmong(supabase, user.id, userIds, ["accepted"]);
 
   if (error) return c.json({ error: error.message }, 400);
 
-  const connectedIds = (data ?? []).map((row: any) =>
-    row.requester_id === user.id ? row.receiver_id : row.requester_id
-  );
-
-  return c.json({ connected_ids: connectedIds });
+  return c.json({ connected_ids: [...ids] });
 });
 
 // POST /api/connections

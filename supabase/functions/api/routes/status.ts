@@ -1,5 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { supabaseAdmin } from "../middleware.ts";
+import { connectedAmong } from "./_connectionIds.ts";
 
 const app = new Hono();
 
@@ -52,27 +53,14 @@ app.get("/", async (c) => {
 
   // Top For You mode: compute activity metrics for smart refresh threshold
   if (mode === "top" && since) {
-    // Fetch accepted connections + active posts (48h window) in parallel
-    const [connectedRes, activePostsRes] = await Promise.all([
-      supabase
-        .from("connections")
-        .select("requester_id, receiver_id")
-        .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
-        .eq("status", "accepted"),
-      supabase
-        .from("feed_cache")
-        .select("post_id")
-        .gt(
-          "effective_date",
-          new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
-        ),
-    ]);
-
-    const connectedUuids: string[] = (connectedRes.data || [])
-      .map((c: any) =>
-        c.requester_id === user.id ? c.receiver_id : c.requester_id
-      )
-      .filter(Boolean);
+    // Active posts (48h window)
+    const activePostsRes = await supabase
+      .from("feed_cache")
+      .select("post_id")
+      .gt(
+        "effective_date",
+        new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+      );
 
     const activePostIds: string[] = (activePostsRes.data || []).map(
       (p: any) => p.post_id
@@ -91,37 +79,17 @@ app.get("/", async (c) => {
       });
     }
 
-    const hasConnections = connectedUuids.length > 0;
-
-    // comments.posted_by_uuid doesn't exist — the table only stores the
-    // commenter's email (sender), so network comments are resolved via
-    // connected users' emails instead of a direct uuid filter.
-    const connectedEmails: Set<string> = hasConnections
-      ? new Set(
-          (
-            await supabaseAdmin
-              .from("users")
-              .select("email")
-              .in("uuid", connectedUuids)
-          ).data?.map((u: any) => (u.email || "").toLowerCase()).filter(Boolean) ?? []
-        )
-      : new Set();
-
-    const [ncRes, gcRes, nlRes, glRes, npRes] = await Promise.all([
-      // Network comments on active posts since $since
-      connectedEmails.size > 0
-        ? supabase
-            .from("comments")
-            .select("sender")
-            .gt("created_at", since)
-            .in("post_id", activePostIds)
-            .then(({ data, error }) => ({
-              count: (data || []).filter((c: any) =>
-                connectedEmails.has((c.sender || "").toLowerCase())
-              ).length,
-              error,
-            }))
-        : Promise.resolve({ count: 0, error: null }),
+    // Who acted since $since is a short list, while her connections can run into the
+    // thousands. So read the actors first and ask which of them she is connected to,
+    // instead of loading every connection (cut off at 1000 rows, and far too long to
+    // pass back as an .in() filter) on every poll.
+    const [commentsRes, gcRes, likesRes, glRes, npRes] = await Promise.all([
+      // Who commented on active posts since $since
+      supabase
+        .from("comments")
+        .select("sender")
+        .gt("created_at", since)
+        .in("post_id", activePostIds),
 
       // All comments on active posts since $since
       supabase
@@ -130,15 +98,12 @@ app.get("/", async (c) => {
         .gt("created_at", since)
         .in("post_id", activePostIds),
 
-      // Network likes on active posts since $since
-      hasConnections
-        ? supabase
-            .from("likes")
-            .select("id", { count: "exact", head: true })
-            .gt("created_at", since)
-            .in("target_id", activePostIds)
-            .in("user_id", connectedUuids)
-        : Promise.resolve({ count: 0, error: null }),
+      // Who liked active posts since $since
+      supabase
+        .from("likes")
+        .select("user_id")
+        .gt("created_at", since)
+        .in("target_id", activePostIds),
 
       // All likes on active posts since $since
       supabase
@@ -154,14 +119,45 @@ app.get("/", async (c) => {
         .gt("sent_at", since),
     ]);
 
+    const commentSenders: string[] = (commentsRes.data || [])
+      .map((cm: any) => (cm.sender || "").toLowerCase())
+      .filter(Boolean);
+    const likerIds: string[] = (likesRes.data || [])
+      .map((l: any) => l.user_id)
+      .filter(Boolean);
+
+    // comments.posted_by_uuid doesn't exist — the table only stores the
+    // commenter's email (sender), so commenters are resolved to uuids first.
+    const uuidByEmail = new Map<string, string>();
+    const senderEmails = [...new Set(commentSenders)];
+    const EMAIL_CHUNK_SIZE = 100;
+    for (let i = 0; i < senderEmails.length; i += EMAIL_CHUNK_SIZE) {
+      const { data: senders } = await supabaseAdmin
+        .from("users")
+        .select("uuid, email")
+        .in("email", senderEmails.slice(i, i + EMAIL_CHUNK_SIZE));
+      for (const u of senders ?? []) {
+        if (u.email) uuidByEmail.set(u.email.toLowerCase(), u.uuid);
+      }
+    }
+
+    const actorIds = [...new Set([...likerIds, ...uuidByEmail.values()])];
+    const { ids: connectedActors } = await connectedAmong(supabase, user.id, actorIds, ["accepted"]);
+
+    const networkComments = commentSenders.filter((email) => {
+      const uuid = uuidByEmail.get(email);
+      return !!uuid && connectedActors.has(uuid);
+    }).length;
+    const networkLikes = likerIds.filter((id) => connectedActors.has(id)).length;
+
     return c.json({
       unread_notifications: notificationsResult.count ?? 0,
       pending_connections: connectionsResult.count ?? 0,
       unread_messages: (messagesResult.data as number) ?? 0,
       new_posts: npRes.count ?? 0,
-      network_comments: ncRes.count ?? 0,
+      network_comments: networkComments,
       general_comments: gcRes.count ?? 0,
-      network_likes: nlRes.count ?? 0,
+      network_likes: networkLikes,
       general_likes: glRes.count ?? 0,
     });
   }

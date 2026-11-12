@@ -3,6 +3,7 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { parsePeopleSearchParams } from './_peopleSearch.ts'
 import { clearDeclinesForUser, declinedUserIds } from './_connectionDeclines.ts'
+import { connectedAmong } from './_connectionIds.ts'
 
 // ⚠️  ADMIN CLIENT usage in this file — bypasses ALL Supabase RLS policies.
 // It is used in two categories:
@@ -728,14 +729,8 @@ app.get('/', async (c) => {
       // the viewer is already connected
       // to is never a valid "people you may know" result.
       if (userIds.length > 0) {
-        const { data: existingConnections } = await supabase
-          .from('connections')
-          .select('requester_id, receiver_id')
-          .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`)
-          .in('status', ['accepted', 'pending'])
-        const excludedIds = new Set(
-          (existingConnections ?? []).map((c: any) => c.requester_id === user.id ? c.receiver_id : c.requester_id)
-        )
+        // Only the candidates are checked — her full connection list can exceed one response.
+        const { ids: excludedIds } = await connectedAmong(supabase, user.id, userIds, ['accepted', 'pending'])
         // A declined request is not suggested again, to either side
         for (const id of await declinedUserIds(user.id)) excludedIds.add(id)
         userIds = userIds.filter((id: string) => !excludedIds.has(id))

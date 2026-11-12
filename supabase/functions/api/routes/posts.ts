@@ -3,6 +3,7 @@ import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import OpenAI from "https://esm.sh/openai@4";
 import { CONTENT_ROLES, checkActAsCompany } from '../lib/companyAccess.ts'
+import { fetchAcceptedConnectionIds } from './_connectionIds.ts'
 
 const app = new Hono()
 
@@ -902,12 +903,8 @@ async function handleRankedFeed(c: any) {
           .in('post_id', postIds)
       : Promise.resolve({ data: [] }),
     current_user_uuid
-      ? supabase
-          .from('connections')
-          .select('requester_id, receiver_id')
-          .or(`requester_id.eq.${current_user_uuid},receiver_id.eq.${current_user_uuid}`)
-          .eq('status', 'accepted')
-      : Promise.resolve({ data: [] }),
+      ? fetchAcceptedConnectionIds(supabase, current_user_uuid)
+      : Promise.resolve({ ids: [] as string[] }),
     current_user_uuid
       ? supabaseAdmin.from('user_activity').select('last_feed_visit_at').eq('user_id', current_user_uuid).maybeSingle()
       : Promise.resolve({ data: null })
@@ -936,11 +933,7 @@ async function handleRankedFeed(c: any) {
     }
   })
 
-  const connectedUuids = new Set<string>(
-    (connectionsRes.data || []).map((conn: any) =>
-      conn.requester_id === current_user_uuid ? conn.receiver_id : conn.requester_id
-    ).filter(Boolean)
-  )
+  const connectedUuids = new Set<string>(connectionsRes.ids.filter(Boolean))
 
   const visibleComments = viewerIsRecruiter
     ? allComments.filter((cm: any) => cm.community_members_only !== true)
