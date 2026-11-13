@@ -591,6 +591,18 @@ app.get("/analytics", async (c) => {
   }
 });
 
+// Profile analytics — computed in the DB (add_profile_analytics_safe.sql), which checks is_admin again.
+// Runs as the signed-in admin: no service role here.
+app.get("/profile-analytics", async (c) => {
+  const supabase = c.get("supabase");
+  const { data, error } = await supabase.rpc("admin_profile_analytics");
+  if (error) {
+    console.error("profile analytics error:", error);
+    return c.json({ error: error.message }, 500);
+  }
+  return c.json(data);
+});
+
 // ==================== USERS ====================
 
 // Admin-granted invites, as the client sees them: the bonus is 0 once its week is over
