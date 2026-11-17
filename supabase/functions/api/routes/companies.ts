@@ -2,7 +2,9 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { CONTENT_ROLES, getCompanyRole, type CompanyRole } from '../lib/companyAccess.ts'
 import { getEntitlement } from '../lib/entitlements.ts'
-import { isFollowingCompany, setCompanyFollow } from '../lib/companyFollows.ts'
+import { followedCompanyIds, isFollowingCompany, setCompanyFollow } from '../lib/companyFollows.ts'
+import { recordCompanyView } from '../lib/companyViews.ts'
+import { fetchAcceptedConnectionIds, isUuid } from './_connectionIds.ts'
 import { ORG_TYPES, cleanText, freeText, isHttpsUrl, validatePageUpdate } from '../lib/companyPageFields.ts'
 import { sendNewClaimAlert } from '../lib/emails/companyPages.ts'
 
@@ -82,6 +84,72 @@ async function fetchPublicUsers(
     .map((u: any) => ({ ...u, image: u.image === 'true' ? true : null }))
   return { users, error: null }
 }
+
+// GET /api/companies/mentionable?search= — managed pages by name, for @mentions in posts and comments
+app.get('/mentionable', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const search = (c.req.query('search') || '').trim().slice(0, 60)
+  if (!search) return c.json({ pages: [] })
+
+  const { data, error } = await c.get('supabase')
+    .from('companies')
+    .select('id, name, logo, slug, tagline')
+    .eq('page_status', 'claimed')
+    .ilike('name', `%${search.replace(/[%_\\]/g, '\\$&')}%`)
+    .order('followers_count', { ascending: false })
+    .limit(5)
+
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ pages: data || [] })
+})
+
+const SEARCH_PAGE_COLUMNS =
+  'id, slug, name, name_he, logo, tagline, tagline_he, verified, followers_count, org_type, page_status'
+const SEARCH_PAGES_LIMIT = 4
+
+// GET /api/companies/search-pages?q= — organization pages for the site search, by name in
+// either language: managed pages first, then by followers. Suspended pages are left out.
+app.get('/search-pages', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  const q = (c.req.query('q') || '').trim().slice(0, 60)
+  if (q.length < 2) return c.json({ pages: [] })
+
+  const supabase = c.get('supabase')
+  const pattern = `%${q.replace(/[%_\\]/g, '\\$&')}%`
+  // one query per name column: the text never goes inside an or() filter string
+  const byColumn = (column: 'name' | 'name_he') => supabase
+    .from('companies')
+    .select(SEARCH_PAGE_COLUMNS)
+    .neq('page_status', 'suspended')
+    .ilike(column, pattern)
+    .order('page_status', { ascending: true }) // 'claimed' before 'unclaimed'
+    .order('followers_count', { ascending: false, nullsFirst: false })
+    .limit(SEARCH_PAGES_LIMIT)
+
+  const [english, hebrew] = await Promise.all([byColumn('name'), byColumn('name_he')])
+  if (english.error) return c.json({ error: english.error.message }, 500)
+
+  const byId = new Map<number, any>()
+  for (const row of [...(english.data || []), ...(hebrew.data || [])]) byId.set(row.id, row)
+  const found = [...byId.values()]
+    .sort((a, b) =>
+      (a.page_status === 'claimed' ? 0 : 1) - (b.page_status === 'claimed' ? 0 : 1) ||
+      (b.followers_count ?? 0) - (a.followers_count ?? 0))
+    .slice(0, SEARCH_PAGES_LIMIT)
+
+  const following = await followedCompanyIds(supabase, user.id, found.map((page) => page.id))
+  return c.json({
+    pages: found.map(({ page_status, ...page }) => ({
+      ...page,
+      is_claimed: page_status === 'claimed',
+      is_following: following.has(page.id),
+    })),
+  })
+})
 
 // GET /api/companies - companies list with pagination and search
 app.get('/', async (c) => {
@@ -270,6 +338,22 @@ app.get('/by-slug/:slug', async (c) => {
     return c.json({ error: 'Company not found' }, 404)
   }
 
+  // a look by a member counts toward the page's numbers (its managers and Duallin admins don't)
+  if (!role && !isPlatformAdmin) await recordCompanyView(supabase, user.id, company.id)
+
+  // an invitation to follow the page that she hasn't answered (only she can read it)
+  let pendingInvite: { inviter: any } | null = null
+  if (!isFollowing) {
+    const { data: invite } = await supabase.from('company_follow_invites')
+      .select('inviter_id').eq('company_id', company.id).eq('invitee_id', user.id).eq('status', 'pending').maybeSingle()
+    if (invite) {
+      const { data: inviter } = invite.inviter_id
+        ? await supabase.from('public_users_view').select('uuid, first_name, last_name').eq('uuid', invite.inviter_id).maybeSingle()
+        : { data: null }
+      pendingInvite = { inviter: inviter ?? null }
+    }
+  }
+
   const canEdit = isPlatformAdmin || (company.page_status !== 'suspended' && role !== null && CONTENT_ROLES.includes(role))
   // the page's recruiters see how many applications wait for them (the database counts only what they may read)
   const newApplications = role === 'owner' || role === 'recruiter'
@@ -290,6 +374,7 @@ app.get('/by-slug/:slug', async (c) => {
       can_rename: isPlatformAdmin || (canEdit && role === 'owner'),
       can_manage_admins: isPlatformAdmin || role === 'owner',
       new_applications: newApplications,
+      pending_invite: pendingInvite,
     },
   })
 })
@@ -363,6 +448,173 @@ app.get('/:id/post-ids', async (c) => {
     ids: page.map((p: any) => String(p.id)),
     next_cursor: rows.length > limit ? page[page.length - 1].sent_at : null,
   })
+})
+
+// POST /api/companies/:id/job-views/:jobId — she opened one of the page's jobs.
+// Always answers 204: whether the look was counted is none of the viewer's concern.
+app.post('/:id/job-views/:jobId', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const companyId = parseCompanyId(c.req.param('id'))
+  const jobId = Number(c.req.param('jobId'))
+  if (companyId === null || !Number.isSafeInteger(jobId) || jobId <= 0) return c.json({ error: 'Invalid id' }, 400)
+
+  if (user.app_metadata?.is_admin !== true) await recordCompanyView(c.get('supabase'), user.id, companyId, jobId)
+  return c.body(null, 204)
+})
+
+// GET /api/companies/:id/stats?days=7|30|90 — the page's numbers, totals only.
+// Who may see them (any manager of the page, when the plan includes them) is decided by the database.
+app.get('/:id/stats', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const companyId = parseCompanyId(c.req.param('id'))
+  if (companyId === null) return c.json({ error: 'Invalid company id' }, 400)
+  const days = Number(c.req.query('days') || 30)
+
+  const { data, error } = await c.get('supabase').rpc('company_page_stats', { p_company_id: companyId, p_days: days })
+  if (error) {
+    if (error.code === '42501') {
+      const code = error.message === 'not_in_plan' ? 'not_in_plan' : 'forbidden'
+      return c.json({ error: error.message, code }, 403)
+    }
+    return dbErrorResponse(c, error)
+  }
+  return c.json(data)
+})
+
+// ─── Growing the page ─────────────────────────────────────────────────────────
+// All of it runs in the member's own session: who may invite whom, the monthly limit, the
+// weekly employee alert and who may read what are decided by the database.
+
+const INVITE_ERRORS: Record<string, number> = {
+  not_a_connection: 400, already_following: 409, page_not_active: 403,
+}
+
+// GET /api/companies/:id/invite-candidates?search= — her connections who don't follow the page
+// and weren't invited to it yet, with what is left of this month's invitations.
+app.get('/:id/invite-candidates', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const companyId = parseCompanyId(c.req.param('id'))
+  if (companyId === null) return c.json({ error: 'Invalid company id' }, 400)
+  const supabase = c.get('supabase')
+  const search = (c.req.query('search') || '').trim().toLowerCase().slice(0, 60)
+
+  const invited = await supabase.rpc('company_invited_member_ids', { p_company_id: companyId })
+  if (invited.error) return c.json({ error: invited.error.message, code: 'forbidden' }, 403)
+  const { ids: connectionIds, error: connError } = await fetchAcceptedConnectionIds(supabase, user.id)
+  if (connError) return c.json({ error: connError.message }, 500)
+
+  const excluded = new Set<string>((invited.data || []).map((row: any) => typeof row === 'string' ? row : row.company_invited_member_ids))
+  const remaining = connectionIds.filter((id) => !excluded.has(id))
+  const followers = new Set<string>()
+  for (let i = 0; i < remaining.length; i += 100) {
+    const { data } = await supabase.from('article_company_follows').select('follower_uuid')
+      .eq('company_id', companyId).in('follower_uuid', remaining.slice(i, i + 100))
+    for (const row of data || []) followers.add(row.follower_uuid)
+  }
+  const candidateIds = remaining.filter((id) => !followers.has(id))
+
+  const people: any[] = []
+  for (let i = 0; i < candidateIds.length; i += 100) {
+    const { data } = await supabase.from('public_users_view')
+      .select('uuid, first_name, last_name, headline, image')
+      .in('uuid', candidateIds.slice(i, i + 100))
+    people.push(...(data || []))
+  }
+  const matching = people
+    .filter((p) => !search || `${p.first_name ?? ''} ${p.last_name ?? ''}`.toLowerCase().includes(search))
+    .sort((a, b) => `${a.first_name} ${a.last_name}`.localeCompare(`${b.first_name} ${b.last_name}`))
+
+  // this month's invitations: the same numbers the plan screen shows
+  const { data: plan } = await supabase.rpc('entitlements_for', { p_subject_type: 'company', p_subject_id: String(companyId) })
+  const quota = (plan || []).find((row: any) => row.feature_key === 'page.follow_invites.monthly')
+  return c.json({
+    candidates: matching.slice(0, 200),
+    total: matching.length,
+    invites_left: !quota?.enabled ? 0 : quota.limit_value === null ? null : Math.max(0, quota.limit_value - (quota.used ?? 0)),
+  })
+})
+
+// POST /api/companies/:id/invites { user_ids } — invite connections to follow the page.
+// Each is sent on its own, so one refusal doesn't stop the rest; the answer says what happened.
+app.post('/:id/invites', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const companyId = parseCompanyId(c.req.param('id'))
+  if (companyId === null) return c.json({ error: 'Invalid company id' }, 400)
+  const body = await c.req.json().catch(() => ({}))
+  const userIds: string[] = Array.isArray(body?.user_ids) ? [...new Set<string>(body.user_ids.filter(isUuid))].slice(0, 50) : []
+  if (userIds.length === 0) return c.json({ error: 'No one to invite' }, 400)
+
+  const supabase = c.get('supabase')
+  const invited: string[] = []
+  const refused: Array<{ user_id: string; code: string }> = []
+  for (const inviteeId of userIds) {
+    const { error } = await supabase.from('company_follow_invites').insert({ company_id: companyId, invitee_id: inviteeId })
+    if (!error) { invited.push(inviteeId); continue }
+    const code = error.code === '23505' ? 'already_invited'
+      : error.message?.startsWith('entitlement_limit_reached') ? 'limit_reached'
+      : error.message?.startsWith('entitlement_not_included') ? 'not_in_plan'
+      : INVITE_ERRORS[error.message] ? error.message
+      : error.code === '42501' ? 'forbidden' : 'failed'
+    refused.push({ user_id: inviteeId, code })
+    // nothing more can go out this month (or at all): stop asking
+    if (code === 'limit_reached' || code === 'not_in_plan' || code === 'forbidden' || code === 'page_not_active') break
+  }
+  return c.json({ invited, refused }, invited.length === 0 && refused.length > 0 ? 400 : 200)
+})
+
+// POST /api/companies/:id/invites/answer { accept } — she answers the page's invitation.
+app.post('/:id/invites/answer', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const companyId = parseCompanyId(c.req.param('id'))
+  if (companyId === null) return c.json({ error: 'Invalid company id' }, 400)
+  const accept = (await c.req.json().catch(() => ({})))?.accept === true
+
+  // the invitation first: only an open one may be answered (a declined one never turns into a follow)
+  const supabase = c.get('supabase')
+  const { data, error } = await supabase.from('company_follow_invites')
+    .update({ status: accept ? 'accepted' : 'declined' })
+    .eq('company_id', companyId).eq('invitee_id', user.id).eq('status', 'pending')
+    .select('id')
+  if (error) return dbErrorResponse(c, error)
+  if (!data || data.length === 0) return c.json({ error: 'No open invitation' }, 404)
+  if (accept) {
+    const { error: followError } = await setCompanyFollow(supabase, user.id, companyId, true)
+    if (followError) return dbErrorResponse(c, followError)
+  }
+  return c.json({ status: accept ? 'accepted' : 'declined', is_following: accept })
+})
+
+// GET /api/companies/:id/employee-alert — how many employees a page post can tell, and when.
+app.get('/:id/employee-alert', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const companyId = parseCompanyId(c.req.param('id'))
+  if (companyId === null) return c.json({ error: 'Invalid company id' }, 400)
+  const { data, error } = await c.get('supabase').rpc('company_employee_alert_status', { p_company_id: companyId })
+  if (error) return c.json({ error: error.message, code: 'forbidden' }, 403)
+  return c.json(data)
+})
+
+// POST /api/companies/:id/employee-alert { post_id } — tell the page's employees about its new post.
+app.post('/:id/employee-alert', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const companyId = parseCompanyId(c.req.param('id'))
+  if (companyId === null) return c.json({ error: 'Invalid company id' }, 400)
+  const postId = (await c.req.json().catch(() => ({})))?.post_id
+  if (typeof postId !== 'string' || !postId) return c.json({ error: 'post_id is required' }, 400)
+
+  const { data, error } = await c.get('supabase').rpc('notify_page_employees', { p_post_id: postId })
+  if (error) {
+    const code = ['weekly_limit', 'post_too_old', 'page_not_active', 'not_a_manager'].includes(error.message) ? error.message : 'failed'
+    return c.json({ error: error.message, code }, code === 'not_a_manager' ? 403 : 400)
+  }
+  return c.json({ notified: data ?? 0 })
 })
 
 // POST / DELETE /api/companies/:id/follow

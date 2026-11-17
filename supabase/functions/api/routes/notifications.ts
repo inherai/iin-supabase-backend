@@ -2,6 +2,9 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 
 const app = new Hono();
 
+/** Notifications whose target_id is a post. */
+const POST_TYPES = ["POST_LIKE", "POST_COMMENT", "MENTION", "REPLY", "COMMENT_REACTION", "PAGE_MENTION", "COMPANY_EMPLOYEE_POST"];
+
 // GET /notifications — all unread (capped at 100) merged with the 30 most recent.
 // The union guarantees an unread notification is never pushed out of the window
 // by newer read ones — the client derives the badge count from this list, so
@@ -42,7 +45,7 @@ app.get("/", async (c) => {
   const actorIds = [...new Set(notifications.map((n: any) => n.actor_id).filter(Boolean))];
   const postIds = [...new Set(
     notifications
-      .filter((n: any) => ["POST_LIKE", "POST_COMMENT", "MENTION", "REPLY", "COMMENT_REACTION"].includes(n.type) && n.target_id)
+      .filter((n: any) => POST_TYPES.includes(n.type) && n.target_id)
       .map((n: any) => n.target_id)
   )];
   const articleIds = [...new Set(
@@ -51,12 +54,14 @@ app.get("/", async (c) => {
       .map((n: any) => n.target_id)
   )];
 
-  // Company-page notifications point at a company id ('new' = an organization without a page yet)
-  const companyIds = [...new Set(
-    notifications
+  // Company-page notifications point at a company id ('new' = an organization without a page yet).
+  // Others may carry a page too: the page that did it (actor_company_id) and the page it is about (company_id).
+  const companyIds = [...new Set([
+    ...notifications
       .filter((n: any) => String(n.type).startsWith("COMPANY_") && /^\d+$/.test(n.target_id ?? ""))
-      .map((n: any) => Number(n.target_id))
-  )];
+      .map((n: any) => Number(n.target_id)),
+    ...notifications.flatMap((n: any) => [n.actor_company_id, n.company_id]).filter(Boolean).map(Number),
+  ])];
 
   // Fetch enrichment data in parallel
   const [actorsRes, postsRes, articlesRes, companiesRes] = await Promise.all([
@@ -70,13 +75,13 @@ app.get("/", async (c) => {
       ? supabase.from("articles").select("id, title").in("id", articleIds)
       : Promise.resolve({ data: [] }),
     companyIds.length > 0
-      ? supabase.from("companies").select("id, name, slug").in("id", companyIds)
+      ? supabase.from("companies").select("id, name, slug, logo").in("id", companyIds)
       : Promise.resolve({ data: [] }),
   ]);
 
-  const companyMap = new Map<string, { name: string; slug: string }>();
+  const companyMap = new Map<string, { name: string; slug: string; logo: string | null }>();
   for (const co of (companiesRes.data ?? []) as any[]) {
-    companyMap.set(String(co.id), { name: co.name, slug: co.slug });
+    companyMap.set(String(co.id), { name: co.name, slug: co.slug, logo: co.logo ?? null });
   }
 
   const nameMap = new Map<string, string>();
@@ -100,13 +105,16 @@ app.get("/", async (c) => {
   const enriched = notifications.map((n: any) => ({
     ...n,
     users: n.actor_id ? { name: nameMap.get(n.actor_id) ?? "", has_image: imageMap.get(n.actor_id) ?? null } : undefined,
-    posts: ["POST_LIKE", "POST_COMMENT", "MENTION", "REPLY", "COMMENT_REACTION"].includes(n.type) && n.target_id
+    posts: POST_TYPES.includes(n.type) && n.target_id
       ? { subject: subjectMap.get(n.target_id) ?? undefined }
       : null,
     articles: ["ARTICLE_COMMENT", "ARTICLE_LIKE", "NEW_ARTICLE", "NEW_COMPANY_ARTICLE", "ARTICLE_COMMENT_REACTION", "ARTICLE_MENTION", "ARTICLE_REPLY"].includes(n.type) && n.target_id
       ? { title: articleTitleMap.get(n.target_id) ?? undefined }
       : null,
     companies: String(n.type).startsWith("COMPANY_") ? (companyMap.get(n.target_id) ?? null) : null,
+    // a page did this (the member behind it is not named) / this is about a page she manages
+    actor_company: n.actor_company_id ? (companyMap.get(String(n.actor_company_id)) ?? null) : null,
+    page: n.company_id ? (companyMap.get(String(n.company_id)) ?? null) : null,
   }));
 
   return c.json({ notifications: enriched });

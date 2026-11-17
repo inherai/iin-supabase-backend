@@ -204,6 +204,7 @@ app.get('/posts/count', async (c) => {
       .from('posts')
       .select('id', { count: 'exact', head: true })
       .eq('sender', targetUser.email)
+      .is('company_id', null) // what she wrote in a page's name is the page's
 
     if (error) {
       return c.json({ error: error.message }, 500)
@@ -244,6 +245,7 @@ app.get('/comments/count', async (c) => {
       .from('comments')
       .select('id', { count: 'exact', head: true })
       .eq('sender', targetUser.email)
+      .is('company_id', null) // what she wrote in a page's name is the page's
 
     if (error) {
       return c.json({ error: error.message }, 500)

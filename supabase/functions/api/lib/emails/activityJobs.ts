@@ -139,7 +139,7 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
   const [recruiters, unread, mentions, requests, accepted] = await Promise.all([
     db.from('profile_access_requests').select('candidate_id, recruiter_id, created_at').eq('status', 'pending').gte('created_at', since).lte('created_at', by15).limit(2000),
     db.from('messages').select('conversation_id, sender_id, created_at').eq('is_read', false).gte('created_at', since).lte('created_at', by60).limit(5000),
-    db.from('notifications').select('user_id, actor_id, target_id, type, created_at').in('type', ['MENTION', 'ARTICLE_MENTION']).eq('is_read', false).gte('created_at', since).lte('created_at', by15).limit(3000),
+    db.from('notifications').select('user_id, actor_id, target_id, type, created_at').in('type', ['MENTION', 'ARTICLE_MENTION']).not('actor_id', 'is', null).eq('is_read', false).gte('created_at', since).lte('created_at', by15).limit(3000),
     db.from('connections').select('receiver_id, requester_id, created_at').eq('status', 'pending').gte('created_at', since).lte('created_at', by15).limit(3000),
     db.from('notifications').select('user_id, actor_id, created_at').eq('type', 'CONN_ACCEPT').eq('is_read', false).gte('created_at', since).lte('created_at', by15).limit(3000),
   ])
@@ -234,7 +234,7 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
     const postIds = show.mentions.filter((x) => x.extra?.startsWith('MENTION|')).map((x) => x.extra!.split('|')[1])
     const artIds = show.mentions.filter((x) => x.extra?.startsWith('ARTICLE_MENTION|')).map((x) => x.extra!.split('|')[1])
     if (postIds.length) {
-      const { data: cms } = await db.from('comments').select('post_id, sender, message, created_at').in('post_id', postIds).order('created_at', { ascending: false }).limit(50)
+      const { data: cms } = await db.from('comments').select('post_id, sender, message, created_at').in('post_id', postIds).is('company_id', null).order('created_at', { ascending: false }).limit(50)
       const { data: pts } = await db.from('posts').select('id, message, posted_by_uuid').in('id', postIds)
       const commenter = await uuidsByEmail((cms ?? []).map((c) => c.sender))
       for (const x of show.mentions) {
@@ -345,8 +345,9 @@ export async function contentDigestJob(budget: number, now = new Date()): Promis
 
   // Comments on posts (with the post's author) and likes on posts — two queries for everyone.
   const [cms, lks] = await Promise.all([
+    // comments written in a page's name stay out of these e-mails: they would name the member behind the page
     db.from('comments').select('id, post_id, sender, message, parent_comment_id, created_at, posts!inner(posted_by_uuid, message)')
-      .gte('created_at', since).order('created_at', { ascending: false }).limit(5000),
+      .is('company_id', null).gte('created_at', since).order('created_at', { ascending: false }).limit(5000),
     db.from('likes').select('target_id, user_id, created_at').eq('target_type', 'post').gte('created_at', since).limit(10000),
   ])
   if (cms.error) console.error('[content-digest] comments query failed:', cms.error.message)

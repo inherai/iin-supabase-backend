@@ -2,7 +2,7 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import OpenAI from "https://esm.sh/openai@4";
-import { CONTENT_ROLES, checkActAsCompany } from '../lib/companyAccess.ts'
+import { CONTENT_ROLES, checkActAsCompany, hasCompanyRole } from '../lib/companyAccess.ts'
 import { fetchAcceptedConnectionIds } from './_connectionIds.ts'
 
 const app = new Hono()
@@ -334,13 +334,57 @@ function toStoragePath(v: any): string | null {
 // on_comment_reply_and_mentions, migrations/add_notification_triggers.sql). The API used to insert them with the
 // member's session, which `notifications` RLS rejects — none were ever saved.
 
-function buildCompanyAuthor(company: { name: string; logo?: string | null }) {
+function buildCompanyAuthor(company: { id?: number; name: string; logo?: string | null; slug?: string | null }) {
   return {
     first_name: company.name,
     last_name: null,
     image: company.logo ?? null,
     is_anonymous: false,
+    kind: 'company',
+    company_id: company.id ?? null,
+    slug: company.slug ?? null,
   }
+}
+
+const SPEAKING_COMPANY_COLUMNS = 'id, name, logo, slug'
+
+/** The pages that speak in these posts and comments (as a post's author or a comment's), by id. */
+async function loadSpeakingCompanies(supabase: any, rows: any[]): Promise<Map<number, any>> {
+  const ids = [...new Set(rows.map((r: any) => r?.company_id).filter(Boolean).map(Number))]
+  const byId = new Map<number, any>()
+  if (ids.length === 0) return byId
+  const { data } = await supabase.from('companies').select(SPEAKING_COMPANY_COLUMNS).in('id', ids)
+  ;(data || []).forEach((co: any) => byId.set(Number(co.id), co))
+  return byId
+}
+
+/**
+ * The comment, if she may change it: her own, or one written in the name of a page she
+ * manages as owner / content (any of its content managers may, not only who typed it).
+ * Row-level security applies the same rule to the write itself.
+ */
+async function loadChangeableComment(supabase: any, user: { id: string; email?: string }, postId: string, commentId: string) {
+  const { data } = await supabase
+    .from('comments')
+    .select('id, attachments, sender, company_id')
+    .eq('id', commentId)
+    .eq('post_id', postId)
+    .maybeSingle()
+  if (!data) return null
+  if (data.company_id) {
+    return await hasCompanyRole(supabase, user.id, Number(data.company_id), CONTENT_ROLES) ? data : null
+  }
+  return data.sender === user.email ? data : null
+}
+
+/**
+ * A comment written in a page's name is shown as the page. The member who typed it is
+ * never sent to the client — not her name, not her id.
+ */
+function pageCommentAuthor(comment: any, companiesById: Map<number, any>) {
+  if (!comment?.company_id) return null
+  const company = companiesById.get(Number(comment.company_id))
+  return buildCompanyAuthor(company ?? { id: Number(comment.company_id), name: '' })
 }
 
 // ====================================================================
@@ -460,6 +504,7 @@ function scorePost(
   //
   const scoringWindow = scoringRef ?? session_start
   const networkCommentCount = postComments.filter((cm: any) => {
+    if (cm.company_id) return false // a page's comment is not her personal activity
     const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
     return uuid && connectedUuids.has(uuid) && cm.created_at > scoringWindow
   }).length
@@ -606,6 +651,7 @@ function scorePost(
   // Shown as avatar stack + "{name} commented" in the context line.
   const recentNetworkCommenters = recentComments
     .filter((cm: any) => {
+      if (cm.company_id) return false
       const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
       return uuid && connectedUuids.has(uuid)
     })
@@ -622,6 +668,7 @@ function scorePost(
   // happened before uiBaseline (user has already seen that activity).
   const allTimeNetworkCommenters = postComments
     .filter((cm: any) => {
+      if (cm.company_id) return false
       const uuid = cm.posted_by_uuid || usersByEmail.get((cm.sender || '').toLowerCase())?.uuid
       return uuid && connectedUuids.has(uuid)
     })
@@ -993,12 +1040,7 @@ async function handleRankedFeed(c: any) {
     )
   }
 
-  const companyIdsInFeed = [...new Set(sourcePosts.map((p: any) => p.company_id).filter(Boolean))] as number[]
-  const companiesById = new Map<number, any>()
-  if (companyIdsInFeed.length > 0) {
-    const { data: companiesData } = await supabase.from('companies').select('id, name, logo').in('id', companyIdsInFeed)
-    ;(companiesData || []).forEach((co: any) => companiesById.set(Number(co.id), co))
-  }
+  const companiesById = await loadSpeakingCompanies(supabase, [...sourcePosts, ...visibleComments])
 
   const linkedArticleIds = [...new Set(sourcePosts.map((p: any) => p.linked_article_id).filter(Boolean))] as string[]
   const linkedArticlesById = new Map<string, any>()
@@ -1023,6 +1065,7 @@ async function handleRankedFeed(c: any) {
     } else {
       author = { first_name: senderEmail, last_name: null, image: null, is_anonymous: false }
     }
+    author = pageCommentAuthor(comment, companiesById) ?? author
     const commentLikes = (allCommentLikes || []).filter((l: any) => l.target_id === comment.id.toString())
     const reactionCounts = commentLikes.reduce((acc: any, like: any) => {
       const type = like.reaction_type || 'like'; acc[type] = (acc[type] || 0) + 1; return acc
@@ -1135,7 +1178,7 @@ async function handleRankedFeed(c: any) {
 
     return {
       ...postWithoutSender,
-      ...(post.company_id ? { is_company_post: true } : {}),
+      ...(post.company_id ? { is_company_post: true, posted_by_uuid: null } : {}),
       attachments: normalizeAttachments(post.attachments),
       author: postAuthor,
       comments: commentsByPostId[post.id] || [],
@@ -1216,6 +1259,7 @@ if (targetUserId) {
           .from('comments')
           .select('post_id, created_at')
           .ilike('sender', filterEmail) // case-insensitive match
+          .is('company_id', null) // what she wrote in a page's name is the page's, not hers
           .order('created_at', { ascending: false })
           .limit(60) // fetch extra to handle dedup across repeated comments on same post
         if (last_effective_date) q = q.lt('created_at', last_effective_date)
@@ -1330,6 +1374,8 @@ if (targetUserId) {
         if (u.uuid) apByUuid.set(u.uuid, u)
       })
 
+      const apCompaniesById = await loadSpeakingCompanies(supabase, [...activitySourcePosts, ...apVisibleComments])
+
       const apEnrichedComments = apVisibleComments.map((comment: any) => {
         const pd = apByEmail.get(comment.sender?.toLowerCase())
         let author
@@ -1339,6 +1385,7 @@ if (targetUserId) {
         } else {
           author = { first_name: comment.sender, last_name: null, image: null, is_anonymous: false }
         }
+        author = pageCommentAuthor(comment, apCompaniesById) ?? author
         const cLikes = (apCommentLikes || []).filter((l: any) => l.target_id === comment.id.toString())
         const cReactionCounts = cLikes.reduce((acc: any, l: any) => { const t = l.reaction_type || 'like'; acc[t] = (acc[t] || 0) + 1; return acc }, {})
         const cUserReactions = cLikes.filter((l: any) => l.user_id === current_user_uuid).map((l: any) => l.reaction_type)
@@ -1375,6 +1422,9 @@ if (targetUserId) {
         } else {
           postAuthor = { first_name: post.sender, last_name: null, image: null, is_anonymous: false }
         }
+        if (post.company_id && apCompaniesById.has(Number(post.company_id))) {
+          postAuthor = buildCompanyAuthor(apCompaniesById.get(Number(post.company_id))!)
+        }
         const pReactionCounts = pLikes.reduce((acc: any, l: any) => { const t = l.reaction_type || 'like'; acc[t] = (acc[t] || 0) + 1; return acc }, {})
         const pUserReactions = pLikes.filter((l: any) => l.user_id === current_user_uuid).map((l: any) => l.reaction_type)
         const pSeen = new Set<string>()
@@ -1391,6 +1441,7 @@ if (targetUserId) {
           user_reactions: pUserReactions,
           user_reaction: pUserReactions[0] || null,
           is_liked: pUserReactions.length > 0,
+          ...(post.company_id ? { is_company_post: true, posted_by_uuid: null } : {}),
           activity_type: activityFilter === 'commented_by' ? 'comment' : 'reaction',
           activity_date: activityDateMap.get(String(post.id)),
           ...(activityFilter === 'reacted_by' ? { user_activity_reaction_type: reactionTypeMap.get(String(post.id)) } : {}),
@@ -1572,12 +1623,7 @@ if (targetUserId) {
     }
 
     // Batch-fetch company data for company posts
-    const companyIdsInFeed = [...new Set(sourcePosts.map((p: any) => p.company_id).filter(Boolean))] as number[]
-    const companiesById = new Map<number, any>()
-    if (companyIdsInFeed.length > 0) {
-      const { data: companiesData } = await supabase.from('companies').select('id, name, logo').in('id', companyIdsInFeed)
-      ;(companiesData || []).forEach((co: any) => companiesById.set(Number(co.id), co))
-    }
+    const companiesById = await loadSpeakingCompanies(supabase, [...sourcePosts, ...visibleComments])
 
     const enrichedCommentsList = visibleComments.map((comment: any) => {
       const senderEmail = comment.sender
@@ -1596,6 +1642,7 @@ if (targetUserId) {
       } else {
         author = { first_name: senderEmail, last_name: null, image: null, is_anonymous: false }
       }
+      author = pageCommentAuthor(comment, companiesById) ?? author
 
       const commentLikes = allCommentLikes?.filter((l: any) => l.target_id === comment.id.toString()) || []
       const reactionCounts = commentLikes.reduce((acc: any, like: any) => {
@@ -1728,7 +1775,7 @@ if (targetUserId) {
         : null
       return {
         ...postWithoutSender,
-        ...(post.company_id ? { is_company_post: true } : {}),
+        ...(post.company_id ? { is_company_post: true, posted_by_uuid: null } : {}),
         attachments: normalizeAttachments(post.attachments),
         author: postAuthor,
         comments: commentsByPostId?.[post.id] || [],
@@ -2121,11 +2168,8 @@ app.get('/:id', async (c) => {
     })
 
     // Fetch company data if this is a company post
-    let postCompany: { name: string; logo?: string | null } | null = null
-    if (post.company_id) {
-      const { data: co } = await supabase.from('companies').select('id, name, logo').eq('id', post.company_id).maybeSingle()
-      postCompany = co
-    }
+    const companiesById = await loadSpeakingCompanies(supabase, [post, ...comments])
+    const postCompany = post.company_id ? companiesById.get(Number(post.company_id)) ?? null : null
 
     // Fetch linked article if present
     let linkedArticle: any = null
@@ -2152,6 +2196,7 @@ app.get('/:id', async (c) => {
       } else {
         author = { first_name: senderEmail, last_name: null, image: null, is_anonymous: false }
       }
+      author = pageCommentAuthor(comment, companiesById) ?? author
 
       const currentCommentLikes = (commentLikes || []).filter((l: any) => l.target_id === comment.id.toString())
       const reactionCounts = currentCommentLikes.reduce((acc: any, like: any) => {
@@ -2260,7 +2305,7 @@ app.get('/:id', async (c) => {
       success: true,
       data: {
         ...postWithoutSender,
-        ...(post.company_id ? { is_company_post: true } : {}),
+        ...(post.company_id ? { is_company_post: true, posted_by_uuid: null } : {}),
         attachments: normalizeAttachments(post.attachments),
         author: postAuthor,
         comments: commentsEnriched,
@@ -2504,11 +2549,8 @@ app.post('/', async (c) => {
       });
 
       // Fetch company data if this is a company post
-      let postCompanyAfterCreate: { name: string; logo?: string | null } | null = null;
-      if (post.company_id) {
-        const { data: co } = await supabase.from('companies').select('id, name, logo').eq('id', post.company_id).maybeSingle();
-        postCompanyAfterCreate = co;
-      }
+      const companiesAfterCreate = await loadSpeakingCompanies(supabase, [post, ...comments]);
+      const postCompanyAfterCreate = post.company_id ? companiesAfterCreate.get(Number(post.company_id)) ?? null : null;
 
       // Fetch linked article data if present
       let linkedArticleAfterCreate: any = null;
@@ -2542,6 +2584,7 @@ app.post('/', async (c) => {
             is_anonymous: false
           };
         }
+        author = pageCommentAuthor(comment, companiesAfterCreate) ?? author;
         const currentCommentLikes = (commentLikes || []).filter(
           (l: any) => l.target_id === comment.id.toString()
         );
@@ -2630,7 +2673,7 @@ app.post('/', async (c) => {
         success: true,
         data: {
           ...postWithoutSender,
-          ...(post.company_id ? { is_company_post: true } : {}),
+          ...(post.company_id ? { is_company_post: true, posted_by_uuid: null } : {}),
           attachments: normalizeAttachments(post.attachments),
           author: postAuthor,
           comments: commentsEnriched,
@@ -2674,7 +2717,7 @@ app.put('/:id', async (c) => {
     const supabaseAdminPut = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
     const { data: existingPost, error: fetchError } = await supabaseAdminPut
       .from('posts')
-      .select('attachments, sender, posted_by_uuid')
+      .select('attachments, sender, posted_by_uuid, company_id')
       .eq('id', postId)
       .single()
 
@@ -2685,7 +2728,11 @@ app.put('/:id', async (c) => {
       throw fetchError
     }
 
-    const canEdit = existingPost.sender === user.email || existingPost.posted_by_uuid === user.id
+    // A page's post belongs to the page: any of its content managers may edit it, and a
+    // member who no longer manages the page may not — even if she published it.
+    const canEdit = existingPost.company_id
+      ? await hasCompanyRole(c.get('supabase'), user.id, Number(existingPost.company_id), CONTENT_ROLES)
+      : existingPost.sender === user.email || existingPost.posted_by_uuid === user.id
     if (!canEdit) {
       return c.json({ error: "Post not found or you don't have permission to edit it" }, 404)
     }
@@ -2796,7 +2843,7 @@ app.delete('/:id', async (c) => {
 
     const { data: postToDelete, error: fetchDelError } = await supabaseAdminDel
       .from('posts')
-      .select('sender, posted_by_uuid, attachments')
+      .select('sender, posted_by_uuid, attachments, company_id')
       .eq('id', postId)
       .single();
 
@@ -2807,7 +2854,10 @@ app.delete('/:id', async (c) => {
       throw fetchDelError;
     }
 
-    const canDelete = postToDelete.sender === user.email || postToDelete.posted_by_uuid === user.id
+    // a page's post: any content manager of the page (see the edit route)
+    const canDelete = postToDelete.company_id
+      ? await hasCompanyRole(c.get('supabase'), user.id, Number(postToDelete.company_id), CONTENT_ROLES)
+      : postToDelete.sender === user.email || postToDelete.posted_by_uuid === user.id
     if (!canDelete) {
       return c.json({ error: "Post not found or you don't have permission to delete it" }, 404);
     }
@@ -2863,7 +2913,7 @@ app.post('/comments', async (c) => {
     const supabase = c.get('supabase')
     const user = c.get('user')
     const postId = c.req.query('id')
-    const { message, attachments, community_members_only, communityMembersOnly, parent_comment_id } = await c.req.json()
+    const { message, attachments, community_members_only, communityMembersOnly, parent_comment_id, as_company_id } = await c.req.json()
     const communityMembersOnlyInput =
     communityMembersOnly !== undefined ? communityMembersOnly : community_members_only
 
@@ -2893,6 +2943,15 @@ app.post('/comments', async (c) => {
 
     const normalizedAttachments = normalizeAttachments(attachments)
 
+    // Commenting as a page: she must manage it (owner / content) and its plan must allow it.
+    // The database checks the same again (policy + comments_company_guard).
+    const companyId = as_company_id ? Number(as_company_id) : null
+    if (as_company_id && !Number.isInteger(companyId)) return c.json({ error: "Invalid as_company_id" }, 400)
+    if (companyId) {
+      const allowed = await checkActAsCompany(supabase, user.id, companyId, CONTENT_ROLES, 'comments.as_company')
+      if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status)
+    }
+
     // 1. הכנסת התגובה לטבלת comments
     const { data: commentData, error: commentError } = await supabase
       .from('comments')
@@ -2903,12 +2962,19 @@ app.post('/comments', async (c) => {
         attachments: normalizedAttachments,
         community_members_only: resolvedCommunityMembersOnly,
         parent_comment_id: parent_comment_id || null,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        ...(companyId ? { company_id: companyId } : {}),
       })
       .select()
       .single()
 
     if (commentError) throw commentError
+
+    if (companyId) {
+      const companiesById = await loadSpeakingCompanies(supabase, [commentData])
+      const { sender: _sender, ...commentWithoutSender } = commentData
+      return c.json({ success: true, data: { ...commentWithoutSender, author: pageCommentAuthor(commentData, companiesById) } })
+    }
 
     // REPLY + MENTION notifications: created by the on_comment_reply_and_mentions trigger
 
@@ -2966,19 +3032,9 @@ app.put('/:postId/comments/:commentId', async (c) => {
     }
 
     // 1) שליפת התגובה הקיימת כדי להשוות attachments
-    const { data: existingComment, error: fetchError } = await supabase
-      .from('comments')
-      .select('attachments')
-      .eq('id', commentId)
-      .eq('post_id', postId)
-      .eq('sender', user.email)
-      .single()
-
-    if (fetchError) {
-      if (fetchError.code === 'PGRST116') {
-        return c.json({ error: "Comment not found or you don't have permission to edit it" }, 404)
-      }
-      throw fetchError
+    const existingComment = await loadChangeableComment(supabase, user, postId, commentId)
+    if (!existingComment) {
+      return c.json({ error: "Comment not found or you don't have permission to edit it" }, 404)
     }
 
     // 2) נכין את האובייקט לעדכון
@@ -3040,7 +3096,6 @@ app.put('/:postId/comments/:commentId', async (c) => {
       .update(updateData)
       .eq('id', commentId)
       .eq('post_id', postId)
-      .eq('sender', user.email)
       .select()
       .single()
 
@@ -3062,7 +3117,9 @@ app.put('/:postId/comments/:commentId', async (c) => {
       updatePostVector(postId)
     }
 
-    return c.json({ success: true, data })
+    // a page's comment goes back without the member who typed it
+    const { sender: _sender, ...withoutSender } = data
+    return c.json({ success: true, data: data.company_id ? withoutSender : data })
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
@@ -3082,12 +3139,15 @@ app.delete('/:postId/comments/:commentId', async (c) => {
     if (!commentId) return c.json({ error: "Comment ID is required" }, 400)
 
     // 1) מוחקים ומחזירים את השורה כדי שנוכל למחוק קבצים מהבאקט
+    if (!await loadChangeableComment(supabase, user, postId, commentId)) {
+      return c.json({ error: "Comment not found or you don't have permission to delete it" }, 404)
+    }
+
     const { data: deletedComment, error } = await supabase
       .from('comments')
       .delete()
       .eq('id', commentId)
       .eq('post_id', postId)
-      .eq('sender', user.email)
       .select('id, post_id, attachments')
       .single()
 

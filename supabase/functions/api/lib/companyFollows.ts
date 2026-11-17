@@ -24,6 +24,17 @@ export async function setCompanyFollow(
   return { error }
 }
 
+/** Of these pages, the ones she follows. */
+export async function followedCompanyIds(supabase: any, userId: string, companyIds: number[]): Promise<Set<number>> {
+  if (companyIds.length === 0) return new Set()
+  const { data } = await supabase
+    .from('article_company_follows')
+    .select('company_id')
+    .eq('follower_uuid', userId)
+    .in('company_id', companyIds)
+  return new Set((data || []).map((row: any) => Number(row.company_id)))
+}
+
 export async function isFollowingCompany(supabase: any, userId: string, companyId: number): Promise<boolean> {
   const { data } = await supabase
     .from('article_company_follows')

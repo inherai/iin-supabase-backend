@@ -46,6 +46,28 @@ async function singleAuthor(admin: any, userId: string, isAnonymous: boolean) {
   return u ?? null
 }
 
+// ─── The company's answer (one per review, interview report or fit rating) ───
+
+type ResponseTarget = 'review' | 'interview' | 'fit_rating'
+const RESPONSE_TARGETS: Record<string, { type: ResponseTarget; table: string }> = {
+  reviews: { type: 'review', table: 'company_reviews' },
+  interviews: { type: 'interview', table: 'company_interviews' },
+  fit: { type: 'fit_rating', table: 'company_fit_ratings' },
+}
+const RESPONSE_COLUMNS = 'id, body, created_at, updated_at'
+
+/** Each item with the page's answer to it (company_response: null when there is none). */
+async function withResponses(supabase: any, targetType: ResponseTarget, items: any[]) {
+  if (items.length === 0) return items
+  const { data } = await supabase
+    .from('company_responses')
+    .select(`target_id, ${RESPONSE_COLUMNS}`)
+    .eq('target_type', targetType)
+    .in('target_id', items.map((item) => item.id))
+  const byTarget = new Map((data ?? []).map(({ target_id, ...response }: any) => [target_id, response]))
+  return items.map((item) => ({ ...item, company_response: byTarget.get(item.id) ?? null }))
+}
+
 // ─── Counts (tab badges) ─────────────────────────────────────────────────────
 
 app.get('/:companyId/counts', async (c) => {
@@ -142,7 +164,7 @@ app.get('/:companyId/reviews', async (c) => {
   }
 
   return c.json({
-    data: rows.map((r: any) => withAuthor(r, usersById, currentUserId)),
+    data: await withResponses(supabase, 'review', rows.map((r: any) => withAuthor(r, usersById, currentUserId))),
     summary,
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   })
@@ -279,7 +301,7 @@ app.get('/:companyId/fit', async (c) => {
   }
 
   return c.json({
-    data: rows.map((r: any) => withAuthor(r, usersById, currentUserId)),
+    data: await withResponses(supabase, 'fit_rating', rows.map((r: any) => withAuthor(r, usersById, currentUserId))),
     summary,
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   })
@@ -523,7 +545,7 @@ app.get('/:companyId/interviews', async (c) => {
   }
 
   return c.json({
-    data: rows.map((r: any) => withAuthor(r, usersById, currentUserId)),
+    data: await withResponses(supabase, 'interview', rows.map((r: any) => withAuthor(r, usersById, currentUserId))),
     summary,
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   })
@@ -605,6 +627,77 @@ app.delete('/:companyId/interviews/:id', async (c) => {
   if (!row || row.user_id !== user.id) return c.json({ error: 'Not found' }, 404)
   const { error } = await admin.from('company_interviews').delete().eq('id', id)
   if (error) return c.json({ error: error.message }, 400)
+  return c.json({ success: true })
+})
+
+// ─── The company's answer: write, edit, delete ───────────────────────────────
+// Runs in the manager's own session. Who may answer (the page's owner / content managers),
+// on which item (one about this page) and on which plan is decided by the database.
+
+function responseTarget(c: any): { type: ResponseTarget; companyId: number; targetId: string } | null {
+  const target = RESPONSE_TARGETS[c.req.param('kind')]
+  const companyId = parseInt(c.req.param('companyId'))
+  const targetId = c.req.param('id')
+  if (!target || !Number.isSafeInteger(companyId) || !/^[0-9a-f-]{36}$/i.test(targetId)) return null
+  return { type: target.type, companyId, targetId }
+}
+
+function responseError(c: any, error: any) {
+  if (error.code === '42501') {
+    const code = ['not_in_plan', 'page_not_active', 'item_not_about_this_page'].includes(error.message) ? error.message : 'forbidden'
+    return c.json({ error: error.message, code }, 403)
+  }
+  if (error.code === '23514') return c.json({ error: 'Invalid answer', code: 'invalid' }, 400)
+  return c.json({ error: error.message }, 400)
+}
+
+// PUT /api/company-insights/:companyId/:kind/:id/response  { body }   kind: reviews | interviews | fit
+app.put('/:companyId/:kind/:id/response', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const target = responseTarget(c)
+  if (!target) return c.json({ error: 'Not found' }, 404)
+
+  const payload = await c.req.json().catch(() => ({}))
+  const text = typeof payload?.body === 'string' ? payload.body.trim() : ''
+  if (!text || text.length > 2000) return c.json({ error: 'Invalid answer', code: 'invalid' }, 400)
+
+  const supabase = c.get('supabase')
+  const { data: existing, error: readError } = await supabase
+    .from('company_responses')
+    .select('id')
+    .eq('target_type', target.type)
+    .eq('target_id', target.targetId)
+    .maybeSingle()
+  if (readError) return c.json({ error: readError.message }, 400)
+
+  const { data, error } = existing
+    ? await supabase.from('company_responses').update({ body: text }).eq('id', existing.id).select(RESPONSE_COLUMNS).maybeSingle()
+    : await supabase.from('company_responses')
+      .insert({ target_type: target.type, target_id: target.targetId, company_id: target.companyId, body: text })
+      .select(RESPONSE_COLUMNS).single()
+  if (error) return responseError(c, error)
+  // an update the rules refused touches no row and comes back empty
+  if (!data) return c.json({ error: 'forbidden', code: 'forbidden' }, 403)
+  return c.json(data)
+})
+
+// DELETE /api/company-insights/:companyId/:kind/:id/response
+app.delete('/:companyId/:kind/:id/response', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const target = responseTarget(c)
+  if (!target) return c.json({ error: 'Not found' }, 404)
+
+  const { data, error } = await c.get('supabase')
+    .from('company_responses')
+    .delete()
+    .eq('target_type', target.type)
+    .eq('target_id', target.targetId)
+    .eq('company_id', target.companyId)
+    .select('id')
+  if (error) return responseError(c, error)
+  if (!data || data.length === 0) return c.json({ error: 'Not found' }, 404)
   return c.json({ success: true })
 })
 

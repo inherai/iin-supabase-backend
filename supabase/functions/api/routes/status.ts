@@ -89,6 +89,7 @@ app.get("/", async (c) => {
         .from("comments")
         .select("sender")
         .gt("created_at", since)
+        .is("company_id", null) // a page's comment is not a connection's activity
         .in("post_id", activePostIds),
 
       // All comments on active posts since $since
