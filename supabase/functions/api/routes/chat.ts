@@ -1,6 +1,6 @@
 import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { connectedAmong } from "./_connectionIds.ts";
+import { isUuid } from "./_connectionIds.ts";
 
 const app = new Hono();
 
@@ -32,14 +32,15 @@ app.get("/", async (c) => {
   // 2. שליפת הקשרים המאושרים מול בני השיח בלבד
   // Fetching every accepted connection of the user is cut off at PostgREST's max_rows (1000),
   // which marked live conversations as disconnected for users with more connections than that.
-  const { ids: connectedPartnerIds, error: connError } = await connectedAmong(
-    supabase,
-    user.id,
-    convs.map(conv => conv.user1_id === user.id ? conv.user2_id : conv.user1_id),
-    ["accepted"],
-  );
+  // who she may still write to: a connection, or (an application through duallin) a recruiter
+  // of the page she applied to / an applicant to her page — decided by the database
+  const partnerIds = [...new Set(convs.map(conv => conv.user1_id === user.id ? conv.user2_id : conv.user1_id))];
+  const { data: messageable, error: connError } = partnerIds.length > 0
+    ? await supabase.rpc("messageable_partners", { p_partner_ids: partnerIds })
+    : { data: [], error: null };
 
   if (connError) return c.json({ error: connError.message }, 400);
+  const connectedPartnerIds = new Set<string>((messageable ?? []).map((row: any) => typeof row === "string" ? row : row.messageable_partners));
 
   // 3. שליפת ההודעה האחרונה לכל שיחה
   // A single query over all conversations is cut off at PostgREST's max_rows (1000), so
@@ -101,17 +102,13 @@ app.post("/", async (c) => {
   const body = await c.req.json().catch(() => null);
   const partnerId = body?.partner_id;
 
-  if (!partnerId) return c.json({ error: "partner_id is required" }, 400);
+  if (!isUuid(partnerId)) return c.json({ error: "partner_id is required" }, 400);
 
-  // 1. בדיקה מהירה אם קיים קשר מאושר
-  const { data: connection, error: connError } = await supabase
-    .from("connections")
-    .select("status")
-    .or(`and(requester_id.eq.${user.id},receiver_id.eq.${partnerId}),and(requester_id.eq.${partnerId},receiver_id.eq.${user.id})`)
-    .eq("status", "accepted")
-    .maybeSingle();
+  // 1. may they write to each other: an accepted connection, or an application through
+  // duallin between her and a recruiter of the page (decided by the database)
+  const { data: allowed, error: connError } = await supabase.rpc("can_message", { p_a: user.id, p_b: partnerId });
 
-  if (connError || !connection) {
+  if (connError || allowed !== true) {
     return c.json({ error: "No accepted connection found" }, 403);
   }
 
@@ -131,7 +128,7 @@ app.post("/", async (c) => {
     .eq("user2_id", u2)
     .maybeSingle();
 
-  // At this point we've already verified there's an accepted connection,
+  // At this point we've already verified they may write to each other,
   // so always return is_connection_active: true.
   if (existing) return c.json({ ...existing, is_connection_active: true });
 

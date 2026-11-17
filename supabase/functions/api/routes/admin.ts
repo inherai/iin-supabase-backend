@@ -1985,7 +1985,9 @@ app.get("/jobs", async (c) => {
   }
 
   const sortableColumns = ["created_at", "job_title", "company_name", "time_posted"];
-  const safeSort = sortableColumns.includes(sortBy) ? sortBy : "created_at";
+  // time_posted is D/M/YYYY text ("9/11" would sort after "10/11"): "posted" sorts by when the
+  // job entered duallin instead, which follows the same order
+  const safeSort = sortableColumns.includes(sortBy) && sortBy !== "time_posted" ? sortBy : "created_at";
 
   const { data: jobs, error, count } = await query
     .order(safeSort, { ascending: sortDir })

@@ -1,0 +1,82 @@
+{
+ "taken_at": "2026-11-17T14:00:56.816552+00:00",
+ "tables": [
+  {
+   "table": "conversations",
+   "relacl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+   "rls": true,
+   "column_acls": null,
+   "policies": [
+    {
+     "name": "Users can delete their own conversations",
+     "cmd": "d",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": "((auth.uid() = user1_id) OR (auth.uid() = user2_id))",
+     "check": null
+    },
+    {
+     "name": "Users can insert conversations",
+     "cmd": "a",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": null,
+     "check": "((auth.uid() = user1_id) OR (auth.uid() = user2_id))"
+    },
+    {
+     "name": "Users can view their own conversations",
+     "cmd": "r",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": "((auth.uid() = user1_id) OR (auth.uid() = user2_id))",
+     "check": null
+    }
+   ]
+  },
+  {
+   "table": "messages",
+   "relacl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+   "rls": true,
+   "column_acls": null,
+   "policies": [
+    {
+     "name": "Users can mark messages as read",
+     "cmd": "w",
+     "permissive": true,
+     "roles": [
+      "authenticated"
+     ],
+     "using": "((sender_id <> auth.uid()) AND (EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = messages.conversation_id) AND ((c.user1_id = auth.uid()) OR (c.user2_id = auth.uid()))))))",
+     "check": "((sender_id <> auth.uid()) AND (EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = messages.conversation_id) AND ((c.user1_id = auth.uid()) OR (c.user2_id = auth.uid()))))))"
+    },
+    {
+     "name": "Users can read messages from their conversations",
+     "cmd": "r",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": "(EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = messages.conversation_id) AND ((c.user1_id = auth.uid()) OR (c.user2_id = auth.uid())))))",
+     "check": null
+    },
+    {
+     "name": "enforce_active_connection_on_insert",
+     "cmd": "a",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": null,
+     "check": "(EXISTS ( SELECT 1\n   FROM (conversations c\n     JOIN connections conn ON ((((conn.requester_id = c.user1_id) AND (conn.receiver_id = c.user2_id)) OR ((conn.requester_id = c.user2_id) AND (conn.receiver_id = c.user1_id)))))\n  WHERE ((c.id = messages.conversation_id) AND (conn.status = 'accepted'::text))))"
+    }
+   ]
+  }
+ ],
+ "functions": null
+}

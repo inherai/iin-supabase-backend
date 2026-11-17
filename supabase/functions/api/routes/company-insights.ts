@@ -78,10 +78,10 @@ app.get('/:companyId/counts', async (c) => {
   const companyId = parseInt(c.req.param('companyId'))
 
   const [reviews, fit, salaries, interviews] = await Promise.all([
-    supabase.from('company_reviews').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('company_fit_ratings').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('company_salaries').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('company_interviews').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    supabase.from('company_reviews_public').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    supabase.from('company_fit_ratings_public').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    supabase.from('company_salaries_public').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
+    supabase.from('company_interviews_public').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
   ])
 
   return c.json({
@@ -100,10 +100,10 @@ app.get('/mine', async (c) => {
 
   const supabase = c.get('supabase')
   const [reviews, fit, salaries, interviews] = await Promise.all([
-    supabase.from('company_reviews').select('company_id').eq('user_id', user.id),
-    supabase.from('company_fit').select('company_id').eq('user_id', user.id),
-    supabase.from('company_salaries').select('company_id').eq('user_id', user.id),
-    supabase.from('company_interviews').select('company_id').eq('user_id', user.id),
+    supabase.from('company_reviews_public').select('company_id').eq('user_id', user.id),
+    supabase.from('company_fit_ratings_public').select('company_id').eq('user_id', user.id),
+    supabase.from('company_salaries_public').select('company_id').eq('user_id', user.id),
+    supabase.from('company_interviews_public').select('company_id').eq('user_id', user.id),
   ])
 
   const all = [
@@ -129,13 +129,13 @@ app.get('/:companyId/reviews', async (c) => {
 
   const [{ data, error, count }, { data: allRows }] = await Promise.all([
     supabase
-      .from('company_reviews')
+      .from('company_reviews_public')
       .select('*', { count: 'exact' })
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .range(from, to),
     supabase
-      .from('company_reviews')
+      .from('company_reviews_public')
       .select('overall_rating, work_life_balance_rating, culture_rating, management_rating, recommend')
       .eq('company_id', companyId),
   ])
@@ -267,13 +267,13 @@ app.get('/:companyId/fit', async (c) => {
 
   const [{ data, error, count }, { data: allRows }] = await Promise.all([
     supabase
-      .from('company_fit_ratings')
+      .from('company_fit_ratings_public')
       .select('*', { count: 'exact' })
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .range(from, to),
     supabase
-      .from('company_fit_ratings')
+      .from('company_fit_ratings_public')
       .select('overall_fit_rating, modesty_rating, friday_hours_rating, holiday_flexibility_rating, separate_workspace_rating, kosher_kitchen_rating')
       .eq('company_id', companyId),
   ])
@@ -402,7 +402,7 @@ app.get('/:companyId/salaries', async (c) => {
   const { from, to } = paginate(page, limit)
 
   const { data, error, count } = await supabase
-    .from('company_salaries')
+    .from('company_salaries_public')
     .select('*', { count: 'exact' })
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
@@ -511,13 +511,13 @@ app.get('/:companyId/interviews', async (c) => {
 
   const [{ data, error, count }, { data: allRows }] = await Promise.all([
     supabase
-      .from('company_interviews')
+      .from('company_interviews_public')
       .select('*', { count: 'exact' })
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .range(from, to),
     supabase
-      .from('company_interviews')
+      .from('company_interviews_public')
       .select('difficulty, outcome')
       .eq('company_id', companyId),
   ])

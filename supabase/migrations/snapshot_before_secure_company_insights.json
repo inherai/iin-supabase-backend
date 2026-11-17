@@ -1,0 +1,126 @@
+{
+ "taken_at": "2026-11-17T13:43:55.257943+00:00",
+ "tables": [
+  {
+   "table": "company_fit_ratings",
+   "relacl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+   "rls": true,
+   "force": false,
+   "column_acls": null,
+   "policies": [
+    {
+     "name": "Authenticated users can submit fit ratings",
+     "cmd": "a",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": null,
+     "check": "(auth.uid() IS NOT NULL)"
+    },
+    {
+     "name": "anyone can read fit ratings",
+     "cmd": "r",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": "true",
+     "check": null
+    }
+   ],
+   "row_count": "229"
+  },
+  {
+   "table": "company_interviews",
+   "relacl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+   "rls": true,
+   "force": false,
+   "column_acls": null,
+   "policies": [
+    {
+     "name": "Authenticated users can submit interviews",
+     "cmd": "a",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": null,
+     "check": "(auth.uid() IS NOT NULL)"
+    },
+    {
+     "name": "anyone can read interviews",
+     "cmd": "r",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": "true",
+     "check": null
+    }
+   ],
+   "row_count": "44"
+  },
+  {
+   "table": "company_reviews",
+   "relacl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+   "rls": true,
+   "force": false,
+   "column_acls": null,
+   "policies": [
+    {
+     "name": "Authenticated users can submit reviews",
+     "cmd": "a",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": null,
+     "check": "(auth.uid() IS NOT NULL)"
+    },
+    {
+     "name": "anyone can read reviews",
+     "cmd": "r",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": "true",
+     "check": null
+    }
+   ],
+   "row_count": "42"
+  },
+  {
+   "table": "company_salaries",
+   "relacl": "{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+   "rls": true,
+   "force": false,
+   "column_acls": null,
+   "policies": [
+    {
+     "name": "Authenticated users can submit salaries",
+     "cmd": "a",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": null,
+     "check": "(auth.uid() IS NOT NULL)"
+    },
+    {
+     "name": "anyone can read salaries",
+     "cmd": "r",
+     "permissive": true,
+     "roles": [
+      "public"
+     ],
+     "using": "true",
+     "check": null
+    }
+   ],
+   "row_count": "81"
+  }
+ ],
+ "guard": "CREATE OR REPLACE FUNCTION public.company_responses_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'public'\nAS $function$\nDECLARE\n  v_item_company integer;\nBEGIN\n  IF TG_OP = 'UPDATE' THEN\n    IF (NEW.target_type, NEW.target_id, NEW.company_id) IS DISTINCT FROM (OLD.target_type, OLD.target_id, OLD.company_id) THEN\n      RAISE EXCEPTION 'an answer stays on its item' USING ERRCODE = '42501';\n    END IF;\n  END IF;\n\n  IF auth.uid() IS NOT NULL THEN\n    IF NOT EXISTS (SELECT 1 FROM companies WHERE id = NEW.company_id AND page_status = 'claimed') THEN\n      RAISE EXCEPTION 'page_not_active' USING ERRCODE = '42501';\n    END IF;\n    IF (SELECT enabled FROM entitlement_value('company', NEW.company_id::text, 'reviews.respond')) IS NOT TRUE THEN\n      RAISE EXCEPTION 'not_in_plan' USING ERRCODE = '42501';\n    END IF;\n  END IF;\n\n  IF TG_OP = 'INSERT' THEN\n    v_item_company := CASE NEW.target_type\n      WHEN 'review'     THEN (SELECT company_id FROM company_reviews     WHERE id = NEW.target_id)\n      WHEN 'interview'  THEN (SELECT company_id FROM company_interviews  WHERE id = NEW.target_id)\n      WHEN 'fit_rating' THEN (SELECT company_id FROM company_fit_ratings WHERE id = NEW.target_id)\n    END;\n    IF v_item_company IS DISTINCT FROM NEW.company_id THEN\n      RAISE EXCEPTION 'item_not_about_this_page' USING ERRCODE = '42501';\n    END IF;\n    NEW.responded_by := auth.uid();\n    NEW.created_at := now();\n  ELSE\n    NEW.responded_by := coalesce(auth.uid(), OLD.responded_by);\n    NEW.created_at := OLD.created_at;\n  END IF;\n  NEW.updated_at := now();\n  NEW.body := btrim(NEW.body);\n  RETURN NEW;\nEND;\n$function$\n"
+}
