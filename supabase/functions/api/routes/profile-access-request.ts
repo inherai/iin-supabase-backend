@@ -3,6 +3,12 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const app = new Hono()
 
+const ALLOWED_FIELDS = ['last_name', 'picture', 'contact_details']
+const MESSAGE_MAX = 1500
+const OUTREACH_COOLDOWN_DAYS = 90   // same as _talentProfiles.ts
+const DAILY_LIMIT = 40
+const DAY_MS = 24 * 60 * 60 * 1000
+
 // ⚠️  ADMIN CLIENT — bypasses ALL Supabase RLS policies.
 // Grant management must always run as admin because candidates and recruiters
 // each own only their side of the row. Verify entitlement in application code
@@ -105,7 +111,9 @@ app.get('/sent', async (c) => {
 })
 
 // POST /api/profile-access-request
-// Recruiter creates a pending request
+// Recruiter reaches out to a candidate: a message, what it is about, and (optionally) which
+// hidden details she asks to see. If the candidate accepts, they can also talk in chat
+// (can_message in the database). Declined or withdrawn → no new request for OUTREACH_COOLDOWN_DAYS.
 app.post('/', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized' }, 401)
@@ -117,22 +125,68 @@ app.post('/', async (c) => {
   const supabaseAdmin = makeAdmin()
 
   const body = await c.req.json().catch(() => ({}))
-  const { candidate_id, requested_fields, message } = body
+  const { candidate_id } = body
+  const requested_fields: string[] = Array.isArray(body.requested_fields)
+    ? [...new Set<string>(body.requested_fields.filter((f: unknown) => typeof f === 'string' && ALLOWED_FIELDS.includes(f)))]
+    : []
+  const message = typeof body.message === 'string' ? body.message.trim() : ''
+  const context_title = typeof body.context_title === 'string' ? body.context_title.trim().slice(0, 200) : ''
 
-  if (!candidate_id || !Array.isArray(requested_fields) || requested_fields.length === 0) {
-    return c.json({ error: 'candidate_id and requested_fields are required' }, 400)
+  if (!candidate_id || typeof candidate_id !== 'string' || candidate_id === user.id) {
+    return c.json({ error: 'candidate_id is required' }, 400)
   }
+  if (!message) return c.json({ error: 'A message is required', code: 'message_required' }, 400)
+  if (message.length > MESSAGE_MAX) return c.json({ error: 'The message is too long', code: 'message_too_long' }, 400)
 
-  // Don't overwrite an existing approved/partial grant
   const { data: existing } = await supabaseAdmin
     .from('profile_access_requests')
-    .select('status')
+    .select('status, expires_at, updated_at, created_at')
     .eq('recruiter_id', user.id)
     .eq('candidate_id', candidate_id)
-    .single()
+    .maybeSingle()
 
-  if (existing && ['approved', 'partial'].includes(existing.status)) {
-    return c.json({ success: true, status: existing.status })
+  if (existing) {
+    const now = Date.now()
+    const active = ['approved', 'partial'].includes(existing.status) &&
+      (!existing.expires_at || new Date(existing.expires_at).getTime() > now)
+    if (active) return c.json({ success: true, status: existing.status })
+    if (existing.status === 'pending') {
+      // still waiting for her: the recruiter's latest wording replaces the earlier one
+      const { error: updateError } = await supabaseAdmin
+        .from('profile_access_requests')
+        .update({ message, context_title: context_title || null, requested_fields, updated_at: new Date().toISOString() })
+        .eq('recruiter_id', user.id)
+        .eq('candidate_id', candidate_id)
+        .eq('status', 'pending')
+      if (updateError) return c.json({ error: updateError.message }, 500)
+      return c.json({ success: true, status: 'pending' })
+    }
+    if (['rejected', 'revoked'].includes(existing.status)) {
+      const retryAt = new Date(existing.updated_at ?? existing.created_at).getTime() + OUTREACH_COOLDOWN_DAYS * DAY_MS
+      if (retryAt > now) {
+        return c.json({ error: 'She declined recently', code: 'cooldown', retry_at: new Date(retryAt).toISOString() }, 429)
+      }
+    }
+    // an approval that expired, or a decline from long ago: a new request replaces it
+  }
+
+  // A recruiter sends at most DAILY_LIMIT requests a day.
+  const { count: today } = await supabaseAdmin
+    .from('profile_access_requests')
+    .select('id', { count: 'exact', head: true })
+    .eq('recruiter_id', user.id)
+    .gte('created_at', new Date(Date.now() - DAY_MS).toISOString())
+  if ((today ?? 0) >= DAILY_LIMIT) {
+    return c.json({ error: 'Daily limit reached', code: 'daily_limit' }, 429)
+  }
+
+  const { data: candidate } = await supabaseAdmin
+    .from('users')
+    .select('uuid, role, status, is_anonymous')
+    .eq('uuid', candidate_id)
+    .maybeSingle()
+  if (!candidate || candidate.status !== 'Active' || candidate.is_anonymous || ['recruiters', 'feed_participant'].includes(candidate.role)) {
+    return c.json({ error: 'Not found' }, 404)
   }
 
   const { error } = await supabaseAdmin
@@ -142,8 +196,14 @@ app.post('/', async (c) => {
         recruiter_id: user.id,
         candidate_id,
         requested_fields,
-        message: message || null,
+        approved_fields: null,
+        message,
+        context_title: context_title || null,
         status: 'pending',
+        expires_at: null,
+        revoked_at: null,
+        viewed_at: null,
+        created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'recruiter_id,candidate_id' }
@@ -184,11 +244,17 @@ app.put('/:id', async (c) => {
 
   if (status === 'rejected') {
     updates.status = 'rejected'
-  } else if (Array.isArray(approved_fields) && approved_fields.length > 0) {
+  } else if (Array.isArray(approved_fields) && (approved_fields.length > 0 || status === 'approved')) {
+    // She shares only what was asked for. An outreach that asked for nothing is accepted as is
+    // (it opens a conversation — can_message in the database).
     const requestedFields: string[] = request.requested_fields ?? []
-    const isAll = requestedFields.every((f: string) => approved_fields.includes(f))
+    const granted = approved_fields.filter((f: unknown) => typeof f === 'string' && requestedFields.includes(f as string))
+    if (requestedFields.length > 0 && granted.length === 0) {
+      return c.json({ error: 'Provide approved_fields or status=rejected' }, 400)
+    }
+    const isAll = requestedFields.every((f: string) => granted.includes(f))
     updates.status = isAll ? 'approved' : 'partial'
-    updates.approved_fields = approved_fields
+    updates.approved_fields = granted
     // Only reset expires_at when transitioning from pending — keep existing expiry when editing an active grant
     if (request.status === 'pending') {
       updates.expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()

@@ -344,6 +344,28 @@ app.put('/status', async (c) => {
 // --------------------------------------------------------------------
 // GET /api/me/strength
 // --------------------------------------------------------------------
+// PUT /api/me/job-seeking — "open to work": whether she is looking for work now, open to offers,
+// or not looking. Recruiters see it in the talent search (badge, filter); other members do not
+// see it anywhere in the site. In her own session, her own row only.
+app.put('/job-seeking', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = await c.req.json().catch(() => ({} as any))
+  const status = payload?.status
+  if (!['active', 'open', 'not_looking', null].includes(status)) {
+    return c.json({ error: 'status must be active, open, not_looking or null' }, 400)
+  }
+  // 'recruiters': a badge on her card in the talent search, and the availability filter finds her.
+  // 'quiet': no badge, not in the filter — she only ranks higher in recruiters' results.
+  const visibility = payload?.visibility === 'quiet' ? 'quiet' : 'recruiters'
+  const { error } = await c.get('supabase')
+    .from('users')
+    .update({ job_seeking_status: status, job_seeking_visibility: visibility })
+    .eq('uuid', user.id)
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json({ job_seeking_status: status, job_seeking_visibility: visibility })
+})
+
 app.get('/strength', async (c) => {
   const user = c.get('user')
   if (!user) return c.json({ error: 'Unauthorized: You must be logged in' }, 401)
