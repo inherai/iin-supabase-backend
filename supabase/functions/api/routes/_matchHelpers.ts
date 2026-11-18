@@ -24,6 +24,101 @@ export async function getEmbedding(text: string): Promise<number[]> {
   return result.data[0].embedding
 }
 
+// ── The other language of a search ─────────────────────────────────────────────
+// Recruiters search in Hebrew or English; profiles are written in either. The talent search runs
+// the words in both languages, so a candidate is found whichever language she used.
+const HEBREW = /[\u0590-\u05FF]/
+
+/** The same recruiter query in the other language (Hebrew ↔ English), or null when it can't help. */
+export async function translateQuery(query: string): Promise<string | null> {
+  const q = query.trim()
+  if (!q) return null
+  const toEnglish = HEBREW.test(q)
+  try {
+    const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
+    const res = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            `Translate a recruiter's candidate-search query to ${toEnglish ? 'English' : 'Hebrew'}. ` +
+            'It searches professional profiles in Israeli high-tech. Use the words people write in job titles and profiles ' +
+            '(e.g. "בודקת תוכנה" ↔ "QA tester", "מפתחת" ↔ "developer", "אנליסטית נתונים" ↔ "data analyst"). ' +
+            'Keep technology, product and skill names as they are (React, SQL, Salesforce). Do not add words. ' +
+            'Return JSON: {"translation": "..."}',
+        },
+        { role: 'user', content: q.slice(0, 300) },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0,
+    })
+    const out = String(JSON.parse(res.choices[0].message.content ?? '{}').translation ?? '').trim().slice(0, 300)
+    return out && out.toLowerCase() !== q.toLowerCase() ? out : null
+  } catch {
+    return null   // the search still runs in the recruiter's own words
+  }
+}
+
+/**
+ * Filter values (skills, languages, cities, fields of study, work styles) in the other language:
+ * { "ניהול פרויקטים": "Project Management", "English": "אנגלית", ... }. Values that read the same
+ * in both languages (React, SQL) come back unchanged and are dropped. Never throws.
+ */
+export async function translateTerms(terms: string[]): Promise<Record<string, string>> {
+  const list = [...new Set(terms.map((t) => t.trim()).filter(Boolean))].slice(0, 40)
+  if (!list.length) return {}
+  try {
+    const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
+    const res = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'These are values from professional profiles in Israeli high-tech: skills, spoken languages, cities, fields of ' +
+            'study, work styles. Give each one in the other language — Hebrew to English, English to Hebrew — as people ' +
+            'write it in a profile ("ניהול פרויקטים" → "Project Management", "English" → "אנגלית", "Jerusalem" → "ירושלים", ' +
+            '"מדעי המחשב" → "Computer Science", "Remote" → "עבודה מרחוק"). Technology and product names that are written ' +
+            'the same in both (React, SQL, Salesforce) stay as they are. Return JSON: {"translations": {"<value>": "<translation>"}}',
+        },
+        { role: 'user', content: JSON.stringify(list) },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0,
+    })
+    const raw = JSON.parse(res.choices[0].message.content ?? '{}').translations ?? {}
+    const out: Record<string, string> = {}
+    for (const t of list) {
+      const v = typeof raw[t] === 'string' ? raw[t].trim().slice(0, 120) : ''
+      if (v && v.toLowerCase() !== t.toLowerCase()) out[t] = v
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+/** A Hebrew job description in English (for matching profiles written in English). Null on failure. */
+export async function translateToEnglish(text: string): Promise<string | null> {
+  try {
+    const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
+    const res = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'Translate this job description to English as a recruiter would write it. Keep technology names as they are. Return only the translation.' },
+        { role: 'user', content: text.slice(0, 4000) },
+      ],
+      temperature: 0,
+    })
+    return res.choices[0].message.content?.trim() || null
+  } catch {
+    return null
+  }
+}
+
+export const hasHebrew = (s: string) => HEBREW.test(s)
+
 // ── Skill extraction (categorized) ───────────────────────────────────────────
 export interface CategorizedSkills {
   required: string[]

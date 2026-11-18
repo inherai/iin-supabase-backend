@@ -19,9 +19,13 @@ import {
   getEmbedding,
   extractSkillsFromJd,
   computeMatchScore,
+  translateQuery,
+  translateTerms,
+  translateToEnglish,
+  hasHebrew,
   type CategorizedSkills,
 } from './_matchHelpers.ts'
-import { filterParams, hasFilterParams, loadCandidates, matchedSkills } from './_talentProfiles.ts'
+import { filterParams, filterTerms, hasFilterParams, loadCandidates, matchedSkills } from './_talentProfiles.ts'
 import { RECRUITING_ROLES, listManagedCompanyIds } from '../lib/companyAccess.ts'
 
 const app = new Hono()
@@ -66,6 +70,33 @@ async function hashOf(text: string): Promise<string> {
   return Array.from(new Uint8Array(bytes)).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/** A job description in Hebrew is also matched in English (profiles are written in either). */
+async function englishEmbedding(text: string): Promise<number[] | null> {
+  if (!hasHebrew(text)) return null
+  const key = await hashOf(text)
+  const english = await cached(`xljd:${key}`, () => translateToEnglish(text))
+  return english ? await cached(`emb:xljd:${key}`, () => getEmbedding(english)).catch(() => null) : null
+}
+
+/** Filter values in the other language, one OpenAI call for the ones not seen lately. */
+async function translatedTerms(terms: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {}
+  const missing: string[] = []
+  for (const t of terms) {
+    const hit = cache.get(`tr:${t}`)
+    if (hit && Date.now() - hit.at < CACHE_TTL_MS) { if (hit.value) out[t] = hit.value }
+    else missing.push(t)
+  }
+  if (missing.length) {
+    const fresh = await translateTerms(missing)
+    for (const t of missing) {
+      cache.set(`tr:${t}`, { at: Date.now(), value: fresh[t] ?? null })
+      if (fresh[t]) out[t] = fresh[t]
+    }
+  }
+  return out
+}
+
 // ====================================================================
 // POST /api/talent — the search
 // ====================================================================
@@ -81,7 +112,7 @@ app.post('/', async (c) => {
   const selectedJobId = typeof body.selectedJobId === 'string' ? body.selectedJobId : null
   const sort = ['relevance', 'recent', 'experience'].includes(body.sort) ? body.sort : 'relevance'
   const page = Math.max(1, Math.min(Number(body.page) || 1, 50))
-  const filters = filterParams(body)
+  const filters = filterParams(body, await translatedTerms(filterTerms(body)))
 
   const isJd = (jdMode === 'job' && !!selectedJobId) || (jdMode === 'text' && !!jdText.trim())
   const isSemantic = !isJd && !!searchQuery
@@ -96,6 +127,8 @@ app.post('/', async (c) => {
   let jdSkills: CategorizedSkills | null = null
   let jdTitle: string | null = null
   let degraded = false
+  let queryAlt: string | null = null
+  let embeddingAlt: number[] | null = null
   try {
     if (isJd && jdMode === 'job') {
       const { data: job } = await admin.from('open_position')
@@ -114,24 +147,36 @@ app.post('/', async (c) => {
         : await getEmbedding(text)
       if (!stored) await admin.from('job_embeddings').upsert({ job_id: selectedJobId, embedding })
       jdSkills = await cached(`skills:job:${selectedJobId}:${await hashOf(text)}`, () => extractSkillsFromJd(text))
+      embeddingAlt = await englishEmbedding(text)
     } else if (isJd) {
       const key = await hashOf(jdText)
       embedding = await cached(`emb:${key}`, () => getEmbedding(jdText))
       jdSkills = await cached(`skills:${key}`, () => extractSkillsFromJd(jdText))
+      embeddingAlt = await englishEmbedding(jdText)
     } else if (isSemantic) {
-      embedding = await cached(`emb:q:${searchQuery.toLowerCase()}`, () => getEmbedding(searchQuery))
+      // the words in the other language too (Hebrew ↔ English): profiles are written in either
+      const [emb, alt] = await Promise.all([
+        cached(`emb:q:${searchQuery.toLowerCase()}`, () => getEmbedding(searchQuery)),
+        cached(`xl:${searchQuery.toLowerCase()}`, () => translateQuery(searchQuery)),
+      ])
+      embedding = emb
+      queryAlt = alt
+      if (alt) embeddingAlt = await cached(`emb:q:${alt.toLowerCase()}`, () => getEmbedding(alt)).catch(() => null)
     }
   } catch (err) {
     console.error('talent: embedding failed', err)
     if (isJd) return c.json({ error: 'Search unavailable', code: 'ai_unavailable' }, 503)
     degraded = true   // free text still matches words in profiles
+    if (isSemantic) queryAlt = await cached(`xl:${searchQuery.toLowerCase()}`, () => translateQuery(searchQuery)).catch(() => null)
   }
 
   const run = (limit: number, offset: number) => admin.rpc('talent_search', {
     p_viewer: user.id,
     p_query: isSemantic ? searchQuery : null,
     p_embedding: embedding,
-    ...filters,
+    p_query_alt: queryAlt,
+    p_embedding_alt: embeddingAlt,
+    ...filters,   // incl. each chosen value's variants and the city / field in the other language
     p_sort: sort,
     p_limit: limit,
     p_offset: offset,

@@ -8,7 +8,7 @@
 //
 // The recruiter's own data (saved candidates, projects, notes) is read in HER session (`supabase`),
 // so row-level security keeps it hers.
-import { hasPrivacyAccess } from './_matchHelpers.ts'
+import { SKILL_ALIASES, SYMBOL_LANGS, hasPrivacyAccess, normalizeSkill } from './_matchHelpers.ts'
 
 export const PROFILE_COLUMNS =
   'uuid, first_name, raw_last_name, headline, about, location, skills, work_preferences, languages, ' +
@@ -98,6 +98,60 @@ export function accessOf(request: RequestRow | undefined, now = Date.now()) {
     : { status: 'none' as AccessStatus, approved: [], retryAt: null }
 }
 
+// ── Experience: how long she worked, from the periods she reported ─────────────────────────
+// Overlapping jobs count once. The profile form asks for years only: a start without a month
+// counts from January, an end without a month to December, so the total is rounded UP, and is
+// shown in whole years ("approx"). With months on every date it is exact (years + months).
+// The same rule runs in the database (talent_experience_years) for the years filter and sort.
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+
+/** { year, month | null } from "2021", "2021-03", "2021-03-01", "03/2021", "Mar 2021". */
+export function parseYearMonth(raw: unknown): { year: number; month: number | null } | null {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null
+  const s = String(raw).trim().toLowerCase()
+  const year = s.match(/(19|20)\d{2}/)?.[0]
+  if (!year) return null
+  let month: number | null = null
+  const iso = s.match(/^(\d{4})-(\d{1,2})/)
+  const slash = s.match(/^(\d{1,2})[/.](\d{4})/)
+  const named = MONTHS.findIndex((m) => s.includes(m))
+  if (iso) month = Number(iso[2])
+  else if (slash) month = Number(slash[1])
+  else if (named >= 0) month = named + 1
+  if (month !== null && (month < 1 || month > 12)) month = null
+  return { year: Number(year), month }
+}
+
+export function experienceSpan(experience: unknown, now = new Date()): { months: number; approx: boolean; years: number } {
+  const list = Array.isArray(experience) ? experience : []
+  const nowIdx = now.getFullYear() * 12 + now.getMonth()
+  let approx = false
+  const ranges: [number, number][] = []
+  for (const e of list) {
+    if (!e || typeof e !== 'object') continue
+    const start = parseYearMonth((e as any).startDate)
+    if (!start) continue
+    const current = (e as any).current === true || (e as any).current === 'true'
+    const end = current ? null : parseYearMonth((e as any).endDate)
+    if (!current && !end) continue
+    const from = start.year * 12 + (start.month ?? 1) - 1
+    const to = Math.min(end ? end.year * 12 + (end.month ?? 12) - 1 : nowIdx, nowIdx)
+    if (to < from) continue
+    ranges.push([from, to])
+    if (start.month === null || (end && end.month === null)) approx = true
+  }
+  ranges.sort((a, b) => a[0] - b[0])
+  let months = 0
+  let curFrom = -1
+  let curTo = -2
+  for (const [a, b] of ranges) {
+    if (a > curTo + 1) { months += curTo >= curFrom ? curTo - curFrom + 1 : 0; curFrom = a; curTo = b }
+    else curTo = Math.max(curTo, b)
+  }
+  months += curTo >= curFrom ? curTo - curFrom + 1 : 0
+  return { months, approx, years: approx ? Math.ceil(months / 12) : Math.floor(months / 12) }
+}
+
 const lower = (list: unknown): string[] => (Array.isArray(list) ? list.map((s) => String(s).toLowerCase()) : [])
 
 export function mapCandidate(u: any, viewerRole: string, ctx: RecruiterContext, extra: Record<string, unknown> = {}) {
@@ -144,13 +198,36 @@ export function mapCandidate(u: any, viewerRole: string, ctx: RecruiterContext, 
       ? { id: request.id, message: request.message, context_title: request.context_title, sent_at: request.updated_at ?? request.created_at }
       : null,
     job_seeking_status: u.job_seeking_status ?? null,
-    experience_years: u.experience_years ?? null,
+    ...(() => {
+      const span = experienceSpan(u.experience)
+      return { experience_years: span.years, experience_months: span.months, experience_approx: span.approx }
+    })(),
     joined_at: u.created_at ?? null,
     is_saved: !!savedId,
     saved_id: savedId ?? null,
     projects: ctx.projects.get(u.uuid) ?? [],
     notes_count: ctx.notes.get(u.uuid) ?? 0,
     ...extra,
+  }
+}
+
+/** experience[].company is stored as a company id: replace it with { id, name, logo, website, slug }. */
+async function enrichCompanies(admin: any, rows: any[]) {
+  const ids = new Set<number>()
+  for (const u of rows) for (const e of Array.isArray(u.experience) ? u.experience : []) {
+    const id = typeof e?.company === 'number' ? e.company : typeof e?.company === 'string' && /^\d{1,9}$/.test(e.company) ? Number(e.company) : null
+    if (id !== null) ids.add(id)
+  }
+  if (!ids.size) return
+  const found = await Promise.all(chunks([...ids]).map((part) =>
+    admin.from('companies').select('id, name, logo, website, slug').in('id', part)))
+  const byId = new Map(found.flatMap((r: any) => r.data ?? []).map((c: any) => [c.id, c]))
+  for (const u of rows) {
+    if (!Array.isArray(u.experience)) continue
+    u.experience = u.experience.map((e: any) => {
+      const id = typeof e?.company === 'number' ? e.company : typeof e?.company === 'string' && /^\d{1,9}$/.test(e.company) ? Number(e.company) : null
+      return id !== null && byId.has(id) ? { ...e, company: byId.get(id) } : e
+    })
   }
 }
 
@@ -177,6 +254,7 @@ export async function loadCandidates(
   ])
   const failed = profiles.find((r: any) => r.error)
   if (failed) throw new Error(failed.error.message)
+  await enrichCompanies(admin, profiles.flatMap((r: any) => r.data ?? []))
   // "open to work" quietly: recruiters don't see it on her card
   const quietIds = new Set(quiet.flatMap((r: any) => r.data ?? []).map((u: any) => u.uuid))
   for (const r of profiles) for (const u of (r as any).data ?? []) if (quietIds.has(u.uuid)) u.job_seeking_status = null
@@ -185,10 +263,10 @@ export async function loadCandidates(
   return uuids.filter((id) => byId.has(id)).map((id) => mapCandidate(byId.get(id), role, ctx, extraFor(id)))
 }
 
-/** Case-insensitive intersection, in the candidate's own spelling. */
-export function matchedSkills(candidateSkills: unknown, wanted: string[]): string[] {
-  const want = new Set(lower(wanted))
-  return (Array.isArray(candidateSkills) ? candidateSkills : []).filter((s) => want.has(String(s).toLowerCase()))
+/** The candidate's skills that answer the chosen ones (any of their variants), in her own spelling. */
+export function matchedSkills(candidateSkills: unknown, groups: string[]): string[] {
+  const wanted = new Set(groups.flatMap((g) => g.split('|')))
+  return (Array.isArray(candidateSkills) ? candidateSkills : []).filter((s) => wanted.has(squash(String(s))))
 }
 
 // ── Search filters → talent_search() parameters ────────────────────────────────
@@ -212,14 +290,49 @@ function degreeLevels(body: any): string[] {
   return [...new Set(list.map((d: unknown) => LEGACY_DEGREES[d as string] ?? d).filter((d: unknown) => DEGREE_LEVELS.includes(d as string)))] as string[]
 }
 
-/** The sidebar filters (not the free text, not the job match). */
-export function filterParams(body: any) {
+// Every chosen value goes to the database with its variants, joined by "|" (talent_variants()):
+// the same written form the database compares (talent_squash), other spellings of a skill
+// ("React" → "reactjs"), and its translation (Hebrew ↔ English) when the API has one.
+export const squash = (s: string) => s.toLowerCase().trim().replace(/[\s._/-]+/g, '').replace(/\|/g, '')
+
+function skillSpellings(term: string): string[] {
+  const forms = new Set<string>([squash(term)])
+  const canonical = normalizeSkill(term)
+  forms.add(squash(canonical))
+  for (const [alias, to] of Object.entries(SKILL_ALIASES)) if (to === canonical) forms.add(alias)
+  for (const [symbol, to] of Object.entries(SYMBOL_LANGS)) if (to === canonical) forms.add(squash(symbol))
+  return [...forms].filter(Boolean)
+}
+
+function variants(term: string, translations: Record<string, string>, spellings: (t: string) => string[]): string {
+  const forms = new Set(spellings(term))
+  const other = translations[term]
+  if (other) for (const f of spellings(other)) forms.add(f)
+  return [...forms].filter(Boolean).join('|')
+}
+const plain = (t: string) => [squash(t)]
+
+/** The values worth translating for this search (sent to translateTerms in one call). */
+export function filterTerms(body: any): string[] {
+  const city = text(body.selectedLocation, 120)?.split(',')[0].trim()
+  return [
+    ...strings(body.selectedSkills), ...strings(body.selectedLanguages), ...strings(body.selectedWorkPreferences),
+    ...(city ? [city] : []), ...(text(body.selectedFieldOfStudy, 120) ? [text(body.selectedFieldOfStudy, 120)!] : []),
+  ]
+}
+
+/** The sidebar filters (not the free text, not the job match). `translations`: filterTerms → other language. */
+export function filterParams(body: any, translations: Record<string, string> = {}) {
+  const city = text(body.selectedLocation, 120)?.split(',')[0].trim() ?? null
+  const field = text(body.selectedFieldOfStudy, 120)
   return {
-    p_skills: strings(body.selectedSkills),
+    p_skills: strings(body.selectedSkills).map((t) => variants(t, translations, skillSpellings)),
     p_skills_all: body.skillsMatch !== 'any',
     p_location: text(body.selectedLocation, 120),
-    p_work_prefs: strings(body.selectedWorkPreferences),
-    p_languages: strings(body.selectedLanguages),
+    p_location_alt: city ? translations[city] ?? null : null,
+    p_field_alt: field ? translations[field] ?? null : null,
+    p_work_prefs: strings(body.selectedWorkPreferences).map((t) => variants(t, translations, plain)),
+    p_languages: strings(body.selectedLanguages).map((t) => variants(t, translations, plain)),
     p_min_years: intOrNull(body.minYears),
     p_max_years: intOrNull(body.maxYears),
     p_degree_levels: degreeLevels(body),
