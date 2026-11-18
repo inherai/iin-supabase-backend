@@ -1219,14 +1219,15 @@ app.delete("/invitations/:id", async (c) => {
 
 // ==================== HELD INVITATIONS ====================
 // Invitations imported from a spreadsheet: the email names the sender by the text the admin typed,
-// and the member waits for approval after onboarding (add_held_invites_safe.sql). All three run in
-// the admin's own session; the database functions check is_admin themselves.
+// and the member waits for approval after onboarding (add_held_invites_safe.sql,
+// add_held_invites_queue_safe.sql). Import only creates them; the email timer sends them gradually
+// (lib/emails/heldInvites.ts). All run in the admin's own session; the database functions check
+// is_admin themselves.
 
-const BULK_INVITE_LIMIT = 200;
+const BULK_INVITE_LIMIT = 10000;
 
 // POST /admin/invitations/bulk — { emails: string[], inviter_display_name, personal_note? }
 app.post("/invitations/bulk", async (c) => {
-  const supabase = c.get("supabase");
   const body = await c.req.json().catch(() => ({}));
   const senderName = typeof body?.inviter_display_name === "string" ? body.inviter_display_name.trim().slice(0, 80) : "";
   const personalNote = typeof body?.personal_note === "string" ? body.personal_note.trim().slice(0, 2000) : "";
@@ -1238,45 +1239,40 @@ app.post("/invitations/bulk", async (c) => {
   if (emails.length === 0) return c.json({ error: "No email addresses" }, 400);
   if (emails.length > BULK_INVITE_LIMIT) return c.json({ error: `At most ${BULK_INVITE_LIMIT} addresses in one import` }, 400);
 
-  // Addresses that asked not to be invited are reported, not created
-  const blocked = new Set<string>();
-  for (const email of new Set(emails)) {
-    if (!(await canSendEmail({ email, category: "invitee" }))) blocked.add(email);
-  }
-
-  const { data, error } = await supabase.rpc("admin_create_held_invites", {
-    p_emails: emails.filter((e) => !blocked.has(e)),
+  // Addresses that asked not to be invited are created too and skipped by the sender (stage "not sent")
+  const { data, error } = await c.get("supabase").rpc("admin_create_held_invites", {
+    p_emails: emails,
     p_inviter_display_name: senderName,
     p_personal_note: personalNote || null,
   });
   if (error) return c.json({ error: error.message }, 400);
 
-  const rows = (data || []) as Array<{ email: string; result: string; token: string | null; expires_at: string | null }>;
-  const created = rows.filter((r) => r.result === "created" && r.token);
-
-  // One at a time, with a short gap, so the mail provider's rate limit isn't hit
-  const sending = (async () => {
-    for (const r of created) {
-      await sendInviteEmail({ to: r.email, inviterName: senderName, token: r.token!, personalNote: personalNote || null, expiresAt: r.expires_at! })
-        .catch((err: any) => console.error("Failed to send held invite email:", r.email, err.message));
-      await new Promise((res) => setTimeout(res, 550));
-    }
-  })();
-  // @ts-ignore EdgeRuntime exists on Supabase Edge Functions
-  if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(sending);
-
   return c.json({
-    results: [
-      ...rows.map(({ email, result }) => ({ email, result })),
-      ...[...blocked].map((email) => ({ email, result: "do_not_email" })),
-    ],
+    results: ((data || []) as Array<{ email: string; result: string }>).map(({ email, result }) => ({ email, result })),
   }, 201);
 });
 
-app.get("/pending-review", async (c) => {
-  const { data, error } = await c.get("supabase").rpc("admin_pending_review_users");
-  if (error) return c.json({ error: error.message }, 400);
-  return c.json({ users: data || [] });
+// GET /admin/held-invites?stage=&search=&page=&limit= — imported invitations with their stage, + counts per stage
+app.get("/held-invites", async (c) => {
+  const supabase = c.get("supabase");
+  const page = Math.max(1, parseInt(c.req.query("page") || "1") || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(c.req.query("limit") || "50") || 50));
+  const stage = c.req.query("stage") || null;
+  const search = (c.req.query("search") || "").trim() || null;
+
+  const [list, summary] = await Promise.all([
+    supabase.rpc("admin_held_invites", { p_stage: stage, p_search: search, p_limit: limit, p_offset: (page - 1) * limit }),
+    supabase.rpc("admin_held_invites_summary"),
+  ]);
+  if (list.error) return c.json({ error: list.error.message }, 400);
+  if (summary.error) return c.json({ error: summary.error.message }, 400);
+
+  const rows = (list.data || []) as Array<Record<string, unknown> & { total_count: number }>;
+  return c.json({
+    invites: rows.map(({ total_count: _total, ...r }) => r),
+    total: rows[0]?.total_count ?? 0,
+    summary: Object.fromEntries(((summary.data || []) as Array<{ stage: string; n: number }>).map((s) => [s.stage, Number(s.n)])),
+  });
 });
 
 // POST /admin/pending-review/approve — { user_ids: string[] }

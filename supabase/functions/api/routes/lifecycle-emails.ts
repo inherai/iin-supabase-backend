@@ -15,6 +15,7 @@ import { inviteeJoinedJob, inviteeReminderJob, invitesUnlockedJob, inviteExpired
 import { accessReplyJob } from '../lib/emails/service.ts'
 import { jobApplicationsJob } from '../lib/emails/companyPages.ts'
 import { talentAlertJob } from '../lib/emails/talentAlerts.ts'
+import { heldInvitesJob, HELD_INVITE_KINDS } from '../lib/emails/heldInvites.ts'
 import { contentDigestJob, networkJob, peopleJob, postViewsJob, requestReminderJob, weeklyCommunityJob } from '../lib/emails/activityJobs.ts'
 
 export interface LifecycleJob {
@@ -95,6 +96,7 @@ app.post('/run', async (c) => {
   // This run's budget: what's left of the hourly total, at most EMAIL_PER_RUN.
   const { count: lastHour } = await adminClient().from('email_log').select('id', { count: 'exact', head: true })
     .in('status', ['sent', 'delivered', 'bounced', 'complained']).gte('created_at', new Date(Date.now() - 3600_000).toISOString())
+    .not('kind', 'in', `(${HELD_INVITE_KINDS.join(',')})`) // imported invitations have their own budget
   let budget = Math.min(envInt('EMAIL_PER_RUN', DEFAULT_PER_RUN, 100), Math.max(0, envInt('EMAIL_HOURLY_BUDGET', DEFAULT_HOURLY_BUDGET, 500) - (lastHour ?? 0)))
 
   // Wednesday from 10:00 belongs to the week on duallin (2026-11-05): it takes every run and goes
@@ -120,6 +122,16 @@ app.post('/run', async (c) => {
     } catch (err) {
       console.error(`lifecycle job ${job.name} failed:`, err)
       results.push({ job: job.name, error: (err as Error).message })
+    }
+  }
+  // Imported invitations: last, with what's left of the run's time and their own budget, so a big
+  // import never delays the site's own emails (lib/emails/heldInvites.ts).
+  if (outOfTime()) results.push({ job: 'held_invites', skipped: 'out of time' })
+  else {
+    try { results.push({ job: 'held_invites', ...(await heldInvitesJob()) }) }
+    catch (err) {
+      console.error('lifecycle job held_invites failed:', err)
+      results.push({ job: 'held_invites', error: (err as Error).message })
     }
   }
   return c.json({ window: 'open', slot, health, jobs: results })

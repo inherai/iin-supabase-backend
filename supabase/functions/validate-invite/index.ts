@@ -42,7 +42,7 @@ Deno.serve(async (req) => {
 
     const { data: invite, error: inviteError } = await supabase
       .from("invites")
-      .select("inviter_id, status, expires_at, role, inviter_display_name")
+      .select("id, inviter_id, status, expires_at, role, inviter_display_name, views_count")
       .eq("token", token)
       .maybeSingle();
 
@@ -79,6 +79,13 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // She opened the link (shown on the admin pages). Never blocks the page.
+    const { error: viewError } = await supabase
+      .from("invites")
+      .update({ views_count: (invite.views_count ?? 0) + 1, last_viewed_at: new Date().toISOString() })
+      .eq("id", invite.id);
+    if (viewError) console.error("invite view not counted:", viewError.message);
 
     const { data: inviter, error: inviterError } = await supabase
       .from("users")

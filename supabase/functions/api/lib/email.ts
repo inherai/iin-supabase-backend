@@ -1,4 +1,4 @@
-import { sendEmail } from './mailer.ts';
+import { sendEmail, type SendResult } from './mailer.ts';
 
 export interface SendInviteEmailParams {
   to: string;
@@ -6,10 +6,12 @@ export interface SendInviteEmailParams {
   token: string;
   personalNote?: string | null;
   expiresAt: string;
+  /** Imported invitations go out from the email timer: own kind (tracked per invitation), in the send window. */
+  queued?: { inviteId: string };
 }
 
-export async function sendInviteEmail(params: SendInviteEmailParams): Promise<void> {
-  const { to, inviterName, token, personalNote, expiresAt } = params;
+export async function sendInviteEmail(params: SendInviteEmailParams): Promise<SendResult> {
+  const { to, inviterName, token, personalNote, expiresAt, queued } = params;
 
   const appUrl = Deno.env.get('APP_URL') ?? 'https://www.duallin.com';
 
@@ -223,15 +225,17 @@ export async function sendInviteEmail(params: SendInviteEmailParams): Promise<vo
   };
 
   // Through the shared sender: suppression list, log, one-click headers. Invitations are sent
-  // right away (someone just sent it), not held for the send window.
+  // right away (someone just sent it), not held for the send window — except imported ones.
   const result = await sendEmail({
-    kind: 'invite',
+    kind: queued ? 'held_invite' : 'invite',
     category: 'invitee',
     to,
+    refKey: queued?.inviteId ?? null,
     subject: "You've been personally invited to duallin | הוזמנת אישית לדואולין",
     html: ({ unsubscribeUrl }) => renderHtml(unsubscribeUrl),
-    immediate: true,
+    immediate: !queued,
   });
   if (result.status === 'failed') throw new Error(result.error);
   if (result.status === 'skipped' && result.reason === 'no_api_key') throw new Error('RESEND_API_KEY is not set');
+  return result;
 }
