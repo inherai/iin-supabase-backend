@@ -317,6 +317,13 @@ app.put('/status', async (c) => {
       return c.json({ error: updateErr.message }, 500)
     }
 
+    // A held invitation (add_held_invites_safe.sql): the DB put her on 'pending_review' instead.
+    // No activated_at / welcome yet — both happen when an admin approves her.
+    const { data: after } = await supabase.from('users').select('status').eq('uuid', user.id).single()
+    if (after?.status === 'pending_review') {
+      return c.json({ updated: true, status: 'pending_review' })
+    }
+
     // Welcome email (email plan B4). Separate from the status update so that neither a missing
     // activated_at column nor a mail problem can ever block finishing onboarding.
     // A reply to her own action → sent now, at any hour. If it fails, the hourly job retries.

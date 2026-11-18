@@ -1217,6 +1217,80 @@ app.delete("/invitations/:id", async (c) => {
   return c.json({ success: true });
 });
 
+// ==================== HELD INVITATIONS ====================
+// Invitations imported from a spreadsheet: the email names the sender by the text the admin typed,
+// and the member waits for approval after onboarding (add_held_invites_safe.sql). All three run in
+// the admin's own session; the database functions check is_admin themselves.
+
+const BULK_INVITE_LIMIT = 200;
+
+// POST /admin/invitations/bulk — { emails: string[], inviter_display_name, personal_note? }
+app.post("/invitations/bulk", async (c) => {
+  const supabase = c.get("supabase");
+  const body = await c.req.json().catch(() => ({}));
+  const senderName = typeof body?.inviter_display_name === "string" ? body.inviter_display_name.trim().slice(0, 80) : "";
+  const personalNote = typeof body?.personal_note === "string" ? body.personal_note.trim().slice(0, 2000) : "";
+  const emails: string[] = Array.isArray(body?.emails)
+    ? body.emails.filter((e: unknown) => typeof e === "string").map((e: string) => sanitizeEmail(e))
+    : [];
+
+  if (!senderName) return c.json({ error: "inviter_display_name is required" }, 400);
+  if (emails.length === 0) return c.json({ error: "No email addresses" }, 400);
+  if (emails.length > BULK_INVITE_LIMIT) return c.json({ error: `At most ${BULK_INVITE_LIMIT} addresses in one import` }, 400);
+
+  // Addresses that asked not to be invited are reported, not created
+  const blocked = new Set<string>();
+  for (const email of new Set(emails)) {
+    if (!(await canSendEmail({ email, category: "invitee" }))) blocked.add(email);
+  }
+
+  const { data, error } = await supabase.rpc("admin_create_held_invites", {
+    p_emails: emails.filter((e) => !blocked.has(e)),
+    p_inviter_display_name: senderName,
+    p_personal_note: personalNote || null,
+  });
+  if (error) return c.json({ error: error.message }, 400);
+
+  const rows = (data || []) as Array<{ email: string; result: string; token: string | null; expires_at: string | null }>;
+  const created = rows.filter((r) => r.result === "created" && r.token);
+
+  // One at a time, with a short gap, so the mail provider's rate limit isn't hit
+  const sending = (async () => {
+    for (const r of created) {
+      await sendInviteEmail({ to: r.email, inviterName: senderName, token: r.token!, personalNote: personalNote || null, expiresAt: r.expires_at! })
+        .catch((err: any) => console.error("Failed to send held invite email:", r.email, err.message));
+      await new Promise((res) => setTimeout(res, 550));
+    }
+  })();
+  // @ts-ignore EdgeRuntime exists on Supabase Edge Functions
+  if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(sending);
+
+  return c.json({
+    results: [
+      ...rows.map(({ email, result }) => ({ email, result })),
+      ...[...blocked].map((email) => ({ email, result: "do_not_email" })),
+    ],
+  }, 201);
+});
+
+app.get("/pending-review", async (c) => {
+  const { data, error } = await c.get("supabase").rpc("admin_pending_review_users");
+  if (error) return c.json({ error: error.message }, 400);
+  return c.json({ users: data || [] });
+});
+
+// POST /admin/pending-review/approve — { user_ids: string[] }
+// Approval sets activated_at; the hourly jobs then send the welcome email (in the send window).
+app.post("/pending-review/approve", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const ids: string[] = Array.isArray(body?.user_ids) ? body.user_ids.filter((x: unknown) => typeof x === "string") : [];
+  if (ids.length === 0) return c.json({ error: "user_ids is required" }, 400);
+
+  const { data, error } = await c.get("supabase").rpc("admin_approve_pending_users", { p_user_ids: ids });
+  if (error) return c.json({ error: error.message }, 400);
+  return c.json({ approved: data || [] });
+});
+
 // ==================== COMPANIES ====================
 
 app.get("/companies", async (c) => {

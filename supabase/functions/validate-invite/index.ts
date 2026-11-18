@@ -42,7 +42,7 @@ Deno.serve(async (req) => {
 
     const { data: invite, error: inviteError } = await supabase
       .from("invites")
-      .select("inviter_id, status, expires_at, role")
+      .select("inviter_id, status, expires_at, role, inviter_display_name")
       .eq("token", token)
       .maybeSingle();
 
@@ -93,7 +93,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    const inviterFullName = [inviter?.first_name, inviter?.last_name]
+    // Invitations imported by an admin name the sender by the text typed at import
+    const inviterFullName = invite.inviter_display_name?.trim() || [inviter?.first_name, inviter?.last_name]
       .filter((part) => typeof part === "string" && part.trim().length > 0)
       .join(" ")
       .trim();

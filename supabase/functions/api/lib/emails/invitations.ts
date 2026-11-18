@@ -362,14 +362,14 @@ export async function inviteeReminderJob(budget: number): Promise<JobResult> {
   const db = adminClient()
   const now = Date.now()
   const { data: invites } = await db.from('invites')
-    .select('id, inviter_id, recipient_email, token, expires_at, created_at')
+    .select('id, inviter_id, recipient_email, token, expires_at, created_at, inviter_display_name')
     .eq('status', 'pending')
     .lte('created_at', new Date(now - INVITEE_REMINDER_AFTER_DAYS * DAY).toISOString())
     .gt('expires_at', new Date(now + 12 * 3600 * 1000).toISOString()) // at least half a day left
     .limit(500)
   if (!invites?.length) return none
   const { data: done } = await db.from('email_log').select('ref_key').eq('kind', 'invite_reminder')
-    .gte('created_at', new Date(now - 8 * DAY).toISOString()) // invitations live 7 days; avoids a huge id list in the URL
+    .gte('created_at', new Date(now - 22 * DAY).toISOString()) // invitations live 7 days (imported ones 21); avoids a huge id list in the URL
     .in('status', ['sent', 'delivered', 'bounced', 'complained', 'skipped'])
   const reminded = new Set((done ?? []).map((r) => r.ref_key))
 
@@ -381,11 +381,14 @@ export async function inviteeReminderJob(budget: number): Promise<JobResult> {
     const email = normalizeEmail(inv.recipient_email)
     const { data: member } = await db.from('users').select('uuid').eq('email', email).maybeSingle()
     if (member) continue // already has an account
-    const { data: inviter } = await db.from('users').select('first_name, last_name').eq('uuid', inv.inviter_id).maybeSingle()
+    // Imported invitations name the sender by the text typed at import
+    const { data: inviter } = inv.inviter_display_name
+      ? { data: null }
+      : await db.from('users').select('first_name, last_name').eq('uuid', inv.inviter_id).maybeSingle()
     const daysLeft = Math.max(1, Math.ceil((new Date(inv.expires_at).getTime() - now) / DAY))
 
     attempts++
-    const name = fullName(inviter)
+    const name = inv.inviter_display_name?.trim() || fullName(inviter)
     const r = await sendEmail({
       kind: 'invite_reminder',
       category: 'invitee',
@@ -427,8 +430,9 @@ export async function inviteExpiredJob(budget: number): Promise<JobResult> {
   if (budget <= 0) return none
   const db = adminClient()
   const now = Date.now()
+  // Not for imported (held) invitations: the admin would get one email per address of the import
   const { data: invites } = await db.from('invites').select('id, inviter_id, recipient_email, expires_at')
-    .in('status', ['pending', 'expired'])
+    .in('status', ['pending', 'expired']).eq('hold_for_review', false)
     .lte('expires_at', new Date(now).toISOString()).gte('expires_at', new Date(now - 2 * DAY).toISOString()).limit(500)
   if (!invites?.length) return none
   const { data: done } = await db.from('email_log').select('ref_key').eq('kind', 'invite_expired')
