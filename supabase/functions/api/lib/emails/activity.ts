@@ -163,7 +163,8 @@ const URL = {
 
 export interface NetworkUpdate {
   firstName: string
-  recruiters: Array<Person>
+  /** `about`: what the outreach is about, as the recruiter wrote it */
+  recruiters: Array<Person & { about?: string | null }>
   /** `partnerId`: opens that conversation */
   messages: Array<{ from: Person; partnerId: string; count: number }>
   messagesTotal: number              // conversations with unread messages
@@ -178,7 +179,7 @@ export interface NetworkUpdate {
 
 /** Subject from the most important item: recruiter > message > mention > request > accepted. */
 export function networkSubject(u: NetworkUpdate): string {
-  if (u.recruiters.length) return `${u.recruiters[0].name} מבקשת לראות פרטים מהפרופיל שלך | ${u.recruiters[0].name} asked to see your profile details`
+  if (u.recruiters.length) return `פנייה חדשה ממגייס/ת: ${u.recruiters[0].name} | ${u.recruiters[0].name} reached out to you`
   if (u.messagesTotal === 1) return `${u.messages[0].from.name} שלחה לך הודעה | ${u.messages[0].from.name} sent you a message`
   if (u.messagesTotal > 1) return `יש לך הודעות חדשות מ-${u.messagesTotal} חברות | New messages from ${u.messagesTotal} members`
   if (u.mentions.length) return `${u.mentions[0].by.name} תייגה אותך | ${u.mentions[0].by.name} mentioned you`
@@ -191,8 +192,13 @@ export function renderNetworkUpdate(u: NetworkUpdate, nudge: Nudge, unsubscribeU
   const n = nm(u.firstName)
   let rest = ''
   if (u.recruiters.length) {
-    rest += block('recruiter', { he: 'פניות ממגייסות', en: 'Recruiter requests' }, u.recruiters.length,
-      u.recruiters.map((p) => row(p, { action: { he: 'מבקשת לראות פרטים מהפרופיל שלך', en: 'asked to see details from your profile' }, headline: p.headline, href: URL.recruiters() })),
+    rest += block('recruiter', { he: 'פניות ממגייסים', en: 'Recruiters reaching out' }, u.recruiters.length,
+      u.recruiters.map((p) => row(p, {
+        action: { he: '· פנייה חדשה אלייך', en: 'reached out to you' },
+        headline: p.headline,
+        sub: p.about ? { he: `בנושא: ${cut(p.about, 60)}`, en: `About: ${cut(p.about, 60)}` } : null,
+        href: URL.recruiters(),
+      })),
       URL.recruiters(), (k) => ({ he: `ועוד ${k} פניות באתר`, en: `and ${k} more on duallin` }))
   }
   if (u.messages.length) {
@@ -217,7 +223,7 @@ export function renderNetworkUpdate(u: NetworkUpdate, nudge: Nudge, unsubscribeU
       URL.connections(), (k) => ({ he: `ועוד ${k} באתר`, en: `and ${k} more` }))
   }
   // The button goes where the most important item is.
-  const cta = u.recruiters.length ? { label: { he: 'לצפייה בפנייה', en: 'View request' }, url: URL.recruiters() }
+  const cta = u.recruiters.length ? { label: { he: 'לקריאת הפנייה', en: 'Read the message' }, url: URL.recruiters() }
     : u.messages.length ? { label: { he: 'לקריאת ההודעות', en: 'Read messages' }, url: u.messagesTotal === 1 ? LINK.chat(u.messages[0].partnerId) : URL.messages() }
     : u.mentions.length ? { label: { he: 'לצפייה בתיוג', en: 'See the mention' }, url: u.mentions[0].href }
     : u.requests.length ? { label: { he: 'לבקשות החיבור', en: 'See requests' }, url: URL.requests() }

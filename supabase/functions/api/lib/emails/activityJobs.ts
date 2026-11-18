@@ -137,7 +137,7 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
   const by60 = new Date(t - 60 * MIN).toISOString()
 
   const [recruiters, unread, mentions, requests, accepted] = await Promise.all([
-    db.from('profile_access_requests').select('candidate_id, recruiter_id, created_at').eq('status', 'pending').gte('created_at', since).lte('created_at', by15).limit(2000),
+    db.from('profile_access_requests').select('candidate_id, recruiter_id, created_at, context_title').eq('status', 'pending').gte('created_at', since).lte('created_at', by15).limit(2000),
     db.from('messages').select('conversation_id, sender_id, created_at').eq('is_read', false).gte('created_at', since).lte('created_at', by60).limit(5000),
     db.from('notifications').select('user_id, actor_id, target_id, type, created_at').in('type', ['MENTION', 'ARTICLE_MENTION']).not('actor_id', 'is', null).eq('is_read', false).gte('created_at', since).lte('created_at', by15).limit(3000),
     db.from('connections').select('receiver_id, requester_id, created_at').eq('status', 'pending').gte('created_at', since).lte('created_at', by15).limit(3000),
@@ -158,7 +158,7 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
     b[k].push(it)
     buckets.set(uid, b)
   }
-  for (const r of recruiters.data ?? []) add(r.candidate_id, 'recruiters', { at: Date.parse(r.created_at), actor: r.recruiter_id })
+  for (const r of recruiters.data ?? []) add(r.candidate_id, 'recruiters', { at: Date.parse(r.created_at), actor: r.recruiter_id, extra: r.context_title ?? undefined })
   for (const m of unread.data ?? []) {
     const c = convMap.get(m.conversation_id)
     if (!c) continue
@@ -256,7 +256,8 @@ export async function networkJob(budget: number, now = new Date()): Promise<JobR
 
     const update: NetworkUpdate = {
       firstName: (m.first_name ?? '').trim(),
-      recruiters: show.recruiters.map(P),
+      // what each outreach is about (the recruiter's own words, e.g. the job)
+      recruiters: show.recruiters.map((a) => ({ ...P(a), about: b.recruiters.find((x) => x.actor === a && x.extra)?.extra ?? null })),
       messages: msgSenders.slice(0, 3).map(([a, n]) => ({ from: P(a), partnerId: a, count: n })),
       messagesTotal: msgSenders.length,
       mentions: show.mentions.map((x) => {

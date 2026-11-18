@@ -14,6 +14,7 @@ import { profileTipsJob } from '../lib/emails/profileTips.ts'
 import { inviteeJoinedJob, inviteeReminderJob, invitesUnlockedJob, inviteExpiredJob } from '../lib/emails/invitations.ts'
 import { accessReplyJob } from '../lib/emails/service.ts'
 import { jobApplicationsJob } from '../lib/emails/companyPages.ts'
+import { talentAlertJob } from '../lib/emails/talentAlerts.ts'
 import { contentDigestJob, networkJob, peopleJob, postViewsJob, requestReminderJob, weeklyCommunityJob } from '../lib/emails/activityJobs.ts'
 
 export interface LifecycleJob {
@@ -62,6 +63,7 @@ export const LIFECYCLE_JOBS: LifecycleJob[] = [
   { name: 'come_back', run: (b) => comeBackJob(b), slots: [2, 5] },
   { name: 'invites_unlocked', run: (b) => invitesUnlockedJob(b), slots: [2, 5] },
   { name: 'people_suggestions', run: (b) => peopleJob(b), slots: [2, 5] },         // Mondays
+  { name: 'talent_alert', run: (b) => talentAlertJob(b), slots: [2, 5] },          // Sundays 09:00+: new candidates for recruiters' saved searches
 ]
 
 const israelDayHour = () => {

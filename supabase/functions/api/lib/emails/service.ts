@@ -1,8 +1,8 @@
 // Service emails (email plan A5, H2).
 //   A5 · join_request_received — to whoever filled in the join form, right away (her own action):
 //        "we got your request". Essential (category 'account'): no unsubscribe, but hard blocks apply.
-//   H2 · access_reply — to the recruiter when a candidate answers an access request
-//        (approved / partly / declined). Hourly, once per request + answer. Recruiter copy is
+//   H2 · access_reply — to the recruiter when a candidate answers an outreach
+//        (accepted / accepted with some details / declined). Hourly, once per request + answer. Recruiter copy is
 //        gender-neutral (product rule for recruiters).
 import { adminClient } from '../emailPrefs.ts'
 import { sendEmail, type SendResult } from '../mailer.ts'
@@ -60,19 +60,19 @@ export function sendJoinRequestReceived(req: { type: 'candidate' | 'recruiter'; 
 
 const ANSWER: Record<string, { subject: Bi; heading: (n: string) => Bi; text: Bi }> = {
   approved: {
-    subject: { he: 'בקשת הגישה אושרה', en: 'Your access request was approved' },
-    heading: (n) => ({ he: `${n || 'המועמדת'} אישרה את בקשת הגישה`, en: `${n || 'The candidate'} approved your access request` }),
-    text: { he: 'הפרטים שביקשת זמינים עכשיו בפרופיל שלה.', en: 'The details you asked for are now available on her profile.' },
+    subject: { he: 'המועמדת אישרה את הפנייה שלך', en: 'The candidate accepted your outreach' },
+    heading: (n) => ({ he: `${n || 'המועמדת'} אישרה את הפנייה שלך`, en: `${n || 'The candidate'} accepted your outreach` }),
+    text: { he: 'אפשר עכשיו להתכתב איתה בדואולין, והפרטים שביקשת זמינים בפרופיל שלה.', en: 'You can now message her on duallin, and the details you asked for are on her profile.' },
   },
   partial: {
-    subject: { he: 'בקשת הגישה אושרה חלקית', en: 'Your access request was partly approved' },
-    heading: (n) => ({ he: `${n || 'המועמדת'} אישרה חלק מהבקשה`, en: `${n || 'The candidate'} approved part of your request` }),
-    text: { he: 'חלק מהפרטים שביקשת זמינים עכשיו בפרופיל שלה.', en: 'Some of the details you asked for are now available on her profile.' },
+    subject: { he: 'המועמדת אישרה את הפנייה שלך', en: 'The candidate accepted your outreach' },
+    heading: (n) => ({ he: `${n || 'המועמדת'} אישרה את הפנייה שלך`, en: `${n || 'The candidate'} accepted your outreach` }),
+    text: { he: 'אפשר עכשיו להתכתב איתה בדואולין. היא בחרה לשתף חלק מהפרטים שביקשת.', en: 'You can now message her on duallin. She chose to share some of the details you asked for.' },
   },
   rejected: {
-    subject: { he: 'התקבלה תשובה לבקשת הגישה', en: 'An answer to your access request' },
-    heading: () => ({ he: 'התקבלה תשובה לבקשת הגישה', en: 'An answer to your access request' }),
-    text: { he: 'המועמדת בחרה לא לשתף את הפרטים בשלב זה.', en: 'The candidate chose not to share these details at this time.' },
+    subject: { he: 'התקבלה תשובה לפנייה שלך', en: 'An answer to your outreach' },
+    heading: () => ({ he: 'התקבלה תשובה לפנייה שלך', en: 'An answer to your outreach' }),
+    text: { he: 'המועמדת בחרה לא להמשיך בשלב זה.', en: 'The candidate chose not to continue at this time.' },
   },
 }
 
@@ -83,11 +83,12 @@ export function renderAccessReply(status: 'approved' | 'partial' | 'rejected', c
     biColumns({ he: heading(h.he) + paragraph(a.text.he), en: heading(h.en) + paragraph(a.text.en) }) +
     (status === 'rejected'
       ? button({ he: 'לחיפוש מועמדות', en: 'Search candidates' }, `${APP_URL()}/talent`)
-      : button({ he: 'לפרופיל שלה', en: 'See her profile' }, `${APP_URL()}/profile/${encodeURIComponent(candidateId)}`))
+      // the next step after a yes is a message: open the conversation with her
+      : button({ he: 'שליחת הודעה', en: 'Send a message' }, `${APP_URL()}/innercircle/messages?partnerId=${encodeURIComponent(candidateId)}`))
   return renderLayout({
     preheader: a.subject,
     body,
-    reason: { he: 'קיבלת את המייל כי ביקשת גישה לפרטים של מועמדת בדואולין.', en: 'You received this because you requested access to a candidate’s details on duallin.' },
+    reason: { he: 'קיבלת את המייל כי פנית למועמדת בדואולין.', en: 'You received this because you reached out to a candidate on duallin.' },
     unsubscribeUrl,
   })
 }
@@ -97,13 +98,17 @@ export async function accessReplyJob(budget: number, now = new Date()): Promise<
   const db = adminClient()
   const since = new Date(now.getTime() - 3 * DAY).toISOString()
   const { data: rows } = await db.from('profile_access_requests')
-    .select('id, recruiter_id, candidate_id, status, approved_fields, updated_at')
+    .select('id, recruiter_id, candidate_id, status, approved_fields, updated_at, expires_at')
     .in('status', ['approved', 'partial', 'rejected']).gte('updated_at', since).limit(1000)
   if (!rows?.length) return none
   const { data: done } = await db.from('email_log').select('ref_key').eq('kind', 'access_reply')
     .gte('created_at', new Date(now.getTime() - 4 * DAY).toISOString())
   const told = new Set((done ?? []).map((r) => r.ref_key))
-  const todo = rows.filter((r) => !told.has(`${r.id}:${r.status}`))
+  // One email per answer. An approval carries its expiry, so asking again after it expired and
+  // being approved again is a new answer (the old key format, id:status, still counts as told).
+  const keyOf = (r: { id: string; status: string; expires_at: string | null }) =>
+    r.status === 'rejected' ? `${r.id}:${r.status}` : `${r.id}:${r.status}:${r.expires_at ?? ''}`
+  const todo = rows.filter((r) => !told.has(keyOf(r)) && !told.has(`${r.id}:${r.status}`))
   if (!todo.length) return none
 
   const ids = [...new Set(todo.flatMap((r) => [r.recruiter_id, r.candidate_id]))]
@@ -123,7 +128,7 @@ export async function accessReplyJob(budget: number, now = new Date()): Promise<
     const status = r.status as 'approved' | 'partial' | 'rejected'
     attempts++
     const res = await sendEmail({
-      kind: 'access_reply', category: 'recruiting', to: rec.email, userId: rec.uuid, refKey: `${r.id}:${r.status}`,
+      kind: 'access_reply', category: 'recruiting', to: rec.email, userId: rec.uuid, refKey: keyOf(r),
       subject: `${ANSWER[status].subject.he} | ${ANSWER[status].subject.en}`,
       html: ({ unsubscribeUrl }) => renderAccessReply(status, name, r.candidate_id, unsubscribeUrl),
     })
