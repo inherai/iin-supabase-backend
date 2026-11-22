@@ -1,6 +1,7 @@
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import OpenAI from 'https://esm.sh/openai@4'
+import { CHAT_PARAMS } from '../lib/openaiModels.ts'
 import {
   getEmbedding,
   extractSkillsFromJd,
@@ -625,14 +626,14 @@ Do NOT invent anything — base all advice strictly on the profile data provided
     const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      ...CHAT_PARAMS,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
       response_format: { type: 'json_object' },
       temperature: 0.35,
-      max_tokens: 700,
+      max_completion_tokens: 700,   // max_tokens is deprecated for the newer models
     })
 
     const raw = completion.choices[0].message.content || '{}'

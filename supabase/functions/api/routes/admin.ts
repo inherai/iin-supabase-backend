@@ -2,6 +2,7 @@ import { Hono } from "https://deno.land/x/hono/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { calculateProfileStrength, calculateActivityScore, getWeeklyLimit, startOfCalendarWeek, activeWeekBonus } from './_scoreHelpers.ts';
 import OpenAI from "https://esm.sh/openai@4";
+import { WEB_SEARCH_MODEL } from '../lib/openaiModels.ts';
 import { sendInviteEmail } from '../lib/email.ts';
 import { loadPreferences, savePreference } from './email-preferences.ts';
 import { canSendEmail, normalizeEmail } from '../lib/emailPrefs.ts';
@@ -1794,7 +1795,7 @@ app.get("/company-requests", async (c) => {
   return c.json({ groups: groupList });
 });
 
-// POST /admin/company-requests/search-online — use GPT-4o to fetch company info from web
+// POST /admin/company-requests/search-online — OpenAI web search fetches company info from the web
 app.post("/company-requests/search-online", async (c) => {
   const db = getAdminClient();
   const body = await c.req.json().catch(() => ({}));
@@ -1806,7 +1807,7 @@ app.post("/company-requests/search-online", async (c) => {
   let completion: any;
   try {
     completion = await openai.chat.completions.create({
-      model: "gpt-4o-search-preview",
+      model: WEB_SEARCH_MODEL,
       messages: [{
         role: "user",
         content: `Find companies named "${companyName}" that are headquartered in Israel or have a verified office or active operation in Israel, using reliable current public sources.

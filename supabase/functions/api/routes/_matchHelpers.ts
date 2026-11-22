@@ -1,4 +1,5 @@
 import OpenAI from 'https://esm.sh/openai@4'
+import { CHAT_PARAMS } from '../lib/openaiModels.ts'
 
 // ── Access helpers ────────────────────────────────────────────────────────────
 export function checkAccess(user: any): boolean {
@@ -37,7 +38,7 @@ export async function translateQuery(query: string): Promise<string | null> {
   try {
     const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
     const res = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      ...CHAT_PARAMS,
       messages: [
         {
           role: 'system',
@@ -55,7 +56,8 @@ export async function translateQuery(query: string): Promise<string | null> {
     })
     const out = String(JSON.parse(res.choices[0].message.content ?? '{}').translation ?? '').trim().slice(0, 300)
     return out && out.toLowerCase() !== q.toLowerCase() ? out : null
-  } catch {
+  } catch (e) {
+    console.error('[translateQuery]', (e as Error)?.message)
     return null   // the search still runs in the recruiter's own words
   }
 }
@@ -71,7 +73,7 @@ export async function translateTerms(terms: string[]): Promise<Record<string, st
   try {
     const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
     const res = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      ...CHAT_PARAMS,
       messages: [
         {
           role: 'system',
@@ -94,7 +96,8 @@ export async function translateTerms(terms: string[]): Promise<Record<string, st
       if (v && v.toLowerCase() !== t.toLowerCase()) out[t] = v
     }
     return out
-  } catch {
+  } catch (e) {
+    console.error('[translateTerms]', (e as Error)?.message)
     return {}
   }
 }
@@ -104,7 +107,7 @@ export async function translateToEnglish(text: string): Promise<string | null> {
   try {
     const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
     const res = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      ...CHAT_PARAMS,
       messages: [
         { role: 'system', content: 'Translate this job description to English as a recruiter would write it. Keep technology names as they are. Return only the translation.' },
         { role: 'user', content: text.slice(0, 4000) },
@@ -112,7 +115,8 @@ export async function translateToEnglish(text: string): Promise<string | null> {
       temperature: 0,
     })
     return res.choices[0].message.content?.trim() || null
-  } catch {
+  } catch (e) {
+    console.error('[translateToEnglish]', (e as Error)?.message)
     return null
   }
 }
@@ -132,7 +136,7 @@ export async function extractSkillsFromJd(jdText: string): Promise<CategorizedSk
   try {
     const openai = new OpenAI({ apiKey: Deno.env.get('TEST_OPENAI_API_KEY') })
     const res = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      ...CHAT_PARAMS,
       messages: [
         {
           role: 'system',
@@ -156,7 +160,8 @@ export async function extractSkillsFromJd(jdText: string): Promise<CategorizedSk
         ? parsed.required_experience_years
         : null,
     }
-  } catch {
+  } catch (e) {
+    console.error('[extractSkillsFromJd]', (e as Error)?.message)
     return empty
   }
 }

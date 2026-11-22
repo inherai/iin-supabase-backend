@@ -23,6 +23,8 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 //    breakage is visible instead of silently returning 200.
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
+// gpt-4o-mini shuts down 2027-01-14. Keep in step with api/lib/openaiModels.ts (CHAT_PARAMS).
+const OPENAI_MODEL = 'gpt-6-luna'
 const BATCH_SIZE = 20           // rows fetched per query
 const CONCURRENCY = 3           // parallel OpenAI calls
 const TIME_BUDGET_MS = 90_000   // stop starting new work after this (stay under the platform wall-clock limit)
@@ -86,7 +88,8 @@ async function enrichOne(supabase: any, openaiApiKey: string, job: any): Promise
       method: 'POST',
       headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: OPENAI_MODEL,
+        reasoning_effort: 'none',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: `Job Description: ${source}` },
