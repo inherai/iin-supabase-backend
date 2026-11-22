@@ -342,6 +342,27 @@ export function filterParams(body: any, translations: Record<string, string> = {
   }
 }
 
+/** The sidebar filters as she chose them (her own words, no variants) — for talent_events. */
+export function searchLogFilters(body: any) {
+  const out: Record<string, unknown> = {
+    skills: strings(body.selectedSkills),
+    location: text(body.selectedLocation, 120),
+    work_prefs: strings(body.selectedWorkPreferences),
+    languages: strings(body.selectedLanguages),
+    min_years: intOrNull(body.minYears),
+    max_years: intOrNull(body.maxYears),
+    degrees: degreeLevels(body),
+    field: text(body.selectedFieldOfStudy, 120),
+    currently_employed: body.currentlyEmployed === true || null,
+    seeking: strings(body.jobSeekingStatuses).filter((s) => s === 'active' || s === 'open'),
+  }
+  for (const k of Object.keys(out)) {
+    const v = out[k]
+    if (v == null || (Array.isArray(v) && v.length === 0)) delete out[k]
+  }
+  return out
+}
+
 /** Does this search use any sidebar filter at all? */
 export function hasFilterParams(f: ReturnType<typeof filterParams>): boolean {
   return f.p_skills.length > 0 || !!f.p_location || f.p_work_prefs.length > 0 || f.p_languages.length > 0 ||

@@ -25,7 +25,7 @@ import {
   hasHebrew,
   type CategorizedSkills,
 } from './_matchHelpers.ts'
-import { filterParams, filterTerms, hasFilterParams, loadCandidates, matchedSkills } from './_talentProfiles.ts'
+import { filterParams, filterTerms, hasFilterParams, loadCandidates, matchedSkills, searchLogFilters } from './_talentProfiles.ts'
 import { RECRUITING_ROLES, listManagedCompanyIds } from '../lib/companyAccess.ts'
 
 const app = new Hono()
@@ -224,8 +224,20 @@ app.post('/', async (c) => {
     }
   }
 
+  // For the admin's usage numbers (add_talent_analytics_safe.sql): in her own session, never blocks the search.
+  const logged = supabase.from('talent_events').insert({
+    kind: 'search',
+    search_mode: mode,
+    query: isSemantic ? searchQuery : null,
+    job_id: isJd && jdMode === 'job' ? selectedJobId!.slice(0, 200) : null,
+    filters: { ...searchLogFilters(body), ...(jdTitle ? { job_title: jdTitle } : {}) },
+    total,
+    page,
+    result_ids: ids,
+  }).then(({ error }: any) => { if (error) console.error('talent: search log failed', error.message) })
+
   try {
-    const users = await loadCandidates(admin, supabase, user, ids, (id) => extra.get(id) ?? {})
+    const [users] = await Promise.all([loadCandidates(admin, supabase, user, ids, (id) => extra.get(id) ?? {}), logged])
     // The skills she filtered on, in the candidate's own spelling (highlighted on the card).
     if (!isJd) for (const u of users as any[]) u.matched_skills = matchedSkills(u.skills, filters.p_skills)
     return c.json({
@@ -274,6 +286,14 @@ app.get('/candidates/:id', async (c) => {
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }
+})
+
+// She opened a candidate (the side panel) — for the admin's usage numbers only.
+app.post('/candidates/:id/view', async (c) => {
+  const { error } = await c.get('supabase').from('talent_events')
+    .insert({ kind: 'candidate_view', candidate_id: c.req.param('id') })
+  if (error) console.error('talent: view log failed', error.message)
+  return c.body(null, 204)
 })
 
 // ====================================================================

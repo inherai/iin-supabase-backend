@@ -603,6 +603,18 @@ app.get("/profile-analytics", async (c) => {
   return c.json(data);
 });
 
+// Recruiters' use of /talent — computed in the DB (add_talent_analytics_safe.sql), which checks is_admin again.
+// Runs as the signed-in admin: no service role here. days: 7 / 30 / 90 / 365, anything else = all time.
+app.get("/talent-analytics", async (c) => {
+  const supabase = c.get("supabase");
+  const { data, error } = await supabase.rpc("admin_talent_analytics", { p_days: Number(c.req.query("days")) || 0 });
+  if (error) {
+    console.error("talent analytics error:", error);
+    return c.json({ error: error.message }, 500);
+  }
+  return c.json(data);
+});
+
 // ==================== USERS ====================
 
 // Admin-granted invites, as the client sees them: the bonus is 0 once its week is over
