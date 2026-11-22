@@ -1,6 +1,7 @@
 // supabase/functions/api/routes/saved.ts
 import { Hono } from 'https://deno.land/x/hono/mod.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { hiddenSeekingIds } from './_talentProfiles.ts'
 
 const app = new Hono()
 
@@ -47,7 +48,7 @@ app.get('/', async (c) => {
 
       let profiles: any[] = []
       if (uuids.length) {
-        const [profileResult, grantResult] = await Promise.all([
+        const [profileResult, grantResult, hiddenSeeking] = await Promise.all([
           supabaseAdmin
             .from('talent_search_view')
             .select('uuid, first_name, raw_last_name, headline, location, skills, has_image, status, job_seeking_status, user_privacy_lastname, user_privacy_picture')
@@ -61,7 +62,9 @@ app.get('/', async (c) => {
             .eq('recruiter_id', user.id)
             .in('candidate_id', uuids)
             .in('status', ['approved', 'partial'])
-            .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+            .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`),
+          // quiet, or works at this recruiter's company: no status
+          hiddenSeekingIds(supabaseAdmin, user.id, uuids),
         ])
 
         const grantMap: Record<string, string[]> = Object.fromEntries(
@@ -84,7 +87,7 @@ app.get('/', async (c) => {
             location: p.location,
             skills: p.skills,
             status: p.status,
-            job_seeking_status: p.job_seeking_status,
+            job_seeking_status: hiddenSeeking && !hiddenSeeking.has(p.uuid) ? p.job_seeking_status : null,
             image: canSeePicture ? p.has_image : false,
             image_accessible: canSeePicture,
             has_hidden_details: false,

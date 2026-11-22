@@ -241,23 +241,38 @@ export function profilesQuery(admin: any, uuids: string[]) {
     .not('raw_email', 'ilike', '%@deleted.local')
 }
 
+/**
+ * Candidates whose "open to work" status this recruiter must not see: those who chose "quiet",
+ * and those who work now at one of her companies (talent_hidden_seeking). null when the check
+ * failed — then no status is shown at all.
+ */
+export async function hiddenSeekingIds(admin: any, viewerId: string, uuids: string[]): Promise<Set<string> | null> {
+  const results = await Promise.all(chunks(uuids).map((part) =>
+    admin.rpc('talent_hidden_seeking', { p_viewer: viewerId, p_ids: part })))
+  const failed = results.find((r: any) => r.error)
+  if (failed) {
+    console.error('talent_hidden_seeking failed:', failed.error.message)
+    return null
+  }
+  return new Set(results.flatMap((r: any) => r.data ?? [])
+    .map((x: any) => typeof x === 'string' ? x : x?.talent_hidden_seeking))
+}
+
 /** Profiles for these ids, mapped, in the given order (missing / no longer searchable ones dropped). */
 export async function loadCandidates(
   admin: any, supabase: any, user: any, uuids: string[],
   extraFor: (uuid: string) => Record<string, unknown> = () => ({}),
 ) {
   if (!uuids.length) return []
-  const [profiles, quiet, ctx] = await Promise.all([
+  const [profiles, hidden, ctx] = await Promise.all([
     Promise.all(chunks(uuids).map((part) => profilesQuery(admin, part))),
-    Promise.all(chunks(uuids).map((part) => admin.from('users').select('uuid').in('uuid', part).eq('job_seeking_visibility', 'quiet'))),
+    hiddenSeekingIds(admin, user.id, uuids),
     loadRecruiterContext(admin, supabase, user.id, uuids),
   ])
   const failed = profiles.find((r: any) => r.error)
   if (failed) throw new Error(failed.error.message)
   await enrichCompanies(admin, profiles.flatMap((r: any) => r.data ?? []))
-  // "open to work" quietly: recruiters don't see it on her card
-  const quietIds = new Set(quiet.flatMap((r: any) => r.data ?? []).map((u: any) => u.uuid))
-  for (const r of profiles) for (const u of (r as any).data ?? []) if (quietIds.has(u.uuid)) u.job_seeking_status = null
+  for (const r of profiles) for (const u of (r as any).data ?? []) if (!hidden || hidden.has(u.uuid)) u.job_seeking_status = null
   const role = viewerRoleOf(user)
   const byId = new Map(profiles.flatMap((r: any) => r.data ?? []).map((u: any) => [u.uuid, u]))
   return uuids.filter((id) => byId.has(id)).map((id) => mapCandidate(byId.get(id), role, ctx, extraFor(id)))

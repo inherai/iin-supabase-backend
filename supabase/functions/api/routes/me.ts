@@ -80,6 +80,23 @@ async function updateUserVector(userId: string) {
   }
 }
 
+// "Open to work" lives in member_job_seeking (only she reads her row), not on users:
+// added to her profile as job_seeking_status / job_seeking_visibility, as before.
+async function withJobSeeking(supabase: any, userId: string, row: any) {
+  const { data, error } = await supabase
+    .from('member_job_seeking')
+    .select('status, visibility')
+    .eq('user_uuid', userId)
+    .maybeSingle()
+  if (error) {
+    console.error('member_job_seeking read failed:', error.message)
+    return row
+  }
+  row.job_seeking_status = data?.status ?? null
+  row.job_seeking_visibility = data?.visibility ?? 'recruiters'
+  return row
+}
+
 // --------------------------------------------------------------------
 // GET /api/me
 // שליפת פרופיל המשתמש המחובר
@@ -135,6 +152,8 @@ app.get('/', async (c) => {
   // --- לוגיקת IMAGE החדשה (כמו ב-PROFILE) ---
   // מחזיר true אם יש ערך ב-image, אחרת null
   userData.image = !!userData.image ? true : null;
+
+  await withJobSeeking(supabase, user.id, userData)
 
   return c.json(userData)
 })
@@ -213,6 +232,7 @@ app.put('/', async (c) => {
     ...data,
     image: !!data.image ? true : null
   };
+  await withJobSeeking(supabase, user.id, responseData)
 
   return c.json(responseData)
 })
@@ -359,9 +379,8 @@ app.put('/job-seeking', async (c) => {
   // 'quiet': no badge, not in the filter — she only ranks higher in recruiters' results.
   const visibility = payload?.visibility === 'quiet' ? 'quiet' : 'recruiters'
   const { error } = await c.get('supabase')
-    .from('users')
-    .update({ job_seeking_status: status, job_seeking_visibility: visibility })
-    .eq('uuid', user.id)
+    .from('member_job_seeking')
+    .upsert({ user_uuid: user.id, status, visibility, updated_at: new Date().toISOString() }, { onConflict: 'user_uuid' })
   if (error) return c.json({ error: error.message }, 400)
   return c.json({ job_seeking_status: status, job_seeking_visibility: visibility })
 })
