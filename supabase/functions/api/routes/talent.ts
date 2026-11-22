@@ -27,6 +27,7 @@ import {
 } from './_matchHelpers.ts'
 import { filterParams, filterTerms, hasFilterParams, loadCandidates, matchedSkills, searchLogFilters } from './_talentProfiles.ts'
 import { RECRUITING_ROLES, listManagedCompanyIds } from '../lib/companyAccess.ts'
+import { poolNumbers } from '../lib/poolNumbers.ts'
 
 const app = new Hono()
 const PAGE_SIZE = 20
@@ -259,15 +260,18 @@ app.get('/overview', async (c) => {
   const user = c.get('user')
   const supabase = c.get('supabase')
   const admin = makeAdmin()
-  const [stats, recent, jobs] = await Promise.all([
+  const [stats, recent, jobs, pool] = await Promise.all([
     admin.rpc('talent_overview', { p_viewer: user.id }),
     admin.rpc('talent_search', { p_viewer: user.id, p_sort: 'recent', p_limit: 6 }),
     myJobs(supabase, user.id),
+    // the hero's numbers: the same, never-lower ones the recruiter emails show (lib/poolNumbers.ts)
+    poolNumbers().catch((err) => { console.error('talent: pool numbers failed', err); return null }),
   ])
   if (stats.error) return c.json({ error: stats.error.message }, 500)
   try {
     const newest = await loadCandidates(admin, supabase, user, ((recent.data ?? []) as any[]).map((r) => r.candidate_id))
-    return c.json({ stats: stats.data, recent: newest, jobs })
+    const numbers = pool && { pool: pool.pool, employed: pool.employed, new_30d: pool.new_30d, seeking: pool.seeking }
+    return c.json({ stats: stats.data, numbers, recent: newest, jobs })
   } catch (err: any) {
     return c.json({ error: err.message }, 500)
   }

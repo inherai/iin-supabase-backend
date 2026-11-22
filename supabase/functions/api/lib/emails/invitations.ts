@@ -136,7 +136,7 @@ export async function invitesUnlockedJob(budget: number): Promise<JobResult> {
   const weekAgo = new Date(Date.now() - 7 * DAY).toISOString()
   const { data: members, error } = await db.from('users')
     .select('uuid, email, first_name')
-    .eq('status', 'Active').lte('created_at', weekAgo)
+    .eq('status', 'Active').neq('role', 'recruiters').lte('created_at', weekAgo)
     .gte('profile_strength_cache', 70).gte('activity_score_cache', 31)
     .limit(1000)
   if (error) throw new Error(error.message)

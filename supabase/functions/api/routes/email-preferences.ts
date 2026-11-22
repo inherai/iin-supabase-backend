@@ -87,4 +87,26 @@ app.put('/', async (c) => {
   return c.json(await loadPreferences(user.id, user))
 })
 
+// GET/PUT /api/email-preferences/spotlight — may the team show her work (articles, posts, answers
+// recruiters can already see) in the spotlight email to recruiters? { shown: boolean }.
+// Her own row in talent_spotlight_optouts, in her own session (row-level security).
+app.get('/spotlight', async (c) => {
+  const { data, error } = await c.get('supabase').from('talent_spotlight_optouts').select('user_uuid').maybeSingle()
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ shown: !data })
+})
+
+app.put('/spotlight', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+  const body = await c.req.json().catch(() => ({} as any))
+  if (typeof body?.shown !== 'boolean') return c.json({ error: 'shown must be true or false' }, 400)
+  const supabase = c.get('supabase')
+  const { error } = body.shown
+    ? await supabase.from('talent_spotlight_optouts').delete().eq('user_uuid', user.id)
+    : await supabase.from('talent_spotlight_optouts').upsert({ user_uuid: user.id }, { onConflict: 'user_uuid', ignoreDuplicates: true })
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json({ shown: body.shown })
+})
+
 export default app

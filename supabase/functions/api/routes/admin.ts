@@ -616,6 +616,81 @@ app.get("/talent-analytics", async (c) => {
   return c.json(data);
 });
 
+// ==================== TALENT SPOTLIGHT ====================
+// The team picks up to 3 members every two weeks for the spotlight email to recruiters
+// (lib/emails/spotlight.ts). Suggestions and picks are in the DB (add_recruiter_emails_safe.sql),
+// read and written as the signed-in admin under row-level security — no service role here.
+
+const SPOTLIGHT_KINDS = ["article", "project", "post", "answer", "milestone"];
+const PICK_COLUMNS = "id, send_on, member_uuid, kind, role_he, role_en, did_he, did_en, skills, source_url, status, sent_at, member_notified_at, created_at, member:users!talent_spotlight_picks_member_uuid_fkey(first_name, last_name)";
+const israelToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem" }).format(new Date());
+
+const pickFields = (body: any) => {
+  const out: Record<string, unknown> = {};
+  const txt = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+  if ("kind" in body) out.kind = SPOTLIGHT_KINDS.includes(body.kind) ? body.kind : null;
+  if ("role_he" in body) out.role_he = txt(body.role_he, 120);
+  if ("role_en" in body) out.role_en = txt(body.role_en, 120);
+  if ("did_he" in body) out.did_he = txt(body.did_he, 400);
+  if ("did_en" in body) out.did_en = txt(body.did_en, 400);
+  if ("skills" in body) out.skills = Array.isArray(body.skills) ? body.skills.filter((s: unknown) => typeof s === "string" && s.trim()).map((s: string) => s.trim().slice(0, 40)).slice(0, 5) : [];
+  if ("source_url" in body) out.source_url = txt(body.source_url, 500);
+  return out;
+};
+
+app.get("/spotlight", async (c) => {
+  const supabase = c.get("supabase");
+  const days = Math.min(Math.max(Number(c.req.query("days")) || 21, 1), 90);
+  const since = new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
+  const [suggestions, picks] = await Promise.all([
+    supabase.rpc("admin_spotlight_suggestions", { p_days: days }),
+    supabase.from("talent_spotlight_picks").select(PICK_COLUMNS).gte("send_on", since).order("send_on", { ascending: false }).order("created_at"),
+  ]);
+  if (suggestions.error) return c.json({ error: suggestions.error.message }, 500);
+  if (picks.error) return c.json({ error: picks.error.message }, 500);
+  return c.json({ suggestions: suggestions.data ?? [], picks: picks.data ?? [], today: israelToday() });
+});
+
+app.post("/spotlight/picks", async (c) => {
+  const supabase = c.get("supabase");
+  const body = await c.req.json().catch(() => ({}));
+  const sendOn = typeof body.send_on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.send_on) ? body.send_on : null;
+  if (!sendOn || new Date(`${sendOn}T12:00:00Z`).getUTCDay() !== 0 || sendOn < israelToday()) {
+    return c.json({ error: "send_on must be a coming Sunday (YYYY-MM-DD)" }, 400);
+  }
+  if (typeof body.member_uuid !== "string") return c.json({ error: "member_uuid is required" }, 400);
+  const fields = pickFields(body);
+  if (!fields.kind || !fields.did_he || !fields.did_en) return c.json({ error: "kind, did_he and did_en are required" }, 400);
+  const { count } = await supabase.from("talent_spotlight_picks").select("id", { count: "exact", head: true }).eq("send_on", sendOn);
+  if ((count ?? 0) >= 3) return c.json({ error: "Three candidates are already picked for that Sunday", code: "full" }, 409);
+  const { data, error } = await supabase.from("talent_spotlight_picks")
+    .insert({ ...fields, send_on: sendOn, member_uuid: body.member_uuid }).select(PICK_COLUMNS).single();
+  if (error) {
+    if (error.code === "23505") return c.json({ error: "Already picked for that Sunday", code: "duplicate" }, 409);
+    return c.json({ error: error.message }, 400);
+  }
+  return c.json({ pick: data }, 201);
+});
+
+app.patch("/spotlight/picks/:id", async (c) => {
+  const fields = pickFields(await c.req.json().catch(() => ({})));
+  if ("kind" in fields && !fields.kind) return c.json({ error: "kind is not valid" }, 400);
+  if (("did_he" in fields && !fields.did_he) || ("did_en" in fields && !fields.did_en)) return c.json({ error: "did_he and did_en can't be empty" }, 400);
+  const { data, error } = await c.get("supabase").from("talent_spotlight_picks").update(fields)
+    .eq("id", c.req.param("id")).eq("status", "approved").select(PICK_COLUMNS).maybeSingle();
+  if (error) return c.json({ error: error.message }, 400);
+  if (!data) return c.json({ error: "Not found, or already sent" }, 404);
+  return c.json({ pick: data });
+});
+
+app.delete("/spotlight/picks/:id", async (c) => {
+  const { data, error } = await c.get("supabase").from("talent_spotlight_picks").delete()
+    .eq("id", c.req.param("id")).eq("status", "approved").select("id");
+  if (error) return c.json({ error: error.message }, 400);
+  if (!data?.length) return c.json({ error: "Not found, or already sent" }, 404);
+  return c.json({ success: true });
+});
+
 // ==================== USERS ====================
 
 // Admin-granted invites, as the client sees them: the bonus is 0 once its week is over

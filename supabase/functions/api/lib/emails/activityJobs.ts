@@ -8,6 +8,7 @@
 // Names follow the site's rules (routes/profile.ts /feed): anonymous → "אנונימית",
 // last name only if privacy_lastname allows members. Photos: our default avatar (decided 2026-11-04).
 import { adminClient, getFrequencies, getFrequency } from '../emailPrefs.ts'
+import { recruiterIds } from './recruiters.ts'
 import { cappedNow, sendEmail } from '../mailer.ts'
 import {
   networkSubject, renderContentDigest, renderFirstPost, renderNetworkUpdate, renderPeopleYouMayKnow,
@@ -493,7 +494,8 @@ export async function peopleJob(budget: number, now = new Date()): Promise<JobRe
   const t = now.getTime()
   const active = await fetchAll<{ user_id: string }>((f, to) => db.from('user_activity').select('user_id')
     .gte('last_active_at', new Date(t - 30 * DAY).toISOString()).order('user_id').range(f, to))
-  const ids = active.map((a) => a.user_id)
+  const recruiters = await recruiterIds() // "people you may know" is for members
+  const ids = active.map((a) => a.user_id).filter((id) => !recruiters.has(id))
   if (!ids.length) return none
   const today = `date:${now.toISOString().slice(0, 10)}`
   const [mem, prev, checked] = await Promise.all([
@@ -552,8 +554,9 @@ export async function weeklyCommunityJob(budget: number, now = new Date()): Prom
   const weekKey = `week:${new Date(t - ((weekday - 3 + 7) % 7) * DAY).toISOString().slice(0, 10)}` // that week's Wednesday
   const since7 = new Date(t - 7 * DAY).toISOString()
 
+  // recruiters get their own weekly email (recruiter_weekly)
   const all = await fetchAll<{ uuid: string }>((f, to) => db.from('users').select('uuid')
-    .eq('status', 'Active').order('uuid').range(f, to))
+    .eq('status', 'Active').neq('role', 'recruiters').order('uuid').range(f, to))
   const ids = all.map((a) => a.uuid)
   if (!ids.length) return none
   const already = await inChunks<{ user_id: string }>(ids, (c) => db.from('email_log').select('user_id').eq('kind', 'weekly_community').eq('ref_key', weekKey).in('user_id', c))

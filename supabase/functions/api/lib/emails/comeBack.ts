@@ -316,7 +316,7 @@ export async function comeBackJob(budget: number, now = new Date()): Promise<{ s
 
   const [members, activity] = await Promise.all([
     fetchAll<{ uuid: string; email: string | null; first_name: string | null; created_at: string; profile_strength_cache: number | null }>((f, t) =>
-      db.from('users').select('uuid, email, first_name, created_at, profile_strength_cache').eq('status', 'Active').lte('created_at', cutoff).order('uuid').range(f, t)),
+      db.from('users').select('uuid, email, first_name, created_at, profile_strength_cache').eq('status', 'Active').neq('role', 'recruiters').lte('created_at', cutoff).order('uuid').range(f, t)),
     fetchAll<{ user_id: string; last_active_at: string | null }>((f, t) =>
       db.from('user_activity').select('user_id, last_active_at').order('user_id').range(f, t)),
   ])

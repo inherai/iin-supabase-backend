@@ -15,6 +15,9 @@ import { inviteeJoinedJob, inviteeReminderJob, invitesUnlockedJob, inviteExpired
 import { accessReplyJob } from '../lib/emails/service.ts'
 import { jobApplicationsJob } from '../lib/emails/companyPages.ts'
 import { talentAlertJob } from '../lib/emails/talentAlerts.ts'
+import { recruiterActivationJob } from '../lib/emails/recruiters.ts'
+import { savedUpdatesJob, weeklySummaryJob, writeToHerJob } from '../lib/emails/recruiterActivity.ts'
+import { spotlightJob } from '../lib/emails/spotlight.ts'
 import { heldInvitesJob, HELD_INVITE_KINDS } from '../lib/emails/heldInvites.ts'
 import { contentDigestJob, networkJob, peopleJob, postViewsJob, requestReminderJob, weeklyCommunityJob } from '../lib/emails/activityJobs.ts'
 
@@ -50,6 +53,7 @@ export const LIFECYCLE_JOBS: LifecycleJob[] = [
   // Personal & important (never held by the per-member cap)
   { name: 'network_update', run: (b) => networkJob(b), slots: EVERY },             // recruiter, messages, mentions, requests
   { name: 'access_reply', run: (b) => accessReplyJob(b), slots: EVERY },           // to recruiters: a candidate answered
+  { name: 'recruiter_write_to_her', run: (b) => writeToHerJob(b), slots: EVERY },  // to recruiters: she accepted 48h ago, no message yet
   { name: 'job_applications', run: (b) => jobApplicationsJob(b), slots: EVERY },   // to a page's recruiters: applications are waiting
   { name: 'invitee_joined', run: (b) => inviteeJoinedJob(b), slots: EVERY },       // good news for the inviter — few
   { name: 'invite_reminder', run: (b) => inviteeReminderJob(b), slots: EVERY },    // invitations expire in 7 days
@@ -65,6 +69,11 @@ export const LIFECYCLE_JOBS: LifecycleJob[] = [
   { name: 'invites_unlocked', run: (b) => invitesUnlockedJob(b), slots: [2, 5] },
   { name: 'people_suggestions', run: (b) => peopleJob(b), slots: [2, 5] },         // Mondays
   { name: 'talent_alert', run: (b) => talentAlertJob(b), slots: [2, 5] },          // Sundays 09:00+: new candidates for recruiters' saved searches
+  // To recruiters (category recruiter_updates — lib/emails/recruiters.ts, recruiterActivity.ts, spotlight.ts)
+  { name: 'recruiter_activation', run: (b) => recruiterActivationJob(b), slots: [0, 3] }, // getting started, hiring guide, monthly pool news
+  { name: 'recruiter_weekly', run: (b) => weeklySummaryJob(b), slots: [1, 4] },    // Sunday–Tuesday: her week
+  { name: 'recruiter_saved_updates', run: (b) => savedUpdatesJob(b), slots: [1, 4] }, // Sunday–Tuesday: saved candidates now open to offers
+  { name: 'recruiter_spotlight', run: (b) => spotlightJob(b), slots: [2, 5] },     // Sunday–Tuesday 10:00+: the team's picks; then tell the featured members
 ]
 
 const israelDayHour = () => {

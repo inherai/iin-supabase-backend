@@ -38,7 +38,7 @@ export interface SendEmailOptions {
 // Per-member cap (agreed 2026-11-04): only "nice to know" emails count and are held back.
 // Account/service, invitations someone just sent, welcome, and the personal emails
 // (recruiter, messages, mentions, connection requests — categories network/recruiting) are never capped.
-const CAPPED_CATEGORIES = ['onboarding', 'invitations', 'come_back', 'content_activity', 'weekly_stats', 'people_suggestions', 'community']
+const CAPPED_CATEGORIES = ['onboarding', 'invitations', 'come_back', 'content_activity', 'weekly_stats', 'people_suggestions', 'community', 'recruiter_updates']
 const CAP_PER_DAY = 1
 const CAP_PER_WEEK = 4
 

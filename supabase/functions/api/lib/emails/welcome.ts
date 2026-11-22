@@ -125,8 +125,9 @@ export function renderWelcome(d: WelcomeData, unsubscribeUrl: string | null): st
 /** Sends the welcome email to one member (at most once — dedupe on kind + ref_key). */
 export async function sendWelcomeEmail(userId: string, opts: { immediate?: boolean } = {}): Promise<SendResult | null> {
   const db = adminClient()
-  const { data: user } = await db.from('users').select('uuid, email, first_name, status').eq('uuid', userId).maybeSingle()
-  if (!user?.email || user.status !== 'Active') return null
+  const { data: user } = await db.from('users').select('uuid, email, first_name, status, role').eq('uuid', userId).maybeSingle()
+  // recruiters get their own first email (recruiter_ready, lib/emails/recruiters.ts)
+  if (!user?.email || user.status !== 'Active' || user.role === 'recruiters') return null
   const strength = await calculateProfileStrength(db, userId).catch(() => null)
   const name = (user.first_name ?? '').trim()
   return sendEmail({
@@ -145,7 +146,7 @@ export async function sendWelcomeEmail(userId: string, opts: { immediate?: boole
 export async function welcomeJob(): Promise<{ sent: number; attempts: number }> {
   const db = adminClient()
   const since = new Date(Date.now() - CATCH_UP_DAYS * 86400000).toISOString()
-  const { data: users } = await db.from('users').select('uuid').eq('status', 'Active').gte('activated_at', since).limit(500)
+  const { data: users } = await db.from('users').select('uuid').eq('status', 'Active').neq('role', 'recruiters').gte('activated_at', since).limit(500)
   if (!users?.length) return { sent: 0, attempts: 0 }
   const ids = users.map((u) => u.uuid)
   const { data: done } = await db.from('email_log').select('user_id')

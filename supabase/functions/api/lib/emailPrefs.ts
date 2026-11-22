@@ -33,6 +33,7 @@ export const EMAIL_CATEGORIES: EmailCategory[] = [
   { key: 'community',          options: ['weekly', 'biweekly', 'off'], default: 'weekly', active: true,  audience: 'all' },  // live (activity emails)
   { key: 'product_updates',    options: ['on', 'off'], default: 'on', active: false, audience: 'all' },
   { key: 'recruiting',         options: ['instant', 'off'], default: 'instant', active: true,  audience: 'all' },  // live (activity emails)
+  { key: 'recruiter_updates',  options: ['on', 'off'], default: 'on', active: true,  audience: 'recruiters' },  // live: getting started, hiring guide, weekly summary, spotlight
   { key: 'team',               options: ['on', 'off'], default: 'on', active: false, audience: 'admins' },
 ]
 
