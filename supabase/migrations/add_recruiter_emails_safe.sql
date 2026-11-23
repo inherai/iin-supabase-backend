@@ -72,8 +72,9 @@ AS $function$
            CASE WHEN jsonb_typeof(u.experience) = 'array' THEN u.experience ELSE '[]'::jsonb END AS experience,
            coalesce(u.work_preferences, '{}') AS work_prefs, nullif(btrim(split_part(coalesce(u.location, ''), ',', 1)), '') AS city
     FROM users u
+    -- members, including those still finishing onboarding (product decision, 2026-11-23)
     WHERE u.role::text NOT IN ('feed_participant', 'recruiters')
-      AND u.status = 'Active'
+      AND u.status IN ('Active', 'onboarding')
       AND coalesce(u.is_anonymous, false) = false
       AND coalesce(u.email, '') NOT ILIKE '%@deleted.local'
   ),
@@ -94,6 +95,8 @@ AS $function$
   SELECT jsonb_build_object(
     'pool',           (SELECT count(*) FROM m),
     'employed',       (SELECT count(*) FROM m WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(m.experience) e WHERE e ->> 'current' = 'true')),
+    -- who filled in any work experience: the base for "% working today" (employed of these)
+    'with_experience', (SELECT count(*) FROM m WHERE jsonb_array_length(m.experience) > 0),
     'new_30d',        (SELECT count(*) FROM m WHERE joined >= now() - interval '30 days'),
     'new_7d',         (SELECT count(*) FROM m WHERE joined >= now() - interval '7 days'),
     'seeking',        (SELECT count(*) FROM m JOIN member_job_seeking js ON js.user_uuid = m.uuid
@@ -280,7 +283,7 @@ BEGIN
   END;
 
   v_json := public.talent_pool_numbers();
-  IF (v_json ->> 'pool') IS NULL OR jsonb_typeof(v_json -> 'top_skills') <> 'array' THEN
+  IF (v_json ->> 'pool') IS NULL OR (v_json ->> 'with_experience') IS NULL OR jsonb_typeof(v_json -> 'top_skills') <> 'array' THEN
     v_problems := v_problems || ' talent_pool_numbers is missing a part;';
   END IF;
 

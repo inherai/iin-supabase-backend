@@ -42,6 +42,9 @@ export interface Counted { label: string; count: number }
 export interface PoolNumbers {
   pool: number
   employed: number
+  with_experience: number
+  /** % of those with work experience on their profile who work today — null while the base is small or the share isn't high. */
+  employed_pct: number | null
   new_30d: number
   new_7d: number
   seeking: number
@@ -64,6 +67,9 @@ export async function poolNumbers(): Promise<PoolNumbers> {
   const { data, error } = await db.rpc('talent_pool_numbers')
   if (error || !data) throw new Error(`talent_pool_numbers: ${error?.message ?? 'no data'}`)
   const raw = data as PoolNumbers
+  // A share, not a count: those who filled in no experience may or may not work, so they aren't assumed either way.
+  const pct = raw.with_experience >= 300 ? Math.floor((raw.employed * 100) / raw.with_experience) : 0
+  raw.employed_pct = pct >= 70 ? pct : null
   const ratchet = async (key: string, value: number) => {
     const { data: kept } = await db.rpc('talent_ratchet', { p_key: key, p_value: value })
     return typeof kept === 'number' ? kept : value

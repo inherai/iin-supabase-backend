@@ -270,7 +270,7 @@ app.get('/overview', async (c) => {
   if (stats.error) return c.json({ error: stats.error.message }, 500)
   try {
     const newest = await loadCandidates(admin, supabase, user, ((recent.data ?? []) as any[]).map((r) => r.candidate_id))
-    const numbers = pool && { pool: pool.pool, employed: pool.employed, new_30d: pool.new_30d, seeking: pool.seeking }
+    const numbers = pool && { pool: pool.pool, employed: pool.employed, employed_pct: pool.employed_pct, new_30d: pool.new_30d, seeking: pool.seeking }
     return c.json({ stats: stats.data, numbers, recent: newest, jobs })
   } catch (err: any) {
     return c.json({ error: err.message }, 500)

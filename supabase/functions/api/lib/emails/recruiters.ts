@@ -155,8 +155,7 @@ export function renderReady(r: Recruiter, p: PoolNumbers, unsub: string | null):
   const pool = shownFigure(p.pool)
   if (!pool) return null
   const tiles = [{ n: pool, label: { he: 'נשות הייטק', en: 'women in tech' } }]
-  const employed = shownFigure(p.employed)
-  if (employed) tiles.push({ n: employed, label: { he: 'עובדות היום בתחום', en: 'working in tech today' } })
+  if (p.employed_pct) tiles.push({ n: `${p.employed_pct}%`, label: { he: 'מבעלות ניסיון — עובדות היום בהייטק', en: 'of those with experience work in tech today' } })
   const week = shownFigure(p.new_7d)
   if (week) tiles.push({ n: week, label: { he: 'הצטרפו בשבוע האחרון', en: 'joined last week' } })
 
@@ -196,9 +195,8 @@ export function renderReady(r: Recruiter, p: PoolNumbers, unsub: string | null):
 // ───────────────────────── B · who is here ─────────────────────────
 
 export function renderWho(p: PoolNumbers, unsub: string | null): { subject: Bi; html: string } | null {
-  const employedHe = shownLabel(p.employed, 'he')
-  const employedEn = shownLabel(p.employed, 'en')
-  if (!employedHe || !employedEn) return null
+  const pct = p.employed_pct
+  if (!pct) return null
   const roles = p.top_titles.filter((t) => t.count >= 100).slice(0, 3).map((t) => ({
     title: { he: t.label, en: t.label },
     sub: { he: `${shownLabel(t.count, 'he')} בתפקיד הזה היום`, en: `${shownLabel(t.count, 'en')} in this role today` },
@@ -206,16 +204,16 @@ export function renderWho(p: PoolNumbers, unsub: string | null): { subject: Bi; 
   }))
   const body = biColumns(both((l) => (l === 'he'
     ? heading('מי נמצאת בדואולין') +
-      paragraph(`${employedHe} מהמועמדות עובדות היום בהייטק — כולל כאלה שלא מחפשות באופן פעיל ולא יגיעו דרך מודעת דרושים.${roles.length ? ' התפקידים הנפוצים:' : ''}`)
+      paragraph(`${pct}% מהמועמדות שמילאו ניסיון בפרופיל עובדות היום בהייטק — כולל כאלה שלא מחפשות באופן פעיל ולא יגיעו דרך מודעת דרושים.${roles.length ? ' התפקידים הנפוצים:' : ''}`)
     : heading('Who is on duallin') +
-      paragraph(`${employedEn} of the candidates work in tech today — including people who are not actively looking and won't answer a job ad.${roles.length ? ' The most common roles:' : ''}`)) +
+      paragraph(`${pct}% of the candidates with work experience on their profile work in tech today — including people who are not actively looking and won't answer a job ad.${roles.length ? ' The most common roles:' : ''}`)) +
     (roles.length ? list(roles, l) : '') +
     paragraph(l === 'he'
       ? 'מועמדת שמחפשת עבודה מסומנת בכרטיס שלה — רק מגייסים רואים את זה. פנייה לוקחת דקה: כמה מילים על התפקיד, וכשהיא מאשרת נפתחת שיחה.'
       : 'A candidate who is looking is marked on her card — only recruiters see it. Reaching out takes a minute: a few words about the role, and when she accepts, a conversation opens.')))
     + button({ he: 'לחיפוש מועמדות', en: 'Search candidates' }, talentUrl())
   return {
-    subject: { he: `${employedHe} נשות הייטק שעובדות היום`, en: `${employedEn} women working in tech today` },
+    subject: { he: `מי נמצאת בדואולין: ${pct}% עובדות היום בהייטק`, en: `Who is on duallin: ${pct}% work in tech today` },
     html: layout(body, { he: roles.length ? roles.map((x) => x.title.he).join(', ') : 'מי נמצאת בדואולין', en: roles.length ? roles.map((x) => x.title.en).join(', ') : 'Who is on duallin' }, unsub),
   }
 }
