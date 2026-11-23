@@ -159,14 +159,9 @@ export function renderReady(r: Recruiter, p: PoolNumbers, unsub: string | null):
   const week = shownFigure(p.new_7d)
   if (week) tiles.push({ n: week, label: { he: 'הצטרפו בשבוע האחרון', en: 'joined last week' } })
 
-  // Ready-made searches, one click each: who is looking (only when it's a big number), then the biggest skills.
+  // Ready-made searches, one click each: the biggest skills. Not who is looking: few have answered that yet
+  // (it's new), so the count looks small next to the pool — same as the /talent hero.
   const ready: { title: Bi; sub: Bi; href: string }[] = []
-  const seeking = shownLabel(p.seeking, 'he')
-  if (seeking && p.seeking >= 150) {
-    ready.push({ title: { he: 'מחפשות עבודה עכשיו', en: 'Looking for work now' },
-      sub: { he: `${seeking} מועמדות מחפשות או פתוחות להצעות`, en: `${shownLabel(p.seeking, 'en')} looking or open to offers` },
-      href: talentUrl({ seeking: 'active,open' }) })
-  }
   for (const s of p.top_skills.filter((x) => !isGenericSkill(x.label) && x.count >= 300)) {
     if (ready.length >= 4) break
     const name = skillName(s.label)
